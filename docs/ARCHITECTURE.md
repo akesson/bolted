@@ -60,7 +60,11 @@ semantics owned by the core**: a new check cancels the in-flight one; stale comp
 discarded by sequence number. Shells choose *when* to trigger (debounce is shell taste); the
 core guarantees ordering correctness. Verdicts are **value-bound**: any change to the checked
 field's value — edit *or* rebase — resets the check to unchecked, so a completed verdict never
-endorses a value it wasn't computed for (step-01 friction F1; invariant 13, §8).
+endorses a value it wasn't computed for (step-01 friction F1; invariant 13, §8). The check's
+sub-state — unchecked / pending / passed / failed — is part of the draft's observable snapshot
+(it is core-owned verdict state, not presentation state, so this does not reintroduce the
+rejected visibility-policy enums of §8), letting a shell show progress without owning check
+logic; decided in step 03, closing the step-02 gap where the core draft did not expose it.
 
 **Validation policy belongs to the UI; verdicts belong to the core.** Shells decide when to call
 `try_set` / rules / async checks and what to display when. The litmus test: shells may add
