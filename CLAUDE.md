@@ -13,6 +13,14 @@ starting.
 3. `docs/ROADMAP.md` — phases, step table with status, working agreement.
 4. `docs/steps/step-XX-*.md` — the current step (the one marked **ready**).
 
+## Memory setup
+
+Claude's auto-memory for this project is redirected into the repo at `.claude/memory/` and
+**committed** (index: `.claude/memory/MEMORY.md`). The redirect is the `autoMemoryDirectory`
+key in `.claude/settings.local.json` (gitignored — absolute path, machine-specific); on a new
+machine, recreate it pointing at `<repo>/.claude/memory`. Durable cross-session learnings go
+there; project *instructions* stay in this file.
+
 ## How work is organized
 
 - **Planning sessions (Fable)**: architecture, step authoring, design freeze, resolving OPEN
