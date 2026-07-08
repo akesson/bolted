@@ -1,0 +1,11 @@
+[package]
+name = "spike-profile"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bolted-core = { path = "../bolted-core" }
+
+[dev-dependencies]
+proptest = "1"

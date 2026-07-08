@@ -1,0 +1,12 @@
+[tools]
+rust = "1.95.0"
+
+[tasks.test]
+run = "cargo test --workspace"
+
+[tasks.check]
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --workspace",
+]

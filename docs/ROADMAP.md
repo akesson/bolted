@@ -14,8 +14,8 @@ work around them.
 
 | Step | Title | Phase | Status |
 |------|-------|-------|--------|
-| 01 | Core semantics prototype (pure Rust) | 1 — Spike | **ready** — see [steps/step-01-core-semantics.md](steps/step-01-core-semantics.md) |
-| 02 | BoltFFI due-diligence probe (Apple) | 1 — Spike | pending |
+| 01 | Core semantics prototype (pure Rust) | 1 — Spike | **done** — [plan](steps/step-01-core-semantics.md) · [report](steps/step-01-report.md) |
+| 02 | BoltFFI due-diligence probe (Apple) | 1 — Spike | **ready** — step doc to be authored (planning session) |
 | 03 | SwiftUI spike app | 1 — Spike | pending |
 | 04 | Rust web spike app | 1 — Spike | pending |
 | 05 | Android headless probe | 1 — Spike | pending |

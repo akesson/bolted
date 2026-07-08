@@ -1,0 +1,10 @@
+[package]
+name = "bolted-core"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# bolted-core has ZERO runtime dependencies (sans-io, no async runtime). Keep it that way.
+[dependencies]
+
+[dev-dependencies]
