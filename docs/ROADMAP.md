@@ -47,6 +47,9 @@ falsify the design cheaply — friction logs from these steps are the input to t
 - **Step 03 — SwiftUI spike app.** Real form UI on the step-02 bindings: validate the text
   echo rule (cursor survives trim-sanitization while typing fast), conflict UI
   (keep-mine/take-theirs), live rebase demo (background canonical change), submit flow.
+  Also lands the two core fixes decided after step 01 (ARCHITECTURE §8): value-bound
+  async-verdict reset (invariant 13, with its test) and failed `submit` returning the draft
+  handle with the error.
 - **Step 04 — Rust web spike app.** Same feature, Leptos or Dioxus (browser mode only),
   consuming the core as a plain crate; proves the zero-FFI path and `wasm32-unknown-unknown`
   discipline; WASM bundle size measured (future size-budget check baseline).
@@ -59,7 +62,8 @@ falsify the design cheaply — friction logs from these steps are the input to t
 ## Phase 2 — Design freeze
 
 - **Step 06 — Design freeze.** A planning session, not an implementation session: reconcile
-  all friction logs and probe reports; resolve the OPEN questions in ARCHITECTURE.md §9
+  all friction logs and probe reports (step-01's F1–F7/Q1–Q6 are recorded: decisions in
+  ARCHITECTURE §8, the rest deferred into §9); resolve the OPEN questions in ARCHITECTURE.md §9
   (draft lifecycle/`close()`, echo rule confirmation, stash/restore design, one-shot
   events); update ARCHITECTURE.md to "frozen" status; promote the invariant tests to the
   named conformance suite.

@@ -239,6 +239,29 @@ become per-language contract tests:
   or accept-with-backstop — decide at the freeze with step-03 evidence.
 - Focused-but-untouched field during rebase: updates live (rule stays pure); shells may soften
   visually — revisit after Swift spike if it feels wrong.
+- Store↔draft wiring (step-01 Q1): live-rebase driving (`from_canonical`/`rebase`/`orphan`)
+  sits on a `StoreDraft` subtrait in the prototype, keeping the public `Draft` contract (the
+  FFI surface) exactly as §5 — promote into `Draft`, or keep the split? Decide at the freeze
+  with step-02 FFI evidence.
+- `Value::Error: Into<ErrorData>` as a trait bound (step-01 Q2)? The spike's external bridge
+  (`From<XError> for ErrorData` + a bounded helper) was cleaner than per-field code and points
+  at promoting it into `Value`.
+- `Constraint::Required` channel (step-01 Q3/D3): a value type can't know whether its field is
+  `Option<_>`, so the spike prepends `Required` at the field/entity layer — same enum, or a
+  separate field-metadata channel?
+- `commit` error taxonomy (step-01 Q4/F5): `commit` re-encodes conflicts/orphan as synthetic
+  rule violations while store `submit` has typed `Conflicted`/`Orphaned` variants — two
+  taxonomies for the same failures; unify (e.g. `CommitError { Validation | Conflict |
+  Orphan }`)?
+- `Copy` value objects vs uniform generated `.clone()` (step-01 F4): clippy `clone_on_copy`
+  under `-D warnings` forbids cloning a `Copy` field, so codegen must either track `Copy`-ness,
+  blanket-`allow` generated modules, or forbid `Copy` on value objects (spike's
+  recommendation). Decide at the freeze, binds step 09.
+- Conflicted field edited to equal `theirs` stays `Conflicted` (step-01 F6): resolution is an
+  explicit user act in the prototype — confirm or auto-converge, with step-03 UI evidence.
+- `SyncState::Conflicted { base, theirs }` duplicates `Field.base` (step-01 F7): they are
+  always equal while conflicted; keep the self-contained 3-way shape or drop `base` from the
+  variant — decide at the freeze/extraction.
 - Store concurrency model behind FFI (single-threaded actor vs `Arc<Mutex>`) — prototype uses
   the simplest thing; decide at Phase 3 extraction.
 - Process topology for OS-integration surfaces (VISION: daemons, tray, file-manager
