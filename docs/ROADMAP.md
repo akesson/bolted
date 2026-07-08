@@ -16,8 +16,8 @@ work around them.
 |------|-------|-------|--------|
 | 01 | Core semantics prototype (pure Rust) | 1 — Spike | **done** — [plan](steps/step-01-core-semantics.md) · [report](steps/step-01-report.md) |
 | 02 | BoltFFI due-diligence probe (Apple) | 1 — Spike | **done** — [plan](steps/step-02-boltffi-probe.md) · [report](steps/step-02-report.md) |
-| 03 | SwiftUI spike app | 1 — Spike | **ready** — [plan](steps/step-03-swiftui-app.md) |
-| 04 | Rust web spike app | 1 — Spike | pending |
+| 03 | SwiftUI spike app | 1 — Spike | **code complete** — [plan](steps/step-03-swiftui-app.md) · [report](steps/step-03-report.md); manual GUI protocol pending |
+| 04 | Rust web spike app | 1 — Spike | **ready** — step doc to be authored (planning session) |
 | 05 | Android headless probe | 1 — Spike | pending |
 | 06 | Design freeze | 2 — Freeze | pending |
 | 07 | Kotlin/Compose spike app | 2 — Freeze | pending |
