@@ -18,5 +18,5 @@ pub use draft::{Draft, DraftStatus};
 pub use field::{Field, SyncState, Validity};
 pub use report::{ErrorData, RuleViolation, ValidationReport};
 pub use single_flight::{CheckState, CheckToken, SingleFlight};
-pub use store::{DraftHandle, Store, StoreDraft, SubmitError};
+pub use store::{DraftHandle, Store, StoreDraft, SubmitError, SubmitFailure};
 pub use value::Value;

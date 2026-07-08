@@ -64,10 +64,33 @@ pub struct ProfileDraft {
 }
 
 impl ProfileDraft {
+    /// Run a mutation that may move the `username` value, resetting the async uniqueness check iff
+    /// the value actually changed (ARCHITECTURE §2/§8, invariant I13 — a verdict endorses a
+    /// *value*, so a changed value un-endorses it). Implemented once by value comparison rather
+    /// than per call site, so no mutation path can silently skip it. Comparing `value()` (`None`
+    /// for `Unset`/`Invalid`) gets every case right: edit-to-different / edit-to-invalid /
+    /// rebase-adopt / take-theirs all move the value and reset; edit-to-same, keep-mine, and a
+    /// conflict that preserves your value leave the verdict standing.
+    fn with_username_guard<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.username.value().cloned();
+        let out = f(self);
+        if self.username.value() != before.as_ref() {
+            self.username_check.reset();
+        }
+        out
+    }
+
+    /// Read the async uniqueness check's sub-state, so the FFI layer can project it into snapshots
+    /// (step-02 finding 7). The field stays private; this is a read-only getter — `validate()` is
+    /// unchanged (a `Pending`/`Done(Err)` check still blocks; `Idle`/`Done(Ok)` still pass).
+    pub fn username_check_state(&self) -> &CheckState<Result<(), ErrorData>> {
+        self.username_check.state()
+    }
+
     // --- monomorphic setters (one per field; `try_set_availability` takes the grouped raw) ---
 
     pub fn try_set_username(&mut self, raw: String) -> Result<(), UsernameError> {
-        self.username.try_set(raw)
+        self.with_username_guard(|s| s.username.try_set(raw))
     }
 
     pub fn try_set_name(&mut self, raw: String) -> Result<(), PersonNameError> {
@@ -99,21 +122,21 @@ impl ProfileDraft {
     // --- conflict resolution, dispatched per field id ---
 
     pub fn resolve_keep_mine(&mut self, field: ProfileField) {
-        match field {
-            ProfileField::Username => self.username.resolve_keep_mine(),
-            ProfileField::Name => self.name.resolve_keep_mine(),
-            ProfileField::Email => self.email.resolve_keep_mine(),
-            ProfileField::Availability => self.availability.resolve_keep_mine(),
-        }
+        self.with_username_guard(|s| match field {
+            ProfileField::Username => s.username.resolve_keep_mine(),
+            ProfileField::Name => s.name.resolve_keep_mine(),
+            ProfileField::Email => s.email.resolve_keep_mine(),
+            ProfileField::Availability => s.availability.resolve_keep_mine(),
+        })
     }
 
     pub fn resolve_take_theirs(&mut self, field: ProfileField) {
-        match field {
-            ProfileField::Username => self.username.resolve_take_theirs(),
-            ProfileField::Name => self.name.resolve_take_theirs(),
-            ProfileField::Email => self.email.resolve_take_theirs(),
-            ProfileField::Availability => self.availability.resolve_take_theirs(),
-        }
+        self.with_username_guard(|s| match field {
+            ProfileField::Username => s.username.resolve_take_theirs(),
+            ProfileField::Name => s.name.resolve_take_theirs(),
+            ProfileField::Email => s.email.resolve_take_theirs(),
+            ProfileField::Availability => s.availability.resolve_take_theirs(),
+        })
     }
 
     pub fn base_version(&self) -> u64 {
@@ -318,10 +341,14 @@ impl StoreDraft for ProfileDraft {
         if matches!(self.status, DraftStatus::Orphaned) {
             return;
         }
-        self.username.rebase(entity.username.clone());
-        self.name.rebase(entity.name.clone());
-        self.email.rebase(entity.email.clone());
-        self.availability.rebase(entity.availability); // Copy — see note in `from_canonical`
+        // Guarded: a rebase that adopts or converges the username moves its value and resets the
+        // check; one that conflicts (your value preserved) leaves the verdict standing (I13).
+        self.with_username_guard(|s| {
+            s.username.rebase(entity.username.clone());
+            s.name.rebase(entity.name.clone());
+            s.email.rebase(entity.email.clone());
+            s.availability.rebase(entity.availability); // Copy — see note in `from_canonical`
+        });
     }
 
     fn orphan(&mut self) {

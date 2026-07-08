@@ -53,6 +53,28 @@ pub enum SubmitError<FieldId> {
     Orphaned,
 }
 
+/// A refused submit: the caller gets its [`DraftHandle`] back alongside the reason, so a rejection
+/// never destroys the edit session (step-01 friction F3 / ARCHITECTURE §8). Only a *successful*
+/// submit consumes the handle — its draft has been committed and is gone.
+pub struct SubmitFailure<D: StoreDraft> {
+    pub handle: DraftHandle<D>,
+    pub error: SubmitError<D::FieldId>,
+}
+
+// The handle carries no `Debug` (a live draft need not be printable) and is noise in a failure
+// dump anyway; the `error` is what a test or log wants. Bound only on the field id, so this holds
+// even when the draft type is not `Debug`.
+impl<D: StoreDraft> std::fmt::Debug for SubmitFailure<D>
+where
+    D::FieldId: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubmitFailure")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Prototype store over a single canonical entity and its live drafts.
 pub struct Store<D: StoreDraft> {
     canonical: Option<D::Entity>,
@@ -115,39 +137,54 @@ impl<D: StoreDraft> Store<D> {
     /// Submit a draft transactionally. Refuses on orphaned status, any conflict, or a failing
     /// validation report; on success the committed entity becomes the new canonical and every
     /// other live draft rebases onto it.
-    pub fn submit(&mut self, handle: DraftHandle<D>) -> Result<(), SubmitError<D::FieldId>> {
-        {
+    pub fn submit(&mut self, handle: DraftHandle<D>) -> Result<(), SubmitFailure<D>> {
+        // Pre-checks under a shared borrow; compute the refusal (if any) WITHOUT moving the handle,
+        // so a rejected submit can hand the caller's edit session back (F3). The pre-checks are
+        // identical to `commit`'s own gates, which is what makes `commit` infallible below.
+        let refusal = {
             let d = handle.inner.borrow();
             match d.status() {
-                DraftStatus::Orphaned => return Err(SubmitError::Orphaned),
-                DraftStatus::Live => {}
+                DraftStatus::Orphaned => Some(SubmitError::Orphaned),
+                DraftStatus::Live => {
+                    let conflicts = d.conflicts();
+                    if !conflicts.is_empty() {
+                        Some(SubmitError::Conflicted { fields: conflicts })
+                    } else {
+                        let report = d.validate();
+                        if report.is_ok() {
+                            None
+                        } else {
+                            Some(SubmitError::Validation(report))
+                        }
+                    }
+                }
             }
-            let conflicts = d.conflicts();
-            if !conflicts.is_empty() {
-                return Err(SubmitError::Conflicted { fields: conflicts });
-            }
-            let report = d.validate();
-            if !report.is_ok() {
-                return Err(SubmitError::Validation(report));
-            }
+        };
+        if let Some(error) = refusal {
+            return Err(SubmitFailure { handle, error });
         }
 
         // The handle is the sole strong owner (store holds only Weak, handle is not Clone), so
         // `try_unwrap` succeeds here — moving the draft out to run the consuming `commit`.
-        let draft = match Rc::try_unwrap(handle.inner) {
-            Ok(cell) => cell.into_inner(),
-            // Unreachable under the single-owner invariant; defensively re-validate rather than
-            // panic (no `unwrap`/`expect` in library code).
-            Err(rc) => return Err(SubmitError::Validation(rc.borrow().validate())),
-        };
-
-        match draft.commit() {
-            Ok(entity) => {
-                self.apply_canonical(entity);
+        match Rc::try_unwrap(handle.inner) {
+            Ok(cell) => {
+                // The pre-checks above are identical to `commit`'s gates and nothing rebases in
+                // between (single-threaded), so `commit` cannot fail. On the unreachable failure
+                // `commit(self)` has already consumed the draft — there is no handle to return —
+                // so nothing is applied and the store is left unchanged.
+                if let Ok(entity) = cell.into_inner().commit() {
+                    self.apply_canonical(entity);
+                }
                 Ok(())
             }
-            // Unreachable: we validated above with no intervening rebase.
-            Err(report) => Err(SubmitError::Validation(report)),
+            // Unreachable under single ownership: hand the handle back rather than drop it.
+            Err(rc) => {
+                let error = SubmitError::Validation(rc.borrow().validate());
+                Err(SubmitFailure {
+                    handle: DraftHandle { inner: rc },
+                    error,
+                })
+            }
         }
     }
 

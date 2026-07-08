@@ -148,7 +148,10 @@ fn i06_failed_set_blocks_submit() {
         assert!(matches!(d.username.validity(), Validity::Invalid { .. }));
     }
     match store.submit(handle) {
-        Err(SubmitError::Validation(report)) => {
+        Err(SubmitFailure {
+            error: SubmitError::Validation(report),
+            ..
+        }) => {
             assert!(
                 report
                     .field_errors
@@ -287,7 +290,10 @@ fn i11_delete_orphans_and_submit_is_typed() {
     store.delete_canonical();
     assert_eq!(handle.borrow().status(), DraftStatus::Orphaned);
     match store.submit(handle) {
-        Err(SubmitError::Orphaned) => {}
+        Err(SubmitFailure {
+            error: SubmitError::Orphaned,
+            ..
+        }) => {}
         other => panic!("expected Orphaned, got {other:?}"),
     }
     assert!(store.canonical().is_none());
@@ -325,4 +331,81 @@ fn i12_create_flow_never_rebases_and_commits() {
         store.canonical().map(|p| p.username.as_str()),
         Some("carol")
     );
+}
+
+// I13 — a change to the checked field's VALUE (edit or rebase) resets the async verdict to
+// unchecked; a mutation that leaves the value unchanged keeps it (ARCHITECTURE §2/§8). The check
+// is pinned to `username`; a verdict endorses a value, so a changed value un-endorses it.
+#[test]
+fn i13_async_verdict_resets_on_value_change() {
+    let base = base_profile(); // username "alice"
+
+    // Drive the check to a passing verdict.
+    let pass = |d: &mut ProfileDraft| {
+        let t = d.begin_username_check();
+        assert!(d.complete_username_check(t, Ok(())));
+        assert!(matches!(
+            d.username_check_state(),
+            CheckState::Done { verdict: Ok(()) }
+        ));
+    };
+    // `base` with a different canonical username, for rebase.
+    let updated_username = |name: &str| {
+        let mut u = base.clone();
+        u.username = Username::try_new(name.to_string()).expect("valid");
+        u
+    };
+
+    // (a) passed, then edit to a DIFFERENT value -> reset to Idle.
+    let mut a = ProfileDraft::from_canonical(Some(&base), 0);
+    pass(&mut a);
+    a.try_set_username("alice2".to_string()).expect("valid");
+    assert!(matches!(a.username_check_state(), CheckState::Idle));
+
+    // (b) passed, then edit to the SAME value -> verdict stands (value-based, like dirty).
+    let mut b = ProfileDraft::from_canonical(Some(&base), 0);
+    pass(&mut b);
+    b.try_set_username("alice".to_string()).expect("valid");
+    assert!(matches!(
+        b.username_check_state(),
+        CheckState::Done { verdict: Ok(()) }
+    ));
+
+    // (c) clean field, rebase adopts a new canonical username -> value moves -> reset.
+    let mut c = ProfileDraft::from_canonical(Some(&base), 0);
+    pass(&mut c);
+    c.rebase(&updated_username("newalice"));
+    assert!(matches!(c.username_check_state(), CheckState::Idle));
+
+    // (d) dirty field, rebase CONFLICTS (yours preserved) -> value unchanged -> verdict stands.
+    let mut d = ProfileDraft::from_canonical(Some(&base), 0);
+    d.try_set_username("mine".to_string()).expect("valid");
+    pass(&mut d); // the verdict endorses "mine"
+    d.rebase(&updated_username("theirs"));
+    assert!(matches!(d.username.sync(), SyncState::Conflicted { .. }));
+    assert_eq!(d.username.value().map(|u| u.as_str()), Some("mine")); // preserved
+    assert!(matches!(
+        d.username_check_state(),
+        CheckState::Done { verdict: Ok(()) }
+    ));
+
+    // (e) resolve a username conflict: take-theirs moves the value -> reset; keep-mine does not.
+    let mut e_take = ProfileDraft::from_canonical(Some(&base), 0);
+    e_take.try_set_username("mine".to_string()).expect("valid");
+    pass(&mut e_take);
+    e_take.rebase(&updated_username("theirs"));
+    e_take.resolve_take_theirs(ProfileField::Username);
+    assert_eq!(e_take.username.value().map(|u| u.as_str()), Some("theirs"));
+    assert!(matches!(e_take.username_check_state(), CheckState::Idle));
+
+    let mut e_keep = ProfileDraft::from_canonical(Some(&base), 0);
+    e_keep.try_set_username("mine".to_string()).expect("valid");
+    pass(&mut e_keep);
+    e_keep.rebase(&updated_username("theirs"));
+    e_keep.resolve_keep_mine(ProfileField::Username);
+    assert_eq!(e_keep.username.value().map(|u| u.as_str()), Some("mine"));
+    assert!(matches!(
+        e_keep.username_check_state(),
+        CheckState::Done { verdict: Ok(()) }
+    ));
 }

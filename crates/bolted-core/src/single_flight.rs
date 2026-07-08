@@ -52,6 +52,16 @@ impl<T> SingleFlight<T> {
         }
     }
 
+    /// Cancel any in-flight or settled check, returning to [`CheckState::Idle`] and bumping `seq`
+    /// (symmetric with [`begin`](Self::begin)) so any still-outstanding [`CheckToken`] is stale by
+    /// sequence as well as by state — a completion arriving after a `reset` is discarded exactly
+    /// as a superseded one is (invariant I10). This is the value-bound verdict reset: any change
+    /// to the checked field's value invalidates the check (ARCHITECTURE §2/§8, invariant I13).
+    pub fn reset(&mut self) {
+        self.seq += 1;
+        self.state = CheckState::Idle;
+    }
+
     pub fn state(&self) -> &CheckState<T> {
         &self.state
     }
@@ -81,5 +91,17 @@ mod tests {
         assert!(matches!(sf.state(), CheckState::Pending { .. }));
         assert!(sf.complete(c, 3));
         assert_eq!(sf.state(), &CheckState::Done { verdict: 3 });
+    }
+
+    #[test]
+    fn reset_returns_to_idle_and_supersedes_inflight() {
+        let mut sf: SingleFlight<i32> = SingleFlight::new();
+        let t = sf.begin();
+        assert!(matches!(sf.state(), CheckState::Pending { .. }));
+        sf.reset();
+        assert_eq!(sf.state(), &CheckState::Idle);
+        // a completion of the pre-reset token is stale -> ignored, and state stays Idle.
+        assert!(!sf.complete(t, 1));
+        assert_eq!(sf.state(), &CheckState::Idle);
     }
 }
