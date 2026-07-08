@@ -52,14 +52,26 @@ boltffi pack apple --release
 """
 
 [tasks."test:apple"]
-description = "Run the BoltFFI probe XCTests on the macOS slice (packs first)."
+description = "Run the Apple XCTests — probe + app VM tests — on the macOS slice (packs first)."
 depends = ["pack:apple"]
-dir = "apple/profile-probe"
 run = """
 set -eu
 if ! command -v swift >/dev/null 2>&1; then
   echo "error: swift toolchain not found — the Apple probe needs Xcode (VISION risk 5)." >&2
   exit 1
 fi
-swift test
+swift test --package-path apple/profile-probe
+swift test --package-path apple/profile-app
+"""
+
+[tasks."run:apple"]
+description = "Run the SwiftUI profile spike app (a GUI window; for the manual protocol)."
+depends = ["pack:apple"]
+run = """
+set -eu
+if ! command -v swift >/dev/null 2>&1; then
+  echo "error: swift toolchain not found — the app needs Xcode (VISION risk 5)." >&2
+  exit 1
+fi
+swift run --package-path apple/profile-app ProfileApp
 """
