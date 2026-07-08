@@ -58,7 +58,9 @@ updated"), not a keystroke log. This is what makes replay/time-travel meaningful
 **Async validation** (e.g. username uniqueness) is an effect from the draft with **single-flight
 semantics owned by the core**: a new check cancels the in-flight one; stale completions are
 discarded by sequence number. Shells choose *when* to trigger (debounce is shell taste); the
-core guarantees ordering correctness.
+core guarantees ordering correctness. Verdicts are **value-bound**: any change to the checked
+field's value — edit *or* rebase — resets the check to unchecked, so a completed verdict never
+endorses a value it wasn't computed for (step-01 friction F1; invariant 13, §8).
 
 **Validation policy belongs to the UI; verdicts belong to the core.** Shells decide when to call
 `try_set` / rules / async checks and what to display when. The litmus test: shells may add
@@ -118,7 +120,9 @@ merging, ever** (perimeter).
 **Commit is the parse-don't-validate moment**: `commit(self) -> Result<Entity, ValidationReport>`
 — a `Draft` goes in, an always-valid `Entity` comes out, or a report keyed by typed field IDs.
 On success the core may normalize / server-round-trip; the shell receives final truth via the
-ordinary snapshot stream (never its own input echoed back).
+ordinary snapshot stream (never its own input echoed back). A refused submit must never destroy
+the edit session: store-level `submit` consumes the draft only on the success path and returns
+the handle alongside the error otherwise (step-01 friction F3; §8).
 
 ## 5. Manifestation: generics for behavior, macros for names, traits as contracts
 
@@ -204,6 +208,9 @@ become per-language contract tests:
 10. Stale async completions (old sequence) are ignored; latest wins.
 11. Canonical deletion ⇒ draft `Orphaned`; submit on orphaned is a typed error.
 12. Create-flow drafts (no base) never rebase and commit normally.
+13. A completed async-check verdict does not survive a change to the checked field's value:
+    edit or rebase of the pinned field resets the check to unchecked. *(Added after step 01
+    — F1; the test lands with the fix, scheduled with the step-03 implementation session.)*
 
 ## 8. Resolved decisions (with the losing alternative)
 
@@ -217,6 +224,8 @@ become per-language contract tests:
 | Sans-io core | Async runtime in core | Deterministic tests, wasm32, Elm effect model |
 | Errors as key+params | Message strings from core | Localization is shell/platform territory |
 | Snapshot-per-change streams (feature + draft) | Per-property notifications | Simpler surface, native UIs diff anyway, enables replay |
+| Value-bound async verdicts: pinned-field change (edit or rebase) resets the check to unchecked | Verdict carries the value it validated, compared at `validate()`; or shell re-triggers on change | A stale `Done(Ok)` endorsing a value it never saw is a correctness bug (step-01 F1); reset-on-change keeps the state model minimal (unchecked means unchecked); shell-side re-trigger is exactly the runtime glue Bolted exists to remove |
+| Failed submit returns the draft handle with the error | Submit consumes the handle on every outcome | Losing the user's edits on a rejected submit is data loss (step-01 F3); pre-checks run under a borrow, so only the success path needs ownership |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -224,6 +233,10 @@ become per-language contract tests:
 - One-shot effects (focus-first-invalid-field, toasts, **navigation**) — pattern undesigned;
   likely `Option<(Request, Generation)>` state + ack, but navigation deserves its own session.
 - Draft stash/restore for process death — Phase 2.
+- Commit policy for never-run async checks (step-01 F2): unchecked currently *passes*, so a
+  draft that never triggered its uniqueness check commits client-side unverified (tier-3
+  server re-check is the backstop). Require-checked before commit, auto-trigger on validate,
+  or accept-with-backstop — decide at the freeze with step-03 evidence.
 - Focused-but-untouched field during rebase: updates live (rule stays pure); shells may soften
   visually — revisit after Swift spike if it feels wrong.
 - Store concurrency model behind FFI (single-threaded actor vs `Arc<Mutex>`) — prototype uses
