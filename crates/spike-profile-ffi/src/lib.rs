@@ -29,7 +29,8 @@ use boltffi::*;
 
 use bolted_core::report::ErrorData as CoreErrorData;
 use bolted_core::{
-    Draft, DraftStatus, Field, StoreDraft, SyncState, ValidationReport, Validity, Value,
+    CheckState, Constraint, Draft, DraftStatus, Field, StoreDraft, SyncState, ValidationReport,
+    Validity, Value,
 };
 use spike_profile::{DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, Username};
 
@@ -180,6 +181,17 @@ impl ProfileStoreFfi {
             producer,
             checker: Mutex::new(None),
         }
+    }
+
+    /// Declared constraints for a field, projected from `ProfileField::constraints()`. Pure
+    /// metadata (no store state), so it takes no lock. The app derives `maxLength`, character
+    /// counters and required markers from THIS alone — no numeric constraint literal in Swift.
+    pub fn constraints(&self, field: ProfileFieldId) -> Vec<ConstraintFfi> {
+        to_core_field(field)
+            .constraints()
+            .into_iter()
+            .map(to_constraint_ffi)
+            .collect()
     }
 
     /// Live (present, un-submitted) draft count — for the deinit-deregistration probe.
@@ -514,10 +526,33 @@ fn build_draft_snapshot(draft: &ProfileDraft) -> ProfileSnapshot {
         name: project_name(&draft.name),
         email: project_email(&draft.email),
         availability: project_availability(&draft.availability),
+        username_check: project_check(draft.username_check_state()),
         any_dirty: !draft.dirty_fields().is_empty(),
         conflicts: draft.conflicts().into_iter().map(to_field_id).collect(),
         status: to_status(draft.status()),
         version: draft.base_version(),
+    }
+}
+
+/// Project the core check sub-state into its FFI shape (step-02 finding 7).
+fn project_check(state: &CheckState<Result<(), CoreErrorData>>) -> UsernameCheckFfi {
+    match state {
+        CheckState::Idle => UsernameCheckFfi::Unchecked,
+        CheckState::Pending { .. } => UsernameCheckFfi::Pending,
+        CheckState::Done { verdict: Ok(()) } => UsernameCheckFfi::Passed,
+        CheckState::Done { verdict: Err(e) } => UsernameCheckFfi::Failed {
+            error: ErrorData::from(e.clone()),
+        },
+    }
+}
+
+fn to_constraint_ffi(c: Constraint) -> ConstraintFfi {
+    match c {
+        Constraint::Required => ConstraintFfi::Required,
+        Constraint::LenChars { min, max } => ConstraintFfi::LenChars { min, max },
+        Constraint::Custom(key) => ConstraintFfi::Custom {
+            key: key.to_string(),
+        },
     }
 }
 
@@ -551,6 +586,8 @@ fn canonical_snapshot(profile: &Profile, version: u64) -> ProfileSnapshot {
             sync: AvailabilityFieldSync::InSync,
             dirty: false,
         },
+        // Canonical is committed state — there is no in-flight draft check to report.
+        username_check: UsernameCheckFfi::Unchecked,
         any_dirty: false,
         conflicts: Vec::new(),
         status: DraftStatusFfi::Live,

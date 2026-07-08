@@ -45,6 +45,18 @@ pub enum ProfileFieldId {
     Availability,
 }
 
+/// Declared constraint metadata, mirroring `bolted_core::Constraint`. Crossing this lets the shell
+/// derive `maxLength`, character counters and required markers from the SAME source the core
+/// validates against — so there is no numeric constraint literal on the Swift side (ARCHITECTURE
+/// §1). `Custom`'s `&'static str` projects to an owned `String`.
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConstraintFfi {
+    Required,
+    LenChars { min: u32, max: u32 },
+    Custom { key: String },
+}
+
 /// A single localisable error param. The core's `(&'static str, String)` tuple cannot cross, so it
 /// is projected to a named record.
 #[data]
@@ -202,11 +214,20 @@ pub enum DraftStatusFfi {
     Orphaned,
 }
 
-// NOTE: there is deliberately NO async-check sub-state in the snapshot. FINDING (observability):
-// `ProfileDraft.username_check` is a private field with no getter, so the wrapper cannot project
-// Idle/Pending/Passed/Failed. Only the check's *effect* is observable — a pending or failed check
-// shows up in `validate()` as a `username_unique` rule violation. For step 03's UI to render a
-// spinner, `bolted-core`'s draft would need to expose the check sub-state.
+/// The async uniqueness check's sub-state, projected from `bolted_core::CheckState` via the
+/// `ProfileDraft::username_check_state()` getter added in step 03 (`Idle→Unchecked`,
+/// `Pending→Pending`, `Done(Ok)→Passed`, `Done(Err)→Failed`). This closes step-02 finding 7: the
+/// check is now observable as verdict *state*, not only as its `validate()` effect, so a shell can
+/// render a spinner. It is core-owned verdict state, not a UI visibility policy (ARCHITECTURE §2).
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UsernameCheckFfi {
+    Unchecked,
+    Pending,
+    Passed,
+    Failed { error: ErrorData },
+}
+
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileSnapshot {
@@ -214,6 +235,8 @@ pub struct ProfileSnapshot {
     pub name: PersonNameFieldState,
     pub email: EmailFieldState,
     pub availability: AvailabilityFieldState,
+    /// The async uniqueness check's observable sub-state (step-02 finding 7).
+    pub username_check: UsernameCheckFfi,
     pub any_dirty: bool,
     pub conflicts: Vec<ProfileFieldId>,
     pub status: DraftStatusFfi,
