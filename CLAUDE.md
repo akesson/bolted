@@ -7,7 +7,7 @@ starting.
 
 ## Read order (do this before any work)
 
-1. `VISION.md` — scope, principles, the verification ladder, non-goals.
+1. `docs/VISION.md` — scope, principles, the verification ladder, non-goals.
 2. `docs/ARCHITECTURE.md` — the design: observe/command/draft triad, Elm core, `Field`
    validity×sync, live rebase, three-tier validation, invariants (§7), OPEN questions (§9).
 3. `docs/ROADMAP.md` — phases, step table with status, working agreement.

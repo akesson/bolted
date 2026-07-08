@@ -2,7 +2,7 @@
 
 **Status: design draft, pre-validation.** This document records the architecture as designed;
 Phase 1 of [ROADMAP.md](ROADMAP.md) exists to validate it. Sections marked **OPEN** are
-deliberately undecided. Read [../VISION.md](../VISION.md) first for scope and principles —
+deliberately undecided. Read [VISION.md](VISION.md) first for scope and principles —
 especially the verification ladder, which every decision below is justified against.
 
 ---
@@ -17,6 +17,10 @@ especially the verification ladder, which every decision below is justified agai
   consume the contract directly as a crate — no codegen.
 - **View** — fully native, owned by the app, holds no business logic and **no constraint
   literals** (a max length appearing in shell code is a defect — greppable in CI).
+
+A "view" is any native surface, not just a window: a tray/menu-bar icon, a file-manager
+extension, a widget, a CLI — each is just another (often tiny) observer of feature models
+sending commands back. The main app window has no privileged status in the contract.
 
 The contract a feature model exposes has exactly three verbs (CQRS-shaped):
 
@@ -224,6 +228,10 @@ become per-language contract tests:
   visually — revisit after Swift spike if it feels wrong.
 - Store concurrency model behind FFI (single-threaded actor vs `Arc<Mutex>`) — prototype uses
   the simplest thing; decide at Phase 3 extraction.
+- Process topology for OS-integration surfaces (VISION: daemons, tray, file-manager
+  extensions): where the core runs (embedded vs daemon), how sandboxed extension processes
+  reach it (the contract over IPC?), single-instance ownership. Undesigned — needs its own
+  spike after Phase 2; nothing in Phases 1–2 depends on it.
 
 ## 10. Prior art
 

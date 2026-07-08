@@ -85,5 +85,5 @@ reference the generated code is diffed against.
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)
 
 `bolted-check` (binding drift, capability coverage, constraint semver snapshots, WASM size
-budget), `bolted new` scaffolding, `doctor`, the standard mise verb set — per VISION Rings
-0–2. Planned after Phase 3 ships evidence about what drifts in practice.
+budget), `bolted new` scaffolding, `doctor`, the standard mise verb set — per VISION.md's
+in-scope list. Planned after Phase 3 ships evidence about what drifts in practice.

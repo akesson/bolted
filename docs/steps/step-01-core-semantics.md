@@ -1,6 +1,6 @@
 # Step 01 — Core semantics prototype (pure Rust)
 
-**Phase 1 · Spike.** Read first: [VISION.md](../../VISION.md) (principles),
+**Phase 1 · Spike.** Read first: [VISION.md](../VISION.md) (principles),
 [ARCHITECTURE.md](../ARCHITECTURE.md) (the design this step validates — §1–§5 and §7 are the
 substance), [ROADMAP.md](../ROADMAP.md) (working agreement).
 
