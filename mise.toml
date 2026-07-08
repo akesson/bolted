@@ -10,3 +10,56 @@ run = [
   "cargo clippy --workspace --all-targets -- -D warnings",
   "cargo test --workspace",
 ]
+
+# --- Step 02: Apple probe (separate verbs; deliberately NOT part of `check`, so a box without
+# Xcode/the boltffi CLI still runs `check` green). See docs/steps/step-02-boltffi-probe.md. ---
+
+# The boltffi CLI cannot be pinned via mise's cargo backend in this repo: boltffi_bindgen builds
+# through askama 0.16, whose template-path resolution breaks when the cargo registry lives behind
+# a symlink (this machine's `~/.cargo` → dotfiles). Canonicalizing CARGO_HOME sidesteps it (a no-op
+# on a normal, non-symlinked setup). Pinned version recorded here; see the step-02 report.
+[tasks."setup:boltffi"]
+description = "Install the pinned boltffi CLI (idempotent; works around the askama symlink bug)."
+run = """
+set -eu
+want="0.27.3"
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+if command -v boltffi >/dev/null 2>&1 && boltffi --version 2>/dev/null | grep -q "$want"; then
+  echo "boltffi $want already installed"
+  exit 0
+fi
+home="$(cd -P "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null && pwd || echo "${CARGO_HOME:-$HOME/.cargo}")"
+echo "Installing boltffi_cli@$want (CARGO_HOME=$home) ..."
+CARGO_HOME="$home" cargo install boltffi_cli --version "$want"
+"""
+
+[tasks."pack:apple"]
+description = "Build + package the Apple XCFramework + SwiftPM bindings (release)."
+depends = ["setup:boltffi"]
+dir = "crates/spike-profile-ffi"
+run = """
+set -eu
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+if ! command -v boltffi >/dev/null 2>&1; then
+  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
+  exit 1
+fi
+if ! command -v xcodebuild >/dev/null 2>&1; then
+  echo "error: Xcode not found — the Apple probe needs Xcode + the Apple SDKs (VISION risk 5)." >&2
+  exit 1
+fi
+boltffi pack apple --release
+"""
+
+[tasks."test:apple"]
+description = "Run the BoltFFI probe XCTests on the macOS slice (packs first)."
+depends = ["pack:apple"]
+dir = "apple/profile-probe"
+run = """
+set -eu
+if ! command -v swift >/dev/null 2>&1; then
+  echo "error: swift toolchain not found — the Apple probe needs Xcode (VISION risk 5)." >&2
+  exit 1
+fi
+swift test
+"""
