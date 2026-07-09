@@ -5,12 +5,10 @@ rust = "1.95.0"
 # bundler is pinned by GitHub repo instead.
 "github:trunk-rs/trunk" = "0.21.14"
 "github:rustwasm/wasm-pack" = "0.15.0"
-# Step 05 (Android probe): AGP 8.7.3 needs Gradle 8.9–8.11 and a JDK 17–21 — it rejects the Homebrew
-# default `openjdk` (26). Pin both instead of trusting whatever the host has on PATH, which is why
-# there is no committed gradle wrapper. The Android SDK/NDK/system-image cannot be pinned by mise;
-# `pack:android` / `test:android` doctor-check those.
-java = "temurin-21.0.11+10.0.LTS"
-gradle = "8.11.1"
+# NOTE: the Android probe's JDK + Gradle are deliberately NOT here. They are scoped to the
+# `test:android*` tasks (mise per-task `tools`) so that `mise run check` never drags a ~300 MB JDK
+# onto a machine that only wants to build Rust. Same spirit as step 02 keeping `boltffi_cli` out of
+# `[tools]`. See docs/steps/step-05-android-probe.md (Deliverable 3).
 
 [tasks.test]
 run = "cargo test --workspace"
@@ -222,6 +220,10 @@ boltffi pack android --release
 description = "Run the instrumented probe suite on a headless Gradle-managed emulator (ART)."
 depends = ["pack:android"]
 dir = "android/profile-probe"
+# AGP 8.7.3 needs Gradle 8.9–8.11 and a JDK 17–21 — it rejects the Homebrew default openjdk (26).
+# Pinned per-task (not in [tools]) so `check` stays JDK-free. This is also why no gradle wrapper
+# jar is committed: mise is the pin.
+tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
 run = """
 set -eu
 : "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
@@ -240,7 +242,25 @@ if [ ! -d "$ANDROID_HOME/system-images/android-34/aosp_atd" ]; then
 fi
 # `dev34` is the managed device declared in build.gradle.kts. GMD boots it headlessly, runs the
 # instrumented tests on ART, and tears it down — no GUI session, unlike step 03's XCUITest tier.
+# The @HazardProbe class (H2, deliberate use-after-free) is excluded here; see test:android:hazard.
 gradle dev34DebugAndroidTest "$@"
+"""
+
+[tasks."test:android:hazard"]
+description = "Run ONLY the @HazardProbe use-after-close suite (H2). May crash the test process."
+depends = ["pack:android"]
+dir = "android/profile-probe"
+tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
+run = """
+set -eu
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+# Separate verb, and NOT part of test:android, because these probes dereference a freed handle on
+# purpose (H2). A SIGSEGV aborts the whole instrumented process, so isolating them keeps a native
+# crash from destroying the other 33 probes' results. A crash here IS the observation.
+echo "note: this suite exercises undefined behaviour on purpose; a crash is a finding, not a bug." >&2
+gradle dev34DebugAndroidTest -Pbolted.hazard "$@"
 """
 
 [tasks."run:apple"]

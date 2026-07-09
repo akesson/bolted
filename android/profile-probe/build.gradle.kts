@@ -10,6 +10,10 @@ plugins {
 // against a stale checked-in copy.
 val ffiDist = file("../../crates/spike-profile-ffi/dist/android")
 
+// `-Pbolted.hazard` flips the suite over to the UB probes (H2), which may kill the instrumented
+// process. By default they are excluded so a native crash cannot destroy the other probes' results.
+val hazardOnly = providers.gradleProperty("bolted.hazard").isPresent
+
 android {
     namespace = "dev.bolted.profileprobe"
     compileSdk = 35
@@ -19,6 +23,13 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // One ABI: the probe runs on an arm64-v8a emulator (see boltffi.toml).
         ndk { abiFilters += "arm64-v8a" }
+
+        val hazard = "dev.bolted.profileprobe.HazardProbe"
+        if (hazardOnly) {
+            testInstrumentationRunnerArguments["annotation"] = hazard
+        } else {
+            testInstrumentationRunnerArguments["notAnnotation"] = hazard
+        }
     }
 
     sourceSets {
