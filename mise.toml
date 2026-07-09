@@ -1,5 +1,10 @@
 [tools]
 rust = "1.95.0"
+# Step 04 (web spike): the wasm bundler + the headless-wasm test runner, pinned like everything
+# else. NOTE: mise's registry shortname `trunk` is the WRONG tool (trunk.io's launcher), so the
+# bundler is pinned by GitHub repo instead.
+"github:trunk-rs/trunk" = "0.21.14"
+"github:rustwasm/wasm-pack" = "0.15.0"
 
 [tasks.test]
 run = "cargo test --workspace"
@@ -90,6 +95,63 @@ xcodebuild test \
   -scheme BoltedProfile \
   -destination 'platform=macOS' \
   -derivedDataPath .build-xcode
+"""
+
+# --- Step 04: Rust web spike (Leptos, browser CSR). Separate verbs; deliberately NOT part of
+# `check` (which stays host-only, Xcode-free, browser-free) — the web work lives behind
+# `build:web` / `serve:web` / `test:web`, exactly as the Apple work lives behind `pack:apple` /
+# `test:apple`. See docs/steps/step-04-rust-web-app.md. ---
+
+[tasks."build:web"]
+description = "Release-build the Leptos web app to wasm and bundle it (Trunk runs wasm-opt)."
+dir = "crates/profile-web"
+run = """
+set -eu
+if ! command -v trunk >/dev/null 2>&1; then
+  echo "error: trunk not found — run 'mise install' (pinned as github:trunk-rs/trunk)." >&2
+  exit 1
+fi
+# A fresh toolchain has only the host target; self-heal like pack:apple does for the Apple targets.
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
+fi
+trunk build --release
+"""
+
+[tasks."serve:web"]
+description = "Serve the web app with hot reload and open it in a browser (the manual protocol)."
+dir = "crates/profile-web"
+run = """
+set -eu
+if ! command -v trunk >/dev/null 2>&1; then
+  echo "error: trunk not found — run 'mise install' (pinned as github:trunk-rs/trunk)." >&2
+  exit 1
+fi
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
+fi
+trunk serve --open
+"""
+
+[tasks."test:web"]
+description = "Run the headless wasm-bindgen-test suite in Chrome (no GUI session needed)."
+dir = "crates/profile-web"
+run = """
+set -eu
+if ! command -v wasm-pack >/dev/null 2>&1; then
+  echo "error: wasm-pack not found — run 'mise install' (pinned as github:rustwasm/wasm-pack)." >&2
+  exit 1
+fi
+if [ ! -d "/Applications/Google Chrome.app" ] && ! command -v google-chrome >/dev/null 2>&1 \\
+  && ! command -v chromium >/dev/null 2>&1; then
+  echo "error: Chrome/Chromium not found — the headless wasm tier drives a real (headless)" >&2
+  echo "browser engine. Install Google Chrome (wasm-pack fetches a matching chromedriver)." >&2
+  exit 1
+fi
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
+fi
+wasm-pack test --headless --chrome
 """
 
 [tasks."run:apple"]

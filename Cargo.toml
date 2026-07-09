@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/bolted-core", "crates/spike-profile", "crates/spike-profile-ffi"]
+members = [
+    "crates/bolted-core",
+    "crates/spike-profile",
+    "crates/spike-profile-ffi",
+    "crates/profile-web",
+]
 
 [workspace.package]
 version = "0.0.0"

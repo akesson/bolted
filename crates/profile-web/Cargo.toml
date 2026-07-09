@@ -1,0 +1,22 @@
+# The Rust-web shell (step 04): consumes the core DIRECTLY as crates — zero FFI, no codegen.
+# The wasm-only dependencies are the *shell's* and are target-gated, so host builds (`mise run
+# check`, the controller tests) never compile Leptos and the core keeps its zero-dep discipline.
+[package]
+name = "profile-web"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bolted-core = { path = "../bolted-core" }
+spike-profile = { path = "../spike-profile" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen-futures = "0.4"
+gloo-timers = { version = "0.4", features = ["futures"] }
+console_error_panic_hook = "0.1"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+wasm-bindgen = "0.2"
