@@ -17,7 +17,7 @@ work around them.
 | 01 | Core semantics prototype (pure Rust) | 1 — Spike | **done** — [plan](steps/step-01-core-semantics.md) · [report](steps/step-01-report.md) |
 | 02 | BoltFFI due-diligence probe (Apple) | 1 — Spike | **done** — [plan](steps/step-02-boltffi-probe.md) · [report](steps/step-02-report.md) |
 | 03 | SwiftUI spike app | 1 — Spike | **done** — [plan](steps/step-03-swiftui-app.md) · [report](steps/step-03-report.md); items 2–6 automated (XCUITest, `test:apple:ui`), item 1 confirmed by hand |
-| 04 | Rust web spike app | 1 — Spike | **ready** — [plan](steps/step-04-rust-web-app.md) (Leptos, browser CSR; faithful port of the step-03 feature) |
+| 04 | Rust web spike app | 1 — Spike | **done** — [plan](steps/step-04-rust-web-app.md) · [report](steps/step-04-report.md); zero-FFI path proven, no kill criteria hit, wasm baseline 304 KiB (85 KiB brotli) |
 | 05 | Android headless probe | 1 — Spike | pending |
 | 06 | Design freeze | 2 — Freeze | pending |
 | 07 | Kotlin/Compose spike app | 2 — Freeze | pending |
@@ -51,11 +51,15 @@ falsify the design cheaply — friction logs from these steps are the input to t
   async-verdict reset (invariant 13, with its test) and failed `submit` returning the draft
   handle with the error.
 - **Step 04 — Rust web spike app.** Same feature, **Leptos** (browser CSR only), consuming the
-  core as a plain crate — zero FFI, no codegen; proves the zero-FFI path and
-  `wasm32-unknown-unknown` discipline (pre-verified: core + feature already build clean for the
-  target), is the **first real consumer of `bolted_core::Store`** (the FFI wrapper bypassed it),
-  and drives the sans-io async check from the browser via `spawn_local` (no executor in the core).
-  WASM bundle size measured (future size-budget check baseline). *Detailed step doc exists.*
+  core as a plain crate — zero FFI, no codegen. **Done, no kill criteria hit**: wasm32 discipline
+  holds with the core still zero-dep; `bolted_core::Store` served a reactive shell unmodified (and
+  F3 ran against the real store for the first time); the sans-io async check ran from `spawn_local`
+  with no executor in the core; the echo rule survived in a signal framework. Baseline: **304 KiB
+  `.wasm`** (85 KiB brotli) — of which a bare Leptos CSR app is 100 KiB, so the feature costs
+  ~204 KiB. Key findings for the freeze: a Rust shell **does not want the snapshot stream**
+  (read-direct + a version tick is race-free and forks nothing); `submit`'s by-value `!Clone` handle
+  cannot be called from a struct field without a scratch checkout; F6's edit-to-equal-theirs reads as
+  *confusing* in a running UI; F2 (never-run check) is again the default path.
 - **Step 05 — Android headless probe.** `boltffi pack android` + Kotlin tests, no UI:
   JNI `try_set` round-trip cost at keystroke frequency (*the* chattiness kill-criterion —
   perceptible latency means a shell-side write buffer, a design change); draft-handle
