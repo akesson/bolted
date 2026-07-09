@@ -1,11 +1,14 @@
 # Step 03 — SwiftUI spike app — Report
 
-**Status: milestones 1–4 complete and green; milestone 5 (the manual GUI protocol) is NOT yet
-run** — it needs a human at a running window (`mise run run:apple`) and is written out below for
-whoever runs it. Everything automatable is done and passing:
+**Status: milestones 1–4 complete and green; milestone 5 (the manual GUI protocol) is now
+DISCHARGED** — item 1 (cursor survival) confirmed by hand; items 2–6 automated as an XCUITest tier
+(see "Automating the manual protocol" below). Green:
 
 - `mise run check` — green (fmt, clippy `-D warnings`, workspace tests incl. invariant 13). **Xcode-free.**
-- `mise run test:apple` — green: **28** probe XCTests (23 prior + 5 new) + **11** app ViewModel tests.
+- `mise run test:apple` — green: **28** probe XCTests + **12** app ViewModel tests (+1: the §9
+  focused-clean-rebase test added this session).
+- `mise run test:apple:ui` — green: **9** XCUITests (8 protocol + 1 smoke). *Needs Xcode + a GUI
+  session with Accessibility permission — deliberately outside `check`/`test`.*
 - `swift build` of the whole app package (incl. the `@main` executable) — clean.
 
 The implementation session did NOT resolve any ARCHITECTURE §9 OPEN question; F2/F6 and the
@@ -48,10 +51,10 @@ focused-field-during-rebase feel got *evidence*, recorded below, and stay OPEN.
 
 | Behaviour | Automated verdict | Manual verdict |
 |---|---|---|
-| **Echo rule** | **Holds at the VM level.** `editUsername` calls `trySet` per keystroke; the focused buffer is never rewritten from core; blur refreshes to the sanitized value; `Invalid.raw` is preserved. Tests: `testEchoRuleFocusedBufferNotRewritten`, `testEchoRuleInvalidRawPreserved`. | **Pending** — cursor-survival while typing fast is the headline §6 claim and needs a human (below). |
-| **Conflict UI** | **Holds.** keep-mine / take-theirs resolve from snapshot data alone; take-theirs on username also resets the check (i13 visible). Tests: `testConflictResolutionAndCheckReset`, `testSubmitConflicted`. | Pending — banner feel. |
-| **Live rebase** | **Holds.** Clean field adopts silently; dirty field conflicts, mine preserved, banner data present. Tests: `testLiveRebaseCleanFieldAdopts`, `testLiveRebaseDirtyFieldConflicts`. | **Pending** — focused-but-untouched-field feel (§9). |
-| **Submit flow** | **Holds, honest.** Invalid → `Validation{report}`; conflicted → `Conflicted{fields}`; success → canonical updates via the store stream and the editor re-checks-out; a failed submit leaves the draft alive (F3, end-to-end). Tests: `testSubmit*` (3). | Pending — visual. |
+| **Echo rule** | **Holds at the VM level.** `editUsername` calls `trySet` per keystroke; the focused buffer is never rewritten from core; blur refreshes to the sanitized value; `Invalid.raw` is preserved. Tests: `testEchoRuleFocusedBufferNotRewritten`, `testEchoRuleInvalidRawPreserved`. | **Confirmed by hand.** Typed `  bob_1  ` fast into Username: cursor never jumped, spaces survived, trimmed on blur; `Foo@BAR.com` lower-cased only on blur. (XCUITest can't read the caret — stays manual.) |
+| **Conflict UI** | **Holds.** keep-mine / take-theirs resolve from snapshot data alone; take-theirs on username also resets the check (i13 visible). Tests: `testConflictResolutionAndCheckReset`, `testSubmitConflicted`. | **Automated** — `test3a/test3b` (banner shows theirs, mine preserved, keep-mine/take-theirs) + `test4` (F6). |
+| **Live rebase** | **Holds.** Clean field adopts silently; dirty field conflicts, mine preserved, banner data present. Tests: `testLiveRebaseCleanFieldAdopts`, `testLiveRebaseDirtyFieldConflicts`. | **Automated** — `test2` (unfocused clean adopt end-to-end). The focused-but-untouched §9 case can't be UI-driven (see finding 6); pinned by the new VM test `testLiveRebaseFocusedCleanFieldStaleUntilBlur`. |
+| **Submit flow** | **Holds, honest.** Invalid → `Validation{report}`; conflicted → `Conflicted{fields}`; success → canonical updates via the store stream and the editor re-checks-out; a failed submit leaves the draft alive (F3, end-to-end). Tests: `testSubmit*` (3). | **Automated** — `test6a` (invalid), `test6b` (conflicted → resolve → succeed, proving F3 on a live draft), `test6c` (clean → success + canonical updates). |
 
 No kill criterion was hit. The echo rule did **not** force the shell to re-implement sanitization
 or restate a constraint (the §2 litmus test passes); the subscribe/get gap was closed by the
@@ -147,29 +150,76 @@ manual protocol confirms the *feel*).
   LOC; app source **787** LOC (VM + views + localization); app VM tests **251** LOC; new probe tests
   **174** LOC. The two new DTOs + one method added no packaging trouble (pack succeeds).
 
-## Manual protocol — TO RUN (needs a human at `mise run run:apple`)
+## Automating the manual protocol — XCUITest tier (follow-up session)
 
-Launch: `mise run run:apple`. Record each observation back into this section.
+The manual protocol was discharged by (a) confirming item 1 by hand and (b) building a real
+**XCUITest** tier for items 2–6. What was built, all committed under `apple/profile-app/`:
 
-1. **Echo rule / cursor survival (the headline).** Focus *Username*; type fast with leading and
-   trailing spaces, e.g. `  bob_1  `. **Expected:** the cursor never jumps and no character is eaten
-   mid-word while typing; the visible text is exactly what you typed (spaces included); on blur it
-   snaps to the trimmed value. Do the same in *Email* with mixed case (`Foo@BAR.com`) — lowercasing
-   appears only on blur. *Record:* did the cursor ever jump?
-2. **Live rebase — focused-but-untouched (§9).** Focus *Name* but don't type. Click the simulator's
-   "name → Server Name". *Record:* the field is clean so it adopts — does the visible text update
-   live, or only when you blur? How does that feel?
-3. **Live rebase — dirty conflict.** Edit *Name*, then click "name → Server Name". *Expected:* a
-   conflict banner with *theirs*; your text preserved. Try keep-mine and take-theirs.
-4. **F6.** Create a username conflict (edit *Username*, then "username → server_user"), then edit
-   your username until it equals `server_user`. *Expected:* it **stays** conflicted until you
-   resolve. *Record:* correct or surprising?
-5. **Async check / spinner.** Type a valid new username; after ~400 ms a spinner appears (the
-   checker sleeps 1 s), then clears. Type `admin` → "already taken". Type through a pending check →
-   the spinner never shows a verdict for the wrong text. *Record:* spinner feel; any flicker.
-6. **Submit.** Submit with an invalid field (see the per-field report), with a conflict (see the
-   refusal), and clean (success → the canonical pane updates, the form re-checks-out). Confirm a
-   failed submit leaves you still editing.
+- `project.yml` (XcodeGen spec) → a macOS **app target** (`BoltedProfile`, the same `ProfileApp.swift`
+  + `ProfileFeature` + `SpikeProfileFfi` xcframework) and a **UI-testing bundle** target. The
+  generated `.xcodeproj` is gitignored; regenerate with `xcodegen generate`.
+- `UITests/ProfileUITests.swift` — 8 tests (items 2–6) + `SmokeUITest.swift`.
+- Accessibility identifiers in `ProfileForm.swift` (`field-*`, `spinner-*`, `error-*`,
+  `conflict-theirs-*`, `keepmine-*`/`taketheirs-*`, `submit`, `submit-*`, `canonical-*`, `sim-*`).
+- A new VM test `testLiveRebaseFocusedCleanFieldStaleUntilBlur` for the one §9 case XCUITest can't drive.
+- `mise run test:apple:ui` (XcodeGen + `xcodebuild test`); Xcode/GUI-gated, outside `check`/`test`.
+
+### Verdicts
+
+1. **Cursor survival (item 1, the headline)** — **manual, PASS.** Typed `  bob_1  ` fast into Username:
+   no cursor jump, no eaten char, spaces preserved, trimmed on blur; `Foo@BAR.com` lower-cased only on
+   blur. XCUITest cannot read the caret/selection range, so this stays a manual check.
+2. **Live rebase, clean field (item 2)** — **PASS** (`test2`, unfocused adopt, end-to-end). The
+   **focused-but-untouched §9 case** cannot be UI-driven (finding 6) — pinned by the VM test instead:
+   the focused clean field adopts at the snapshot level immediately but repaints its buffer only on
+   blur. (Whether stale-until-blur is the *desired* UX is still a §9 question for the freeze.)
+3. **Dirty conflict (item 3)** — **PASS** (`test3a`/`test3b`): banner shows theirs, mine preserved,
+   keep-mine/take-theirs both resolve correctly.
+4. **F6 (item 4)** — **PASS** (`test4`): a conflicted username edited character-by-character until it
+   equals `server_user` **stays conflicted** until resolved. F6 confirmed end-to-end.
+5. **Async check / spinner (item 5)** — **PASS** (`test5`): `admin` surfaces the taken inline error
+   after the verdict; a unique name does not. Spinner appearance is asserted best-effort (an
+   indeterminate `ProgressView`'s element exposure varies).
+6. **Submit (item 6)** — **PASS** (`test6a/b/c`): invalid → validation report; conflicted → refusal
+   that **leaves the draft alive** (resolve + resubmit on the same draft then succeeds — F3
+   end-to-end); clean → success + the canonical pane updates + the editor re-checks-out.
+
+### Findings from building the tier (for the extraction / shell generator, steps 10–11)
+
+1. **The unbundled `@main` app never showed a window** (`type="BackgroundOnly"`). A bare SwiftPM
+   executable has no `Info.plist`, so LaunchServices registers it background-only and `WindowGroup`
+   surfaces nothing — it just hangs. Fixed with an `NSApplicationDelegateAdaptor` (`AppActivator`)
+   that sets `.regular` activation policy and activates on launch. **The shell generator must emit
+   this for any `swift run`-launched app**, or ship a real `.app` bundle.
+2. **`boltffi pack apple` needs the iOS + `x86_64-apple-darwin` std targets installed**; a fresh
+   toolchain has only the host and the pack dies with an opaque "build failed for targets". Added a
+   `rustup target add …` self-heal to `pack:apple`.
+3. **XCUITest cannot run under `swift test`** ("Device is not configured for UI testing — … unit test
+   bundle instead of a UI test bundle"). It requires a real Xcode UI-testing bundle, hence the
+   XcodeGen `.xcodeproj`. This is why the app stays SwiftPM but the UI tier gets a generated project.
+4. **Target-name collision.** The Xcode app target could not be named `ProfileApp`: the app package
+   has a SwiftPM `executableTarget` of that name, which `TEST_TARGET_NAME` resolved to (a bare
+   `Build/Products/Debug/ProfileApp`, no `.app`), failing with "bundle identifier … couldn't be
+   read". Renamed the Xcode target `BoltedProfile`. A generator emitting both a SwiftPM app and an
+   Xcode UI-test project must keep these names disjoint.
+5. **A container-level `.accessibilityIdentifier` clobbers children.** Put on the conflict banner's
+   `VStack`, it propagated to and overwrote the ids of the theirs-text and both buttons. Removed it;
+   detect the banner via the per-element `conflict-theirs-<field>` instead.
+6. **XCUITest can't drive the focused-field §9 case.** Real clicks can't order focus/blur against the
+   *async* rebase snapshot, so the "focused clean field, stale-until-blur" behaviour is untestable
+   end-to-end (a mouse click to trigger the rebase perturbs focus non-deterministically). The VM test
+   is the right tool for it; XCUITest owns the unfocused adopt. Recording this as the durable division
+   of labour for the eventual shell conformance suite.
+7. **Environment cost is real and structural.** `test:apple:ui` needs Xcode + a **logged-in GUI
+   session** whose controlling app holds **Accessibility permission** (System Settings → Privacy &
+   Security → Accessibility); without it the runner fails "Timed out while enabling automation mode".
+   So the UI tier is developer-local / dedicated-runner, never headless CI — an inherent XCUITest
+   property, matching VISION risk 5. Content is exposed to XCUITest via `.value`, not `.label`.
+
+### If you still want to eyeball the feel
+
+`mise run run:apple` opens the window for subjective checks (banner styling, spinner flicker, the
+stale-until-blur *feel*) that automation deliberately doesn't judge.
 
 ## Kill criteria
 

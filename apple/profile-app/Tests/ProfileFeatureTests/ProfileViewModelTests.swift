@@ -97,6 +97,32 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isDirty(.name))
     }
 
+    /// ARCHITECTURE §9 — focused-but-untouched field during rebase. A CLEAN field that is *focused*
+    /// when a rebase arrives adopts theirs at the snapshot level immediately, but keeps its visible
+    /// buffer until blur (the echo rule owns the focused control's text). Pins the CURRENT behaviour
+    /// as a regression guard; whether stale-until-blur is the desired UX stays a §9 question for the
+    /// freeze. (The end-to-end UI suite cannot drive this case — real clicks can't order focus/blur
+    /// against the async rebase snapshot — so it is verified here, deterministically, instead.)
+    func testLiveRebaseFocusedCleanFieldStaleUntilBlur() async throws {
+        let vm = try makeVM()
+        vm.focus(.name) // focus, do not edit — clean
+        vm.applyServerChange(.name("Server Name"))
+        await eventually {
+            if case .valid(let v) = vm.snapshot.name.validity { return v == "Server Name" }
+            return false
+        }
+        // The snapshot adopts theirs immediately, and the field stays clean...
+        guard case .valid(let adopted) = vm.snapshot.name.validity else {
+            return XCTFail("focused clean field should adopt theirs at the snapshot level")
+        }
+        XCTAssertEqual(adopted, "Server Name")
+        XCTAssertFalse(vm.isDirty(.name))
+        // ...but the focused buffer stays stale until blur.
+        XCTAssertEqual(vm.nameText, "Alice Smith", "focused buffer must not repaint mid-rebase")
+        vm.blur(.name)
+        XCTAssertEqual(vm.nameText, "Server Name", "on blur the adopted value becomes visible")
+    }
+
     /// A canonical change to a DIRTY field conflicts, preserving yours and exposing theirs.
     func testLiveRebaseDirtyFieldConflicts() async throws {
         let vm = try makeVM()

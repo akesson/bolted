@@ -1,12 +1,26 @@
 import SwiftUI
+import AppKit
 import SpikeProfileFfi
 import ProfileFeature
+
+/// Promotes this CLI-launched, *unbundled* executable to a regular foreground app. A bare SwiftPM
+/// binary has no `Info.plist`, so LaunchServices registers it `BackgroundOnly` — the run loop runs
+/// but `WindowGroup` surfaces no focusable window (it just looks "stuck"). Setting the activation
+/// policy and activating on launch gives us a real window, Dock icon, and menu bar. Only the manual
+/// protocol runs this; `test:apple` never does.
+final class AppActivator: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
 
 /// The thin `@main` shell: seeds a profile, builds the ViewModel, shows the editor. Run with
 /// `mise run run:apple`. The uniqueness checker carries a 1 s delay so the spinner is visible
 /// during the manual protocol.
 @main
 struct ProfileApp: App {
+    @NSApplicationDelegateAdaptor(AppActivator.self) private var activator
     @State private var model: ProfileViewModel?
 
     init() {

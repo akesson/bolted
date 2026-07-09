@@ -1,0 +1,73 @@
+# XcodeGen spec for the step-03 XCUITest tier. Committed; the generated `.xcodeproj` is NOT (see
+# .gitignore) — regenerate with `xcodegen generate` (mise run test:apple:ui does this).
+#
+# Why this exists at all: `swift test` cannot host XCUITest ("Device is not configured for UI
+# testing — ... unit test bundle instead of a UI test bundle"). XCUITest needs a real Xcode
+# UI-testing bundle, which only an .xcodeproj provides. This project builds the SAME app sources
+# (Sources/ProfileApp) against the SAME generated FFI package as the SwiftPM app, plus a
+# UI-testing target that drives it. `mise run check` stays Xcode-free — this is a separate verb.
+name: ProfileAppUITest
+options:
+  bundleIdPrefix: dev.bolted
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  # The app package itself (this directory) — for the ProfileFeature library product.
+  ProfileFeature:
+    path: .
+  # The boltffi-generated bindings + xcframework (ProfileApp.swift imports SpikeProfileFfi directly).
+  SpikeProfileFfi:
+    path: ../../crates/spike-profile-ffi/dist/apple
+
+# NOTE: the Xcode app target is deliberately NOT named "ProfileApp". The app package (referenced
+# below at path ".") has a SwiftPM `executableTarget` named `ProfileApp`, which builds a *bare*
+# `Build/Products/Debug/ProfileApp` binary. If the Xcode app target shared that name, the UI-test
+# target's `TEST_TARGET_NAME` resolves to the bare executable instead of our `.app`, and the runner
+# dies with "The bundle identifier for ProfileApp couldn't be read. No such file … /ProfileApp".
+targets:
+  BoltedProfile:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/ProfileApp
+    dependencies:
+      - package: ProfileFeature
+        product: ProfileFeature
+      - package: SpikeProfileFfi
+        product: SpikeProfileFfi
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bolted.BoltedProfile
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+  BoltedProfileUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: BoltedProfile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bolted.BoltedProfileUITests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+schemes:
+  BoltedProfile:
+    build:
+      targets:
+        BoltedProfile: all
+        BoltedProfileUITests: [test]
+    test:
+      targets:
+        - BoltedProfileUITests

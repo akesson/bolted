@@ -49,6 +49,7 @@ public struct ProfileFormView: View {
                 HStack {
                     Button("Submit") { vm.submit() }
                         .keyboardShortcut(.return, modifiers: .command)
+                        .accessibilityIdentifier("submit")
                     if vm.snapshot.anyDirty {
                         Text("unsaved changes").font(.caption).foregroundStyle(.secondary)
                     }
@@ -83,6 +84,7 @@ struct TextFieldRow: View {
                 Spacer()
                 if showsSpinner && vm.isChecking {
                     ProgressView().controlSize(.small)
+                        .accessibilityIdentifier("spinner-\(field.idString)")
                 }
                 if let max = vm.maxLength(field) {
                     Text("\(text.count)/\(max)")
@@ -94,8 +96,10 @@ struct TextFieldRow: View {
             TextField(field.label, text: Binding(get: { text }, set: { text = $0; onEdit() }))
                 .textFieldStyle(.roundedBorder)
                 .focused(focus, equals: field)
+                .accessibilityIdentifier("field-\(field.idString)")
             if let error = vm.inlineError(field) {
                 Text(error).font(.caption).foregroundStyle(.red)
+                    .accessibilityIdentifier("error-\(field.idString)")
             }
             if let info = vm.conflict(field) {
                 ConflictBanner(field: field, info: info, vm: vm)
@@ -166,13 +170,16 @@ struct ConflictBanner: View {
             HStack(spacing: 6) {
                 Text("theirs:").font(.caption2).foregroundStyle(.secondary)
                 Text(info.theirs).font(.caption)
+                    .accessibilityIdentifier("conflict-theirs-\(field.idString)")
                 if let base = info.base {
                     Text("(was \(base))").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             HStack {
                 Button("Keep mine") { vm.resolveKeepMine(field) }
+                    .accessibilityIdentifier("keepmine-\(field.idString)")
                 Button("Take theirs") { vm.resolveTakeTheirs(field) }
+                    .accessibilityIdentifier("taketheirs-\(field.idString)")
             }
             .controlSize(.small)
         }
@@ -180,6 +187,9 @@ struct ConflictBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.yellow.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        // NOTE: no container-level accessibilityIdentifier here — on this VStack it propagates to and
+        // clobbers the children's ids (theirs text, keep-mine/take-theirs buttons). Detect the banner
+        // via the per-element `conflict-theirs-<field>` instead.
     }
 }
 
@@ -191,6 +201,7 @@ struct SubmitResultView: View {
         case .success:
             Label("Submitted", systemImage: "checkmark.circle.fill")
                 .font(.caption).foregroundStyle(.green)
+                .accessibilityIdentifier("submit-success")
         case .validation(let report):
             VStack(alignment: .leading, spacing: 2) {
                 Text("Fix these before submitting:").font(.caption).bold()
@@ -202,13 +213,17 @@ struct SubmitResultView: View {
                 }
             }
             .foregroundStyle(.red)
+            .accessibilityIdentifier("submit-validation")
         case .conflicted(let fields):
             Text("Resolve conflicts: \(fields.map(\.label).joined(separator: ", "))")
                 .font(.caption).foregroundStyle(.orange)
+                .accessibilityIdentifier("submit-conflicted")
         case .orphaned:
             Text("This profile was deleted on the server.").font(.caption).foregroundStyle(.red)
+                .accessibilityIdentifier("submit-orphaned")
         case .alreadySubmitted:
             Text("Already submitted.").font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("submit-alreadySubmitted")
         }
     }
 }
@@ -226,16 +241,23 @@ struct ServerSimulatorPane: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("canonical").font(.caption2).foregroundStyle(.secondary)
                     Text("username: \(valueText(c.username.validity))").font(.caption)
+                        .accessibilityIdentifier("canonical-username")
                     Text("name: \(nameText(c.name.validity))").font(.caption)
+                        .accessibilityIdentifier("canonical-name")
                     Text("email: \(emailText(c.email.validity))").font(.caption)
+                        .accessibilityIdentifier("canonical-email")
                 }
             }
             Divider()
             Text("push a canonical change").font(.caption2).foregroundStyle(.secondary)
             Button("username → server_user") { vm.applyServerChange(.username("server_user")) }
+                .accessibilityIdentifier("sim-username")
             Button("name → Server Name") { vm.applyServerChange(.name("Server Name")) }
+                .accessibilityIdentifier("sim-name")
             Button("email → team@corp.example") { vm.applyServerChange(.email("team@corp.example")) }
+                .accessibilityIdentifier("sim-email")
             Button("reset to seed") { vm.applyServerChange(.resetToSeed) }
+                .accessibilityIdentifier("sim-reset")
             Spacer()
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -262,6 +284,17 @@ extension ProfileFieldId {
         case .name: "Name"
         case .email: "Email"
         case .availability: "Availability"
+        }
+    }
+
+    /// Stable, non-localized token for `.accessibilityIdentifier` so XCUITest (apple/profile-app
+    /// UITests) can address fields without depending on display labels.
+    var idString: String {
+        switch self {
+        case .username: "username"
+        case .name: "name"
+        case .email: "email"
+        case .availability: "availability"
         }
     }
 }

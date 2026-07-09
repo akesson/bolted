@@ -48,6 +48,12 @@ if ! command -v xcodebuild >/dev/null 2>&1; then
   echo "error: Xcode not found — the Apple probe needs Xcode + the Apple SDKs (VISION risk 5)." >&2
   exit 1
 fi
+# `boltffi pack apple` builds iOS device/sim + macOS x86_64/arm64; a fresh toolchain has only the
+# host target and the pack fails with an opaque "build failed for targets". Install them if missing.
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin \
+    >/dev/null 2>&1 || true
+fi
 boltffi pack apple --release
 """
 
@@ -62,6 +68,28 @@ if ! command -v swift >/dev/null 2>&1; then
 fi
 swift test --package-path apple/profile-probe
 swift test --package-path apple/profile-app
+"""
+
+[tasks."test:apple:ui"]
+description = "Run the XCUITest UI suite (items 2–6). Xcode + a logged-in GUI session required."
+depends = ["pack:apple"]
+dir = "apple/profile-app"
+run = """
+set -eu
+# Deliberately NOT part of `check`/`test`/`test:apple`: XCUITest drives a real window, so it needs a
+# logged-in GUI session AND the controlling app (terminal/editor) to hold Accessibility permission
+# (System Settings → Privacy & Security → Accessibility). Without it the runner fails with
+# "Timed out while enabling automation mode". See docs/steps/step-03-report.md.
+if ! command -v xcodegen >/dev/null 2>&1; then
+  echo "error: xcodegen not found — install with 'brew install xcodegen'." >&2
+  exit 1
+fi
+xcodegen generate
+xcodebuild test \
+  -project ProfileAppUITest.xcodeproj \
+  -scheme BoltedProfile \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build-xcode
 """
 
 [tasks."run:apple"]

@@ -11,6 +11,12 @@ import PackageDescription
 let package = Package(
     name: "profile-app",
     platforms: [.macOS(.v14)], // @Observable
+    products: [
+        // Exposed so the XcodeGen UI-test project (apple/profile-app/project.yml) can build an
+        // Xcode app target from ProfileApp.swift while consuming the feature library. `swift
+        // build`/`swift test` are unaffected — this only adds an externally-visible product.
+        .library(name: "ProfileFeature", targets: ["ProfileFeature"]),
+    ],
     dependencies: [
         .package(path: "../../crates/spike-profile-ffi/dist/apple"),
     ],
