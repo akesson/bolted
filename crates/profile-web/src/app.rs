@@ -37,10 +37,18 @@ impl Default for Timing {
     }
 }
 
-/// Mount the app to `<body>`. Called by the Trunk bin on load and by the wasm test tier.
+/// Mount the app to `<body>`. Called by the Trunk bin on load.
 pub fn mount(timing: Timing) {
     console_error_panic_hook::set_once();
     leptos::mount::mount_to_body(move || root(timing));
+}
+
+/// Mount the app inside `parent`. The wasm test tier uses this to stand up a fresh app per test
+/// without clearing `<body>` — which would destroy `wasm-bindgen-test`'s own output node and hang
+/// the runner.
+pub fn mount_into(parent: leptos::web_sys::HtmlElement, timing: Timing) {
+    console_error_panic_hook::set_once();
+    leptos::mount::mount_to(parent, move || root(timing)).forget();
 }
 
 /// The app's whole state: the controller (which owns the store + the `!Clone` draft handle) and
