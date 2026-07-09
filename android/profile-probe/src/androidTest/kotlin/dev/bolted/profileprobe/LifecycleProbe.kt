@@ -152,11 +152,9 @@ class LifecycleProbe {
     }
 
     /**
-     * Callback-object lifetime, the mirror image of H1. The generated bindings keep the Kotlin
-     * `UniquenessChecker` alive in a `ConcurrentHashMap` (a strong reference) for as long as Rust
-     * holds the callback handle — so abandoning the Kotlin reference is safe here, and the checker
-     * is still invoked. (It also means the checker leaks by the same mechanism, until the bridge is
-     * finalized.)
+     * Callback-object lifetime. The generated bindings keep the Kotlin `UniquenessChecker` alive in a
+     * `ConcurrentHashMap<Long, UniquenessChecker>` (a strong reference) for as long as Rust holds the
+     * callback handle — so abandoning the Kotlin reference is safe, and the checker is still invoked.
      */
     @Test
     fun anAbandonedCheckerSurvivesGcBecauseTheBindingsHoldItStrongly() {
@@ -172,6 +170,32 @@ class LifecycleProbe {
             draft.trySetUsername("bob_the_user")
             assertTrue("the abandoned checker is still invoked from Rust", draft.runUsernameCheck())
         }
+    }
+
+    /**
+     * **And the callback is released deterministically — unlike the handle.** Dropping the Rust
+     * `Box<dyn UniquenessChecker>` (which `close()`ing the draft does) invokes the callback vtable's
+     * `free(handle)`, which lands in `UniquenessCheckerCallbacks.free` → `UniquenessCheckerMap.remove`.
+     * No finalizer is involved.
+     *
+     * The asymmetry with H1 is one of ownership direction: **Rust owns the callback** and can release
+     * it across the boundary; **Kotlin owns the handle**, and BoltFFI gives Rust no hook to release
+     * that — hence `close()`.
+     */
+    @Test
+    fun closingTheDraftReleasesTheCallbackObjectWithoutAFinalizer() {
+        val draft = store.checkout()
+        val abandoned = installAndAbandonChecker(draft)
+        assertNotNull("held strongly while the draft lives", abandoned.ref.get())
+
+        draft.close() // drops the Rust Box<dyn UniquenessChecker> -> free(handle) -> map.remove
+
+        val collected = awaitCollection(abandoned)
+        record("callback.collected_after_draft_close", collected.toString())
+        assertTrue(
+            "closing the draft must release the bindings' strong reference to the checker",
+            collected,
+        )
     }
 
     // -- helpers ---------------------------------------------------------------------------------

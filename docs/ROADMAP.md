@@ -18,8 +18,8 @@ work around them.
 | 02 | BoltFFI due-diligence probe (Apple) | 1 — Spike | **done** — [plan](steps/step-02-boltffi-probe.md) · [report](steps/step-02-report.md) |
 | 03 | SwiftUI spike app | 1 — Spike | **done** — [plan](steps/step-03-swiftui-app.md) · [report](steps/step-03-report.md); items 2–6 automated (XCUITest, `test:apple:ui`), item 1 confirmed by hand |
 | 04 | Rust web spike app | 1 — Spike | **done** — [plan](steps/step-04-rust-web-app.md) · [report](steps/step-04-report.md); zero-FFI path proven, no kill criteria hit, wasm baseline 304 KiB (85 KiB brotli) |
-| 05 | Android headless probe | 1 — Spike | **ready** — [plan](steps/step-05-android-probe.md) |
-| 06 | Design freeze | 2 — Freeze | pending |
+| 05 | Android headless probe | 1 — Spike | **done** — [plan](steps/step-05-android-probe.md) · [report](steps/step-05-report.md); chattiness kill criterion clears (~80×), `close()` proven mandatory on ART |
+| 06 | Design freeze | 2 — Freeze | **ready** — all Phase-1 evidence in; §9's `close()` question answered by step 05 |
 | 07 | Kotlin/Compose spike app | 2 — Freeze | pending |
 | 08 | Extract bolted-core + conformance suite | 3 — Extraction | pending |
 | 09 | bolted-macros | 3 — Extraction | pending |
@@ -60,11 +60,21 @@ falsify the design cheaply — friction logs from these steps are the input to t
   (read-direct + a version tick is race-free and forks nothing); `submit`'s by-value `!Clone` handle
   cannot be called from a struct field without a scratch checkout; F6's edit-to-equal-theirs reads as
   *confusing* in a running UI; F2 (never-run check) is again the default path.
-- **Step 05 — Android headless probe.** `boltffi pack android` + Kotlin tests, no UI:
-  JNI `try_set` round-trip cost at keystroke frequency (*the* chattiness kill-criterion —
-  perceptible latency means a shell-side write buffer, a design change); draft-handle
-  lifecycle in a GC language (informs the `close()` decision); stream callback threading.
-  May run parallel with 03/04 once 02 is done.
+- **Step 05 — Android headless probe.** `boltffi pack android` + Kotlin instrumented tests on a
+  headless Gradle-managed ART emulator, no UI. **Done, no kill criteria hit.** The chattiness
+  kill-criterion **clears with ~80× headroom**: a per-keystroke round-trip (`try_set` + `snapshot`)
+  costs **12–13 µs** on ART against a 1.0 ms bar, so the core-validates-every-keystroke contract
+  needs no shell-side write buffer. All four BoltFFI features re-confirmed on a second codegen
+  backend (streams collect on the main Looper; typed error payloads survive; a reentrant callback
+  does not deadlock). Two contract findings: **(1)** on Kotlin, GC **never** frees a draft —
+  `close()`/`use {}` is the only free path, the exact inverse of Apple/ARC, and an abandoned draft
+  is an unreachable zombie that `apply_canonical` keeps rebasing (**this answers §9's `close()`
+  question**); **(2)** use-after-close is **silent UB** — no crash, and after allocator churn the
+  dangling handle aliases another live draft. Also: a draft snapshot's `version` is frozen at
+  checkout (stale after rebase), so step-02's version-stamped reconcile works for observing the
+  entity but not a draft. Artifact baseline: **485 KiB stripped** arm64 `.so` (5.36 MB unstripped).
+  *Caveat: an arm64 emulator on an arm64 host is the right VM and the wrong CPU — the latency
+  numbers are lower bounds, to be re-checked on hardware in step 07.*
 
 ## Phase 2 — Design freeze
 
