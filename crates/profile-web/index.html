@@ -7,10 +7,33 @@
     <!-- wasm-opt: size-optimised in release builds; the post-opt .wasm is the step-04 baseline. -->
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <style>
-      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; font-size: 15px; }
       body { margin: 0; }
       main { display: flex; gap: 24px; padding: 20px; align-items: flex-start; }
-      h1 { font-size: 1.2rem; }
+      h1 { font-size: 1.2rem; margin: 0 0 16px; }
+      h2 { font-size: 1rem; margin: 0 0 12px; }
+      .editor { flex: 1 1 auto; max-width: 420px; }
+      .simulator { flex: 0 0 260px; border-left: 1px solid #8883; padding-left: 20px; }
+      .row { margin-bottom: 16px; }
+      .row-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+      label { font-size: 0.8rem; color: #888; }
+      input { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; }
+      .dates { display: flex; gap: 8px; }
+      .counter { margin-left: auto; font-size: 0.75rem; color: #888; font-variant-numeric: tabular-nums; }
+      .spinner { font-size: 0.75rem; color: #888; }
+      .dot { color: orange; font-size: 0.7rem; }
+      .muted { color: #888; font-size: 0.8rem; }
+      .err { color: #c0392b; font-size: 0.8rem; margin: 4px 0 0; }
+      .warn { color: #b9770e; font-size: 0.8rem; }
+      .ok { color: #1e8449; font-size: 0.8rem; }
+      .conflict { background: #f1c40f22; border-radius: 6px; padding: 8px; margin-top: 6px; }
+      .conflict-head { font-size: 0.8rem; font-weight: 600; margin: 0 0 4px; }
+      .conflict p { margin: 0 0 4px; font-size: 0.85rem; }
+      .actions { display: flex; gap: 8px; align-items: center; }
+      button { font: inherit; padding: 4px 10px; }
+      .simulator button { display: block; width: 100%; margin-bottom: 6px; text-align: left; }
+      .canonical p { margin: 0 0 2px; font-size: 0.85rem; }
+      ul { margin: 4px 0 0; padding-left: 18px; }
     </style>
   </head>
   <body></body>
