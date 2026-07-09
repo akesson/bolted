@@ -18,7 +18,7 @@ work around them.
 | 02 | BoltFFI due-diligence probe (Apple) | 1 — Spike | **done** — [plan](steps/step-02-boltffi-probe.md) · [report](steps/step-02-report.md) |
 | 03 | SwiftUI spike app | 1 — Spike | **done** — [plan](steps/step-03-swiftui-app.md) · [report](steps/step-03-report.md); items 2–6 automated (XCUITest, `test:apple:ui`), item 1 confirmed by hand |
 | 04 | Rust web spike app | 1 — Spike | **done** — [plan](steps/step-04-rust-web-app.md) · [report](steps/step-04-report.md); zero-FFI path proven, no kill criteria hit, wasm baseline 304 KiB (85 KiB brotli) |
-| 05 | Android headless probe | 1 — Spike | pending |
+| 05 | Android headless probe | 1 — Spike | **ready** — [plan](steps/step-05-android-probe.md) |
 | 06 | Design freeze | 2 — Freeze | pending |
 | 07 | Kotlin/Compose spike app | 2 — Freeze | pending |
 | 08 | Extract bolted-core + conformance suite | 3 — Extraction | pending |
