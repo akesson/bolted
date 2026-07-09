@@ -5,6 +5,12 @@ rust = "1.95.0"
 # bundler is pinned by GitHub repo instead.
 "github:trunk-rs/trunk" = "0.21.14"
 "github:rustwasm/wasm-pack" = "0.15.0"
+# Step 05 (Android probe): AGP 8.7.3 needs Gradle 8.9–8.11 and a JDK 17–21 — it rejects the Homebrew
+# default `openjdk` (26). Pin both instead of trusting whatever the host has on PATH, which is why
+# there is no committed gradle wrapper. The Android SDK/NDK/system-image cannot be pinned by mise;
+# `pack:android` / `test:android` doctor-check those.
+java = "temurin-21.0.11+10.0.LTS"
+gradle = "8.11.1"
 
 [tasks.test]
 run = "cargo test --workspace"
@@ -154,6 +160,87 @@ fi
 # --test web: only the DOM tier runs in the browser. The controller tests are host tests and
 # already ran under `check`; building them for wasm would just be slow.
 wasm-pack test --headless --chrome --test web
+"""
+
+# --- Step 05: Android headless probe (JNI + ART). Separate verbs, deliberately NOT part of `check`
+# (which stays Rust-only: no JDK, no Android SDK, no emulator). See docs/steps/step-05-android-probe.md. ---
+
+[tasks."pack:android"]
+description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release)."
+depends = ["setup:boltffi"]
+dir = "crates/spike-profile-ffi"
+run = """
+set -eu
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+if ! command -v boltffi >/dev/null 2>&1; then
+  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
+  exit 1
+fi
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+if [ ! -d "$ANDROID_HOME" ]; then
+  echo "error: Android SDK not found at $ANDROID_HOME — set ANDROID_HOME (VISION risk 5)." >&2
+  exit 1
+fi
+# boltffi finds the NDK via ANDROID_NDK_HOME; pick the newest installed one.
+ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+if [ -z "$ndk" ]; then
+  echo "error: no Android NDK under $ANDROID_HOME/ndk — install one:" >&2
+  echo "  sdkmanager 'ndk;27.0.12077973'" >&2
+  exit 1
+fi
+export ANDROID_NDK_HOME="$ndk"
+# A fresh toolchain has only the host target; self-heal like pack:apple and build:web do.
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add aarch64-linux-android >/dev/null 2>&1 || true
+fi
+
+# --- BoltFFI 0.27.3 bug: `pack android` is broken out of the box. -----------------------------
+# `pack apple` builds the crate with the binding-expansion environment (see the CLI's
+# build/expansion.rs `env()`), which switches the `#[export]` macro to emit crate-qualified symbol
+# names like `boltffi_method_class_spike_profile_ffi_profile_store_ffi_checkout`.
+# `pack android` (pack/android/mod.rs) passes `env: Vec::new()` instead, so the macro falls back to
+# legacy short names (`boltffi_profile_store_ffi_checkout`) — while the Kotlin/JNI glue and the C
+# header it generates in the SAME run still reference the long names. The .so therefore links with
+# undefined symbols and ART fails at `System.loadLibrary` with:
+#   dlopen failed: cannot locate symbol "boltffi_register_callback_spike_profile_ffi_uniqueness_checker"
+# Workaround: replicate what the Apple path exports. Drop this block when boltffi fixes pack android.
+# See docs/steps/step-05-report.md (friction log).
+crate_dir="$PWD"
+export BOLTFFI_BINDING_EXPANSION=1
+export BOLTFFI_BINDING_EXPANSION_ROOT="$crate_dir"
+export BOLTFFI_BINDING_EXPANSION_SOURCE="$crate_dir/src/lib.rs"
+export BOLTFFI_BINDING_EXPANSION_SURFACE=native
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--cfg boltffi_binding_expansion"
+# ---------------------------------------------------------------------------------------------
+
+boltffi pack android --release
+"""
+
+[tasks."test:android"]
+description = "Run the instrumented probe suite on a headless Gradle-managed emulator (ART)."
+depends = ["pack:android"]
+dir = "android/profile-probe"
+run = """
+set -eu
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+if [ ! -d "$ANDROID_HOME" ]; then
+  echo "error: Android SDK not found at $ANDROID_HOME — set ANDROID_HOME (VISION risk 5)." >&2
+  exit 1
+fi
+# The Gradle Managed Device provisions this image itself, but only if the SDK can fetch it. Fail
+# with the exact install command rather than an opaque Gradle stack trace.
+if [ ! -d "$ANDROID_HOME/system-images/android-34/aosp_atd" ]; then
+  echo "error: missing the aosp_atd android-34 system image (the headless test device)." >&2
+  echo "  sdkmanager 'system-images;android-34;aosp_atd;arm64-v8a'" >&2
+  exit 1
+fi
+# `dev34` is the managed device declared in build.gradle.kts. GMD boots it headlessly, runs the
+# instrumented tests on ART, and tears it down — no GUI session, unlike step 03's XCUITest tier.
+gradle dev34DebugAndroidTest "$@"
 """
 
 [tasks."run:apple"]
