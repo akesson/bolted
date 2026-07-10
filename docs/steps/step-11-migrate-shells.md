@@ -1,6 +1,6 @@
 # Step 11 — migrate the shells onto the generated FFI
 
-**Phase 3 — Framework extraction. Status: ready.**
+**Phase 3 — Framework extraction. Status: done — see [the report](step-11-report.md).**
 
 Step 10 built the generator and left the shells where they were. `mise run pack:apple` and
 `pack:android` still build the **hand-written** `spike-profile-ffi`; the four Swift and Kotlin shells
@@ -183,14 +183,17 @@ unless KC1 promotes one.
 
 ## Exit checklist
 
-- [ ] `mise run check` green; `spike-profile-ffi` still in the workspace and still tested.
-- [ ] `mise run pack:android:gen` green; the generated `.so` loads on ART.
-- [ ] `mise run test:apple` green on **generated** bindings (probe + app VM).
-- [ ] `mise run test:android`, `test:android:app`, `test:android:hazard` green on **generated**
-      bindings, each run alone, each count read from JUnit XML.
-- [ ] `mise run test:web` unaffected (it never crossed FFI; if it broke, something is very wrong).
-- [ ] A D23 positive control in each probe, **each verified to fail** with the refusal swallowed.
-- [ ] `bench:android:device` — the "after" run on generated bindings, compared in the report against
-      `artifacts/step-11-bench-before.md`; or recorded as still owed with the reason.
-- [ ] `test:apple:ui` — re-run green on generated bindings, or recorded as still owed with the reason.
-- [ ] `docs/steps/step-11-report.md` written; ROADMAP updated; §9 untouched by this step.
+- [x] `mise run check` green; `spike-profile-ffi` still in the workspace and still tested. **319, 0 failures.**
+- [x] The generated `.so` loads on ART: `test:android:gen` 6/6 (M0 ran it as `pack:android:gen`,
+      folded into the repointed `pack:android` at M5 — deliverable 6's "folded away" branch).
+- [x] `mise run test:apple` green on **generated** bindings. **Probe 40, app VM 14.**
+- [x] `test:android` 45 · `test:android:app` 35 · `test:android:hazard` 3 — each run alone with
+      `--rerun-tasks`, each count read from JUnit XML. 0 failures.
+- [x] `mise run test:web` unaffected. **8/8.**
+- [x] A D23 positive control in each probe, **each verified to fail** with the refusal swallowed
+      (planted `try?` / `runCatching {}`, watched red, removed).
+- [x] `bench:android:device` on generated bindings: **0.0432 ms p50 / 0.0802 ms p95**, n=2000,
+      Pixel 8a — compared in the report against `artifacts/step-11-bench-before.md`. KC5 not hit.
+- [x] `test:apple:ui` on generated bindings: 8/9 cold first run (test3b banner-wait flake), 9/9 in
+      isolation and on the full re-run.
+- [x] `docs/steps/step-11-report.md` written; ROADMAP updated; §9 untouched by this step.
