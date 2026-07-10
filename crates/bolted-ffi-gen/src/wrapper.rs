@@ -151,6 +151,9 @@ pub fn plumbing(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 {
 
         fn to_stash_ffi(s: &#core_stash) -> #stash_ffi {
             #stash_ffi {
+                // D27: stamp the version this build writes. The core stash carries no version --
+                // it is an FFI-boundary concern, so it lives only on the DTO (KC2: core unmoved).
+                schema_version: STASH_SCHEMA_VERSION,
                 #(#stash_fields,)*
                 base_version: s.base_version,
                 orphaned: s.orphaned,
@@ -158,6 +161,8 @@ pub fn plumbing(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 {
         }
 
         fn to_core_stash(s: &#stash_ffi) -> #core_stash {
+            // `schema_version` is deliberately dropped: the core is version-agnostic, and by the time
+            // a DTO reaches here `restore` has already gated on it (D27).
             #core_stash {
                 #(#from_stash_fields,)*
                 base_version: s.base_version,
@@ -224,6 +229,7 @@ pub fn store_class(feature: &Feature) -> TokenStream2 {
     let store_ffi = suffixed(entity, "StoreFfi");
     let draft_ffi = suffixed(entity, "DraftFfi");
     let stash_ffi = suffixed(entity, "StashFfi");
+    let accepted = suffixed(entity, "StashAcceptedFfi");
     let values = suffixed(entity, "Values");
     let field_id = suffixed(entity, "FieldId");
 
@@ -279,12 +285,35 @@ pub fn store_class(feature: &Feature) -> TokenStream2 {
                 #draft_ffi { id, core: Arc::clone(&self.core), producer, #checker_slots }
             }
 
+            /// D27, the parse gate. A stash is the first untrusted input in the system (bytes the OS
+            /// held while we were dead, maybe written by an *older* build). `accept_stash` refuses a
+            /// stash whose `schema_version` this build does not recognise — **wholesale** and typed,
+            /// before any field is trusted — and otherwise hands back a #accepted the type system will
+            /// let `restore` consume. The shell can tell a refusal from "no stash" (a typed error, not
+            /// a silent `null`) and start a fresh session. Per-field degradation (C23) applies only
+            /// *inside* an envelope that passed this gate.
+            pub fn accept_stash(
+                &self,
+                stash: #stash_ffi,
+            ) -> ::core::result::Result<#accepted, StashRefusedFfi> {
+                if stash.schema_version != STASH_SCHEMA_VERSION {
+                    return Err(StashRefusedFfi::SchemaVersion {
+                        stashed: stash.schema_version,
+                        expected: STASH_SCHEMA_VERSION,
+                    });
+                }
+                Ok(#accepted { stash })
+            }
+
             /// Restore a draft the shell stashed before its process was killed (C21). The rebase
             /// inside `Store::restore` is the point: a field whose canonical moved while the process
             /// was dead comes back **conflicted**, not silently dirty over a base it never saw.
-            pub fn restore(&self, stash: #stash_ffi) -> #draft_ffi {
+            ///
+            /// Takes only a #accepted, so a stash that never passed `accept_stash`'s version gate
+            /// cannot reach here — parse-don't-validate carried in the type (D27).
+            pub fn restore(&self, accepted: #accepted) -> #draft_ffi {
                 let mut g = lock(&self.core);
-                let id = g.store.restore(&to_core_stash(&stash));
+                let id = g.store.restore(&to_core_stash(&accepted.stash));
                 let producer = register_producer(&mut g, id);
                 #draft_ffi { id, core: Arc::clone(&self.core), producer, #checker_slots }
             }

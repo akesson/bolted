@@ -6,7 +6,7 @@
 
 use crate::check;
 use crate::value::{RawOf, ValueFixture, ValueOf, parse};
-use bolted_core::{Field, SyncState, Validity, Value};
+use bolted_core::{Field, FieldStash, SyncState, Validity, Value};
 use proptest::prelude::*;
 
 /// C02 — a non-dirty field must adopt `theirs` on rebase and stay `InSync`.
@@ -290,4 +290,64 @@ pub fn c20_a_field_stashes_to_raw_and_restores<F: ValueFixture>() {
             Ok(())
         },
     );
+}
+
+/// C23 — a stashed ancestor that no longer parses degrades to *dirty-from-unset*, and therefore
+/// surfaces as a **conflict** on the next rebase against live canonical, never a silent overwrite.
+///
+/// This is the failure mode D27 accepts *inside* a parsed envelope. C01 says a value's raw form
+/// roundtrips, so a `base` raw can only stop parsing if the stash was tampered with or **a
+/// constraint tightened between app versions**. `from_stash` will not fabricate an ancestor: it
+/// degrades to create-flow (`base: None`) and keeps the user's own last input. The field then reads
+/// as unset-with-a-value — dirty, no ancestor. With no common ancestor there is no way to *prove*
+/// convergence, so any live canonical that differs from the rescued value is `Conflicted` (C03's
+/// promise, upheld), and the UI renders that with C21's machinery — no new mechanism. A canonical
+/// that happens to equal the rescued value still lands clean (C04): a lost ancestor is not a
+/// conflict manufactured from nothing.
+pub fn c23_a_degraded_ancestor_restores_dirty_and_conflicts_on_rebase<F: ValueFixture>() {
+    check((F::valid_raw(), F::valid_raw()), |(mine, theirs)| {
+        let mine = parse::<F>(mine)?;
+        let theirs = parse::<F>(theirs)?;
+        prop_assume!(mine != theirs);
+
+        // The ancestor no longer parses (constraints tightened); the user's own last input still
+        // does. Hand-built because no `Field` API can *produce* an unparseable base — that is the
+        // point: the bytes are untrusted, and older-version bytes are the realistic source.
+        let degraded: FieldStash<RawOf<F>> = FieldStash {
+            raw: Some(mine.clone().into_raw()),
+            base: Some(F::invalid_raw()),
+        };
+
+        let mut restored: Field<ValueOf<F>> = Field::from_stash(&degraded);
+        prop_assert!(
+            restored.value() == Some(&mine),
+            "the user's rescued value survives"
+        );
+        prop_assert!(
+            restored.base().is_none(),
+            "no ancestor is fabricated (create-flow)"
+        );
+        prop_assert!(
+            restored.is_dirty(),
+            "dirty-from-unset: a value with no ancestor"
+        );
+
+        // Next rebase against a DIFFERENT live canonical: conflicted, value preserved.
+        restored.rebase(theirs.clone());
+        prop_assert!(
+            restored.is_conflicted(),
+            "a lost ancestor conflicts, it does not overwrite"
+        );
+        prop_assert!(
+            restored.value() == Some(&mine),
+            "the conflict preserves the user's value"
+        );
+
+        // Convergence guard: canonical equal to the rescued value lands clean, not conflicted.
+        let mut converge: Field<ValueOf<F>> = Field::from_stash(&degraded);
+        converge.rebase(mine.clone());
+        prop_assert!(!converge.is_conflicted());
+        prop_assert!(matches!(converge.sync(), SyncState::InSync));
+        Ok(())
+    });
 }

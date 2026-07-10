@@ -141,6 +141,38 @@ impl From<UnexpectedFfiCallbackError> for DraftClosedFfi {
     }
 }
 
+/// D27 — the wholesale, typed refusal a versioned stash envelope raises when it cannot be trusted.
+///
+/// A persisted stash is the first **untrusted input** in the system (bytes the OS held while we were
+/// dead, possibly written by an *older version of this app*). D27 makes the stash a *versioned
+/// envelope*: the schema version is stamped into the generated DTO at write time, and `restore`
+/// gates on it — parse-don't-validate. A version this build does not recognise is refused **as a
+/// whole**, before any field is trusted; the shell then starts a fresh edit session and, because
+/// this is a typed error rather than a silent `null`, can tell "the stash was refused" from "there
+/// was no stash". Per-field degradation (C23) is the *other* mechanism, and it only applies *inside*
+/// an envelope that parsed.
+#[error]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StashRefusedFfi {
+    /// The stash was written under a schema version this build does not accept. `stashed` is the
+    /// version carried in the bytes; `expected` is what this binary writes and reads. A tightened
+    /// constraint between app versions is the realistic cause (see the step-07 report, and D27's
+    /// build-time `bolted-check` constraint-semver event in Phase 4).
+    SchemaVersion { stashed: u32, expected: u32 },
+}
+
+impl std::fmt::Display for StashRefusedFfi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StashRefusedFfi::SchemaVersion { stashed, expected } => write!(
+                f,
+                "stash refused: written under schema version {stashed}, this build expects {expected}"
+            ),
+        }
+    }
+}
+impl std::error::Error for StashRefusedFfi {}
+
 // =================================================================================================
 // The async check's observable sub-state (D18's `Checked::check_state`, projected)
 // =================================================================================================

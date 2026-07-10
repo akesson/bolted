@@ -164,18 +164,44 @@ pub struct ProfileValues {
     pub email: String,
     pub availability: AvailabilityRaw,
 }
+/// The schema version this build stamps into every stash it writes, and gates on when it
+/// restores one (D27). It travels *inside* the DTO, so the version a stash was written under
+/// crosses process death with it and `restore` can refuse a stash from a schema this build
+/// no longer accepts — a typed, wholesale refusal, not a silent `null`.
+///
+/// It is a fixed constant today. Deriving it from the declaration — so a tightened constraint
+/// bumps it and old stashes refuse automatically — is D27's build-time `bolted-check`
+/// constraint-semver event, and it is Phase 4's. The refusal *mechanism* does not wait for
+/// that: it gates on whatever this constant holds.
+pub const STASH_SCHEMA_VERSION: u32 = 1;
 /// What a shell persists so an edit session survives process death (C20). Carries no `sync`
 /// and no async verdict, on purpose: C13 + C16 then make a restored draft safe with no new
-/// invariant.
+/// invariant. Carries its `schema_version` (D27): the envelope's version gate.
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileStashFfi {
+    /// The `STASH_SCHEMA_VERSION` in force when this stash was written. `accept_stash` refuses
+    /// a value this build does not recognise (D27) before any field is trusted.
+    pub schema_version: u32,
     pub username: TextFieldStashFfi,
     pub name: TextFieldStashFfi,
     pub email: TextFieldStashFfi,
     pub availability: AvailabilityStash,
     pub base_version: u64,
     pub orphaned: bool,
+}
+/// A stash whose envelope this build has **accepted** (D27, parse-don't-validate). The only
+/// way to obtain one is `accept_stash`, which gates the schema version; `restore` takes only
+/// this, so an un-gated stash cannot be restored — the type system carries the proof.
+///
+/// (It is a distinct wrapper, not a fallible `restore`, because BoltFFI 0.27.3 cannot return
+/// a class handle from a throwing method — see the step-12 upstream filing. Gating into a
+/// `#[data]` token and restoring from it is the shape that fits the toolchain and is stronger
+/// than a bypassable guard.)
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileStashAcceptedFfi {
+    pub stash: ProfileStashFfi,
 }
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,6 +312,7 @@ fn tombstone_snapshot() -> ProfileSnapshot {
 }
 fn to_stash_ffi(s: &ProfileStash) -> ProfileStashFfi {
     ProfileStashFfi {
+        schema_version: STASH_SCHEMA_VERSION,
         username: bolted_ffi::text_stash(&s.username),
         name: bolted_ffi::text_stash(&s.name),
         email: bolted_ffi::text_stash(&s.email),
@@ -439,12 +466,34 @@ impl ProfileStoreFfi {
             username_checker: Mutex::new(None),
         }
     }
+    /// D27, the parse gate. A stash is the first untrusted input in the system (bytes the OS
+    /// held while we were dead, maybe written by an *older* build). `accept_stash` refuses a
+    /// stash whose `schema_version` this build does not recognise — **wholesale** and typed,
+    /// before any field is trusted — and otherwise hands back a #accepted the type system will
+    /// let `restore` consume. The shell can tell a refusal from "no stash" (a typed error, not
+    /// a silent `null`) and start a fresh session. Per-field degradation (C23) applies only
+    /// *inside* an envelope that passed this gate.
+    pub fn accept_stash(
+        &self,
+        stash: ProfileStashFfi,
+    ) -> ::core::result::Result<ProfileStashAcceptedFfi, StashRefusedFfi> {
+        if stash.schema_version != STASH_SCHEMA_VERSION {
+            return Err(StashRefusedFfi::SchemaVersion {
+                stashed: stash.schema_version,
+                expected: STASH_SCHEMA_VERSION,
+            });
+        }
+        Ok(ProfileStashAcceptedFfi { stash })
+    }
     /// Restore a draft the shell stashed before its process was killed (C21). The rebase
     /// inside `Store::restore` is the point: a field whose canonical moved while the process
     /// was dead comes back **conflicted**, not silently dirty over a base it never saw.
-    pub fn restore(&self, stash: ProfileStashFfi) -> ProfileDraftFfi {
+    ///
+    /// Takes only a #accepted, so a stash that never passed `accept_stash`'s version gate
+    /// cannot reach here — parse-don't-validate carried in the type (D27).
+    pub fn restore(&self, accepted: ProfileStashAcceptedFfi) -> ProfileDraftFfi {
         let mut g = lock(&self.core);
-        let id = g.store.restore(&to_core_stash(&stash));
+        let id = g.store.restore(&to_core_stash(&accepted.stash));
         let producer = register_producer(&mut g, id);
         ProfileDraftFfi {
             id,

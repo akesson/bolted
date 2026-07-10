@@ -20,6 +20,8 @@ import com.example.gen_profile_ffi.ErrorData
 import com.example.gen_profile_ffi.PlainDate
 import com.example.gen_profile_ffi.AvailabilityRaw
 import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileStashAcceptedFfi
+import com.example.gen_profile_ffi.StashRefusedFfi
 import com.example.gen_profile_ffi.ProfileFieldId
 import com.example.gen_profile_ffi.ProfileSnapshot
 import com.example.gen_profile_ffi.ProfileStoreFfi
@@ -93,6 +95,15 @@ class ProfileViewModel(
     /** `true` if this VM restored an edit session rather than checking out a fresh one. */
     val restoredFromStash: Boolean
 
+    /**
+     * D27: `true` if a persisted stash was present but its envelope was **refused** by `acceptStash`
+     * (a schema version this build does not accept), so the VM started fresh. Distinct from "there
+     * was no stash" — a refused stash is a data-loss event a shell may want to notice, not a normal
+     * cold start.
+     */
+    var stashWasRefused = false
+        private set
+
     data class Buffers(
         val username: String = "",
         val name: String = "",
@@ -128,8 +139,19 @@ class ProfileViewModel(
         store.applyCanonical(savedState.serverState() ?: SEED)
 
         val stash = savedState.get<Bundle>(STASH_KEY)?.getString(STASH_JSON)?.let(StashCodec::decode)
-        restoredFromStash = stash != null
-        draft = if (stash != null) store.restore(stash) else store.checkout()
+        // D27: the decoded stash is untrusted (bytes an older build may have written). `acceptStash`
+        // gates its schema version; a version this build does not accept is refused wholesale and
+        // typed, and we start a fresh session rather than trusting a single field of it.
+        val accepted: ProfileStashAcceptedFfi? = stash?.let {
+            try {
+                store.acceptStash(it)
+            } catch (_: StashRefusedFfi) {
+                stashWasRefused = true
+                null
+            }
+        }
+        restoredFromStash = accepted != null
+        draft = if (accepted != null) store.restore(accepted) else store.checkout()
         draft.setUsernameChecker(makeChecker())
 
         // The OS asks for this lazily, exactly when it is about to kill us — so the stash is built

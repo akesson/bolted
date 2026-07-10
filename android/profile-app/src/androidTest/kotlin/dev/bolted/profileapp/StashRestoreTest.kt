@@ -169,11 +169,16 @@ class StashRestoreTest {
         second.clear()
     }
 
-    /** A corrupt or foreign stash is not a crash: the VM checks out a fresh draft. */
+    /**
+     * A corrupt or structurally-incomplete stash is not a crash: `decode` returns null (a *shape*
+     * failure) and the VM checks out fresh. D27 moved the *version* gate off the codec and onto
+     * `acceptStash` (see [d27_aStashFromAnUnknownSchemaIsRefusedAndTheVmStartsFresh]); what remains
+     * here is decode's shape gate — a stash missing fields cannot be reconstructed at all.
+     */
     @Test
     fun aCorruptStashDegradesToAFreshCheckout() {
         assertNull(StashCodec.decode("{not json"))
-        assertNull(StashCodec.decode("""{"v":99,"username":{}}"""))
+        assertNull(StashCodec.decode("""{"schema_version":1,"username":{}}""")) // present version, missing fields
         assertNull(StashCodec.decodeValues("[]"))
 
         val handle = SavedStateHandle()
@@ -182,5 +187,38 @@ class StashRestoreTest {
         assertFalse(vm.restoredFromStash)
         assertEquals("alice", onMain { vm.buffers.value }.username)
         host.clear()
+    }
+
+    /**
+     * D27 — a persisted stash whose schema version this build does not accept is refused **wholesale**
+     * and the VM starts a fresh session *observably*: `stashWasRefused` is true, distinct from a cold
+     * start where it is false. A constraint tightened between app versions is the realistic cause: the
+     * bytes decode fine (shape is unchanged), but `acceptStash` declines the version and no field of
+     * the old edit is trusted.
+     */
+    @Test
+    fun d27_aStashFromAnUnknownSchemaIsRefusedAndTheVmStartsFresh() {
+        val handle = SavedStateHandle()
+        val first = VmHost()
+        val vm1 = first.create(handle)
+        onMain { vm1.editName("My Name") }
+
+        val revived = handle.persistAndRevive()
+        first.clear()
+
+        // Simulate an upgraded app: rewrite the persisted envelope's version to one this build does
+        // not recognise. The bytes stay well-formed — only the schema version is unacceptable.
+        val bundle = revived.get<android.os.Bundle>(ProfileViewModel.STASH_KEY)!!
+        val stale = StashCodec.decode(bundle.getString("stash")!!)!!
+            .let { it.copy(schemaVersion = it.schemaVersion + 1u) }
+        revived[ProfileViewModel.STASH_KEY] =
+            android.os.Bundle().apply { putString("stash", StashCodec.encode(stale)) }
+
+        val second = VmHost()
+        val vm2 = second.create(revived)
+        assertFalse("a refused stash must not restore an edit session", vm2.restoredFromStash)
+        assertTrue("and it is observably a refusal, not a cold start", vm2.stashWasRefused)
+        assertEquals("the VM checked out fresh", "alice", onMain { vm2.buffers.value }.username)
+        second.clear()
     }
 }

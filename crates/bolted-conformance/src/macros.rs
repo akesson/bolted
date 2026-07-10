@@ -58,6 +58,10 @@ macro_rules! field_suite {
             fn c20_a_field_stashes_to_raw_and_restores() {
                 $crate::c20_a_field_stashes_to_raw_and_restores::<$value>()
             }
+            #[test]
+            fn c23_a_degraded_ancestor_restores_dirty_and_conflicts_on_rebase() {
+                $crate::c23_a_degraded_ancestor_restores_dirty_and_conflicts_on_rebase::<$value>()
+            }
         }
     };
 }

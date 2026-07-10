@@ -250,7 +250,7 @@ final class FreezeContractTests: XCTestCase {
         moved.email = "server@corp.example"
         try fresh.applyCanonical(values: moved)
 
-        let restored = fresh.restore(stash: stash)
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
         let snap = restored.snapshot()
 
         XCTAssertEqual(snap.conflicts, [.email])
@@ -280,7 +280,7 @@ final class FreezeContractTests: XCTestCase {
         let stash = draft.stash()
 
         let empty = ProfileStoreFfi() // no canonical: the server 404s
-        let restored = empty.restore(stash: stash)
+        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash))
 
         XCTAssertEqual(restored.snapshot().status, .orphaned)
         XCTAssertEqual(empty.liveDraftCount(), 1) // it exists...
@@ -317,5 +317,33 @@ final class FreezeContractTests: XCTestCase {
         XCTAssertEqual(empty.liveDraftCount(), 2)
         XCTAssertEqual(empty.rebasingDraftCount(), 1)
         _ = edit
+    }
+
+    // ---- D27: the versioned stash envelope ------------------------------------------------------
+
+    /// `acceptStash` gates the schema version carried in the DTO: a current-version stash is accepted
+    /// into a token `restore` consumes; a stash from a schema this build does not accept throws
+    /// `StashRefusedFfi`, typed, before any field is trusted. Apple never stashes in practice
+    /// (nothing kills a process holding a draft the way Android does), but the gate is one generated
+    /// surface, so the contract is exercised on both bindings.
+    func testD27AcceptStashRefusesAStashFromAnUnknownSchema() throws {
+        let store = try seededStore()
+        let draft = store.checkout()
+        try draft.trySetName(raw: "My Name")
+        var stash = draft.stash()
+
+        // Current version: accepted, and the token restores the edit session.
+        let fresh = try seededStore()
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        XCTAssertEqual(restored.snapshot().name.validity, .valid(value: "My Name"))
+
+        // A schema version this build does not accept: refused, typed, both versions named.
+        stash.schemaVersion &+= 1
+        XCTAssertThrowsError(try fresh.acceptStash(stash: stash)) { error in
+            guard case .schemaVersion(let stashed, let expected)? = error as? StashRefusedFfi else {
+                return XCTFail("expected StashRefusedFfi.schemaVersion, got \(error)")
+            }
+            XCTAssertEqual(stashed, expected &+ 1, "the refusal names the stashed and expected versions")
+        }
     }
 }

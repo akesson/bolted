@@ -26,7 +26,11 @@ object StashCodec {
 
     fun encode(stash: ProfileStashFfi): String =
         JSONObject().apply {
-            put("v", FORMAT_VERSION)
+            // D27: the schema version rides the DTO now (`schemaVersion`), stamped by the core at
+            // stash() time. The codec no longer owns a `FORMAT_VERSION` of its own — it just carries
+            // the field through, and `store.acceptStash` is the gate. This is the version authority
+            // moving into the generated DTO, before this hand-written codec is deleted (step 12 M4).
+            put("schema_version", stash.schemaVersion.toLong())
             put("username", text(stash.username))
             put("name", text(stash.name))
             put("email", text(stash.email))
@@ -38,9 +42,11 @@ object StashCodec {
     fun decode(json: String): ProfileStashFfi? =
         runCatching {
             val o = JSONObject(json)
-            // A stash written by a different format version is not ours to interpret.
-            if (o.optInt("v", -1) != FORMAT_VERSION) return null
+            // Structural (shape) failures still collapse to null here — a missing key throws and
+            // `runCatching` swallows it, so the shell checks out fresh. The *version* gate is no
+            // longer here: `schemaVersion` is carried through untouched and `acceptStash` decides.
             ProfileStashFfi(
+                schemaVersion = o.getLong("schema_version").toUInt(),
                 username = text(o.getJSONObject("username")),
                 name = text(o.getJSONObject("name")),
                 email = text(o.getJSONObject("email")),
@@ -124,6 +130,4 @@ object StashCodec {
     /** `org.json` stores an absent key and a JSON `null` differently; a stash needs `null` back. */
     private fun JSONObject.optNullableString(key: String): String? =
         if (isNull(key)) null else optString(key)
-
-    private const val FORMAT_VERSION = 1
 }

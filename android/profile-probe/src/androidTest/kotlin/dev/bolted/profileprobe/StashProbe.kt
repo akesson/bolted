@@ -6,6 +6,7 @@ import com.example.gen_profile_ffi.TextFieldSync
 import com.example.gen_profile_ffi.TextValidity
 import com.example.gen_profile_ffi.ProfileFieldId
 import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.StashRefusedFfi
 import com.example.gen_profile_ffi.SubmitErrorFfi
 import com.example.gen_profile_ffi.CheckStateFfi
 import org.junit.Assert.assertEquals
@@ -48,7 +49,7 @@ class StashProbe {
         // A new process: a new store, seeded from a server that moved `email` while we were dead.
         ProfileStoreFfi.new().use { fresh ->
             fresh.applyCanonical(SEED.copy(email = "server@corp.example"))
-            fresh.restore(stash).use { restored ->
+            fresh.restore(fresh.acceptStash(stash)).use { restored ->
                 val snap = restored.snapshot()
 
                 assertEquals(listOf(ProfileFieldId.EMAIL), snap.conflicts)
@@ -92,7 +93,7 @@ class StashProbe {
                 }
 
             assertEquals("not-an-email", stash.email.raw)
-            store.restore(stash).use { restored ->
+            store.restore(store.acceptStash(stash)).use { restored ->
                 val validity = restored.snapshot().email.validity
                 assertTrue("the user's rejected text is still theirs", validity is TextValidity.Invalid)
                 assertEquals("not-an-email", (validity as TextValidity.Invalid).raw)
@@ -112,7 +113,7 @@ class StashProbe {
             }
 
         ProfileStoreFfi.new().use { empty -> // no canonical: the server 404s
-            empty.restore(stash).use { restored ->
+            empty.restore(empty.acceptStash(stash)).use { restored ->
                 assertEquals(DraftStatusFfi.ORPHANED, restored.snapshot().status)
                 try {
                     restored.submit()
@@ -120,6 +121,42 @@ class StashProbe {
                 } catch (_: SubmitErrorFfi.Orphaned) {
                     record("c21.orphaned_on_restore", "true")
                 }
+            }
+        }
+    }
+
+    /**
+     * D27 — the versioned stash envelope, at the JNI boundary. `acceptStash` gates the schema version
+     * carried in the DTO: a current-version stash is accepted into a token `restore` consumes; a
+     * stash from a schema this build does not accept throws `StashRefusedFfi`, typed, before any field
+     * is trusted. The typed throw crossing JNI is the point — a `null` would be indistinguishable
+     * from "no stash".
+     */
+    @Test
+    fun d27_acceptStashRefusesAStashFromAnUnknownSchema() {
+        val stash =
+            seededStore().use { store ->
+                store.checkout().use { draft ->
+                    draft.trySetName("My Name")
+                    draft.stash()
+                }
+            }
+
+        seededStore().use { fresh ->
+            // Current version: accepted, and restores the edit session.
+            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+                val v = restored.snapshot().name.validity
+                assertTrue("the rescued edit survives", v is TextValidity.Valid && v.value == "My Name")
+            }
+
+            // A schema version this build does not accept: refused, typed, both versions named.
+            val stale = stash.copy(schemaVersion = stash.schemaVersion + 1u)
+            try {
+                fresh.acceptStash(stale)
+                fail("expected StashRefusedFfi.SchemaVersion — a refused stash is not `null`")
+            } catch (e: StashRefusedFfi.SchemaVersion) {
+                assertEquals(stash.schemaVersion + 1u, e.stashed)
+                record("d27.stash_refused", "typed")
             }
         }
     }

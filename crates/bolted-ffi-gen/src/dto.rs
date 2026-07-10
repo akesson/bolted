@@ -172,20 +172,49 @@ pub fn values(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 {
 
 pub fn stash(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 {
     let stash = suffixed(&feature.entity.name, "StashFfi");
+    let accepted = suffixed(&feature.entity.name, "StashAcceptedFfi");
     let decls = fields.iter().map(|p| {
         let (ident, ty) = (p.ident(), p.stash_ty());
         quote!(pub #ident: #ty)
     });
     quote! {
+        /// The schema version this build stamps into every stash it writes, and gates on when it
+        /// restores one (D27). It travels *inside* the DTO, so the version a stash was written under
+        /// crosses process death with it and `restore` can refuse a stash from a schema this build
+        /// no longer accepts — a typed, wholesale refusal, not a silent `null`.
+        ///
+        /// It is a fixed constant today. Deriving it from the declaration — so a tightened constraint
+        /// bumps it and old stashes refuse automatically — is D27's build-time `bolted-check`
+        /// constraint-semver event, and it is Phase 4's. The refusal *mechanism* does not wait for
+        /// that: it gates on whatever this constant holds.
+        pub const STASH_SCHEMA_VERSION: u32 = 1;
+
         /// What a shell persists so an edit session survives process death (C20). Carries no `sync`
         /// and no async verdict, on purpose: C13 + C16 then make a restored draft safe with no new
-        /// invariant.
+        /// invariant. Carries its `schema_version` (D27): the envelope's version gate.
         #[data]
         #[derive(Clone, Debug, PartialEq, Eq)]
         pub struct #stash {
+            /// The `STASH_SCHEMA_VERSION` in force when this stash was written. `accept_stash` refuses
+            /// a value this build does not recognise (D27) before any field is trusted.
+            pub schema_version: u32,
             #(#decls,)*
             pub base_version: u64,
             pub orphaned: bool,
+        }
+
+        /// A stash whose envelope this build has **accepted** (D27, parse-don't-validate). The only
+        /// way to obtain one is `accept_stash`, which gates the schema version; `restore` takes only
+        /// this, so an un-gated stash cannot be restored — the type system carries the proof.
+        ///
+        /// (It is a distinct wrapper, not a fallible `restore`, because BoltFFI 0.27.3 cannot return
+        /// a class handle from a throwing method — see the step-12 upstream filing. Gating into a
+        /// `#[data]` token and restoring from it is the shape that fits the toolchain and is stronger
+        /// than a bypassable guard.)
+        #[data]
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct #accepted {
+            pub stash: #stash,
         }
     }
 }

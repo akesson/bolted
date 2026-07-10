@@ -7,7 +7,9 @@
 //! The Swift and Kotlin suites are still the real evidence (they exercise the generated *bindings*).
 //! These tests exist because D23 is new behaviour, and new behaviour with no test is a claim.
 
-use bolted_ffi::{CheckStateFfi, CheckVerdictFfi, DraftClosedFfi, TextFieldSync, TextValidity};
+use bolted_ffi::{
+    CheckStateFfi, CheckVerdictFfi, DraftClosedFfi, StashRefusedFfi, TextFieldSync, TextValidity,
+};
 use gen_profile_ffi::custom::{AvailabilityRaw, PlainDate};
 use gen_profile_ffi::generated::*;
 
@@ -456,4 +458,54 @@ fn a_check_in_flight_is_observably_pending() {
     // ...and after the fact, only the verdict remains. §9 asked whether `Pending` ever reaches a
     // `snapshot()` caller. With a synchronous checker: no. It reaches a subscriber.
     assert_eq!(draft.snapshot().username_check, CheckStateFfi::Passed);
+}
+
+// =================================================================================================
+// D27 — the versioned stash envelope
+// =================================================================================================
+
+/// `accept_stash` is the parse gate: a current-version stash is accepted into a token `restore`
+/// consumes; a stash from a schema this build does not recognise is refused **wholesale** and typed,
+/// before any field is trusted. The type carries the proof — `restore` takes only the token, so an
+/// un-gated stash cannot reach the core. The shell tells this refusal from "no stash" (a typed
+/// error, never a silent `null`) and starts a fresh session.
+#[test]
+fn a_stash_from_an_unknown_schema_is_refused_and_a_current_one_restores() {
+    let store = seeded();
+    let draft = store.checkout();
+    draft
+        .try_set_name("My Name".to_owned())
+        .expect("valid name");
+    let stash = draft.stash();
+    assert_eq!(
+        stash.schema_version, STASH_SCHEMA_VERSION,
+        "stash() stamps this build's schema version into the envelope"
+    );
+
+    // Current version: accepted, and the token restores the edit session (C21).
+    let fresh = seeded();
+    let accepted = fresh
+        .accept_stash(stash.clone())
+        .expect("a current-version stash passes the gate");
+    let restored = fresh.restore(accepted);
+    assert_eq!(
+        restored.snapshot().name.validity,
+        TextValidity::Valid {
+            value: "My Name".to_owned()
+        },
+        "the rescued edit survives the round trip"
+    );
+
+    // An unknown schema version (a tightened constraint between app versions): refused wholesale,
+    // typed, both versions named — no field of it is ever trusted.
+    let mut stale = stash;
+    stale.schema_version = STASH_SCHEMA_VERSION + 1;
+    assert_eq!(
+        fresh.accept_stash(stale),
+        Err(StashRefusedFfi::SchemaVersion {
+            stashed: STASH_SCHEMA_VERSION + 1,
+            expected: STASH_SCHEMA_VERSION,
+        }),
+        "a stash from a schema this build does not accept is refused, not silently restored"
+    );
 }

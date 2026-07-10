@@ -1,7 +1,8 @@
 # Bolted — Conformance suite
 
 **Status: frozen with ARCHITECTURE.md (step 06); C03 amended and C19 added in step 07; C12/C17/C18
-amended and C22 added in step 08; C07 amended in step 09.** These are the design's falsifiable claims.
+amended and C22 added in step 08; C07 amended in step 09; C23 added in step 12 (D27).** These are the
+design's falsifiable claims.
 Each one is normative: an implementation of the Bolted contract that violates any of them is not a
 Bolted implementation, whatever else it does.
 
@@ -55,6 +56,7 @@ async check; a feature with neither still satisfies the rest. The suite says so 
 | C20 | **A draft stashes to raw data and restores from it.** The stash carries each field's last input attempt and its ancestor, both raw; restoring reproduces every field's value, ancestor, validity — including `Invalid { raw }` — and dirtiness. It must **not** carry `sync`: a conflict names a canonical value the server may no longer hold, so it re-derives on the next rebase. It must **not** carry an async verdict: a verdict endorses a value against a server state that may have moved, so a restored checked field is unchecked, and C16 demands a fresh check while it is dirty. |
 | C21 | **Restore is a rebase.** Adopting a restored draft must conflict exactly those fields whose canonical moved while it was away, and leave the others dirty and `InSync` (C19). A resolution taken before the restore must survive it, because its effect lives in the ancestor. Adopting an entity-backed draft into a store with no canonical must orphan it (C11). A create-flow draft must never be moved (C12). |
 | C22 | **"A draft exists" and "a draft rebases" are different questions.** The store must answer both, separately. A create-flow draft (C12) and an orphan (C11) exist but do not rebase; `close` removes a draft from both counts. No single count may stand for the pair. |
+| C23 | **A stashed ancestor that no longer parses degrades to dirty-from-unset, and conflicts.** `from_stash` will not fabricate an ancestor a tightened constraint invalidated: it degrades that field to create-flow (`base: None`) and keeps the user's last input, so the field is dirty with no ancestor. On the next rebase against live canonical it is `Conflicted` whenever the rescued value differs (C03 — never a silent overwrite), and clean when it converges (C04). This is the failure mode D27 accepts *inside* a parsed envelope; the wholesale envelope refusal (version/shape) sits at the codec boundary, outside the core. |
 
 ## Notes on the ones that cost something
 
