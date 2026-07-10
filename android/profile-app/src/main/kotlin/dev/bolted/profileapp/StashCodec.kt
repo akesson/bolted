@@ -15,8 +15,19 @@ import org.json.JSONObject
  * **This file is a measurement, not a design.** BoltFFI emits `ProfileStashFfi` as a plain Kotlin
  * `data class` with no `Parcelable`, no `Serializable` and no `kotlinx.serialization` annotation, so
  * a shell that wants to persist one has to hand-write this. Every generated DTO a shell persists
- * costs a codec; `bolted-ffi` (step 10) should emit `@Parcelize` on Android and `Codable` on Apple,
- * and then this file deletes itself. Its length is the argument.
+ * costs a codec — and its length is the argument.
+ *
+ * Step 12 M0 timeboxed the escape and found **none in the toolchain today**: BoltFFI 0.27.3 has no
+ * annotation/derive passthrough (`@Parcelize` / `Codable` cannot be stamped), and its own DTO wire
+ * ser/de (`toByteArray` / `fromByteArray`) is `internal`, unreachable from this module. So the two
+ * ways this file deletes itself are (a) BoltFFI exposing that wire ser/de as public — the smallest
+ * upstream ask, drafted in step 12 M6 — or (b) `bolted-ffi-gen` learning to emit a drift-checked
+ * codec, which is step 13's foreign-language-emission charter, not a step-12 M4 hack. See
+ * `docs/steps/artifacts/step-12-m4-codec.md`.
+ *
+ * What step 12 M3 (D27) *did* remove from here: the version authority. The schema version now rides
+ * the generated `ProfileStashFfi.schemaVersion` and `store.acceptStash` is the gate; this codec only
+ * carries the field through. So what remains is pure structural marshalling — no policy.
  *
  * Decoding is **total**: any malformed input yields `null` and the caller checks out a fresh draft.
  * The stash is the first untrusted input in the system — it is bytes the OS held while we were dead,
