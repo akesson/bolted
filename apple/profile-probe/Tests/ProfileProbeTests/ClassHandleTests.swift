@@ -21,18 +21,24 @@ final class ClassHandleTests: XCTestCase {
         XCTAssertEqual(store.sameDraft(other: draft), draft.id())
     }
 
-    /// Deinit-deregistration: ARC releasing the Swift handle must run Rust `Drop`, which prunes the
-    /// draft from the store registry — so `liveDraftCount` falls. If it did not, drafts would leak
-    /// and `apply_canonical` would rebase zombies forever (direct evidence for the §9 `close()` Q).
+    /// Deinit-deregistration — **D26 leak-freedom, the Apple half.** ARC releasing the Swift handle
+    /// must run Rust `Drop`, which prunes the draft from the store registry, so tearing down whatever
+    /// owns a draft returns `liveDraftCount` (C22) to its baseline. If it did not, drafts would leak
+    /// and `apply_canonical` would rebase zombies forever.
+    ///
+    /// The step-12 design pass (D26) declined a `Cleaner`-style backstop; this test **is** the
+    /// backstop it chose instead — a forgotten handle here would leak, and the count would not return
+    /// to baseline. Baseline is captured rather than assumed 0, so the contract reads as
+    /// "teardown → baseline", not "teardown → empty".
     func testDeinitDeregistration() {
         let store = ProfileStoreFfi()
-        XCTAssertEqual(store.liveDraftCount(), 0)
+        let baseline = store.liveDraftCount()
         do {
             let draft = store.checkout()
-            XCTAssertEqual(store.liveDraftCount(), 1)
+            XCTAssertEqual(store.liveDraftCount(), baseline + 1)
             _ = draft.id()
         } // draft leaves scope → ARC deinit → boltffi release → Rust Drop → deregister
-        XCTAssertEqual(store.liveDraftCount(), 0)
+        XCTAssertEqual(store.liveDraftCount(), baseline, "teardown must return to baseline (D26)")
     }
 
     /// Two live drafts each register; dropping one leaves the other.

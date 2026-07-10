@@ -263,9 +263,13 @@ class ProfileViewModelTest {
     }
 
     /**
-     * C18 on a real lifecycle. On ART the GC never runs a Rust `Drop`, so a `ViewModel` that forgets
-     * `close()` leaks a draft the store rebases forever (step-05 H1). `onCleared()` is the only
-     * place it can happen.
+     * C18 on a real lifecycle, and **D26 leak-freedom, the Kotlin half.** On ART the GC never runs a
+     * Rust `Drop`, so a `ViewModel` that forgets `close()` leaks a draft the store rebases forever
+     * (step-05 H1). `onCleared()` is the only place it can happen — which is *why* the step-12 design
+     * pass (D26) declined a `Cleaner` backstop and made this test the enforcement instead: a Cleaner
+     * would free the draft at some later GC and let a forgotten `close()` pass every test that does
+     * not provoke one. Here, tearing down the ViewModel must return the count to its baseline (0 for
+     * the VM's private, single-draft store) inside `onCleared()`, the one deterministic moment.
      */
     @Test
     fun onClearedClosesTheDraft() {
@@ -277,7 +281,7 @@ class ProfileViewModelTest {
         host.clear() // what a finishing Activity does
 
         assertNotNull("onCleared() must have run", vm.liveDraftsAfterClose)
-        assertEquals("the draft must be freed (C18)", 0, vm.liveDraftsAfterClose)
+        assertEquals("teardown must return to baseline (C18/D26)", 0, vm.liveDraftsAfterClose)
         record("c18.live_drafts_after_close", vm.liveDraftsAfterClose.toString())
     }
 }
