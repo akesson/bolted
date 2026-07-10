@@ -8,7 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.platform.app.InstrumentationRegistry
-import com.example.spike_profile_ffi.UniquenessChecker
+import com.example.gen_profile_ffi.UsernameChecker
 
 /** Measurements land in logcat under this tag, the way step 05's probe does. */
 const val TAG: String = "BoltedApp"
@@ -25,7 +25,7 @@ fun record(label: String, value: String) {
  */
 class VmHost(
     private val timing: ProfileViewModel.Timing = ProfileViewModel.Timing(debounceMs = 10, checkLatencyMs = 0),
-    private val checker: () -> UniquenessChecker = { DefaultChecker() },
+    private val checker: () -> UsernameChecker = { DefaultChecker() },
 ) {
     private val store = ViewModelStore()
 

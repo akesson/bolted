@@ -1,9 +1,9 @@
 package dev.bolted.profileapp
 
 import androidx.lifecycle.SavedStateHandle
-import com.example.spike_profile_ffi.EmailValidity
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.UsernameCheckFfi
+import com.example.gen_profile_ffi.TextValidity
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.CheckStateFfi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -92,7 +92,7 @@ class StashRestoreTest {
         val second = VmHost()
         val vm2 = second.create(revived)
         assertEquals("the user's rejected text is still theirs", "not-an-email", onMain { vm2.buffers.value }.email)
-        assertTrue(onMain { vm2.snapshot.value }.email.validity is EmailValidity.Invalid)
+        assertTrue(onMain { vm2.snapshot.value }.email.validity is TextValidity.Invalid)
         assertEquals(
             "That is not a valid email address.",
             onMain { vm2.inlineError(ProfileFieldId.EMAIL) },
@@ -111,7 +111,7 @@ class StashRestoreTest {
         val first = VmHost(ProfileViewModel.Timing(debounceMs = 10))
         val vm1 = first.create(handle)
         onMain { vm1.editUsername("alice2") }
-        awaitUntil(what = "the verdict") { vm1.snapshot.value.usernameCheck is UsernameCheckFfi.Passed }
+        awaitUntil(what = "the verdict") { vm1.snapshot.value.usernameCheck is CheckStateFfi.Passed }
 
         val revived = handle.persistAndRevive()
         first.clear()
@@ -123,7 +123,7 @@ class StashRestoreTest {
         assertTrue(onMain { vm2.isDirty(ProfileFieldId.USERNAME) })
         assertTrue(
             "a verdict from before the death endorses nothing",
-            onMain { vm2.snapshot.value }.usernameCheck is UsernameCheckFfi.Unchecked,
+            onMain { vm2.snapshot.value }.usernameCheck is CheckStateFfi.Unchecked,
         )
         assertNull("and it is NOT an error", onMain { vm2.inlineError(ProfileFieldId.USERNAME) })
         assertEquals(

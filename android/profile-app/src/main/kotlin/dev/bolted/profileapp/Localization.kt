@@ -1,6 +1,6 @@
 package dev.bolted.profileapp
 
-import com.example.spike_profile_ffi.ErrorData
+import com.example.gen_profile_ffi.ErrorData
 
 /**
  * The shell owns the *sentence*, never the *numbers*.

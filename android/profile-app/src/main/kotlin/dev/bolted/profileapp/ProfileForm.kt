@@ -22,10 +22,10 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.spike_profile_ffi.DraftStatusFfi
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.ProfileSnapshot
-import com.example.spike_profile_ffi.UsernameCheckFfi
+import com.example.gen_profile_ffi.DraftStatusFfi
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.ProfileSnapshot
+import com.example.gen_profile_ffi.CheckStateFfi
 
 /**
  * The view. It holds **no business logic and no constraint literal** — ARCHITECTURE §1's greppable
@@ -128,7 +128,7 @@ private fun TextFieldRow(
                 Text("${value.length}/$max", Modifier.testTag("counter-$tag"))
             }
             if (vm.isDirty(field, snapshot)) Text("•", Modifier.testTag("dirty-$tag"))
-            if (field == ProfileFieldId.USERNAME && snapshot.usernameCheck is UsernameCheckFfi.Pending) {
+            if (field == ProfileFieldId.USERNAME && snapshot.usernameCheck is CheckStateFfi.Pending) {
                 Text("⏳", Modifier.testTag("spinner-username"))
             }
         }
@@ -177,4 +177,4 @@ private fun SubmitOutcomeView(outcome: SubmitOutcome?) {
     }
 }
 
-private fun errorData(key: String) = com.example.spike_profile_ffi.ErrorData(key, emptyList())
+private fun errorData(key: String) = com.example.gen_profile_ffi.ErrorData(key, emptyList())

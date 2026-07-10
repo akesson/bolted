@@ -1,8 +1,8 @@
 package dev.bolted.profileapp
 
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.UsernameCheckFfi
-import com.example.spike_profile_ffi.UsernameValidity
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.CheckStateFfi
+import com.example.gen_profile_ffi.TextValidity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -44,7 +44,7 @@ class ProfileViewModelTest {
         }
 
         // The core parsed and sanitized...
-        assertEquals("bob_1", (onMain { vm.snapshot.value }.username.validity as UsernameValidity.Valid).value)
+        assertEquals("bob_1", (onMain { vm.snapshot.value }.username.validity as TextValidity.Valid).value)
         // ...but the focused control still holds exactly what the user typed. Cursor safety.
         assertEquals("  bob_1  ", onMain { vm.buffers.value }.username)
 
@@ -150,7 +150,7 @@ class ProfileViewModelTest {
             for (prefix in listOf("b", "bo", "bob", "bob_", "bob_1")) vm.editUsername(prefix)
         }
         awaitUntil(what = "the single check to land") {
-            vm.snapshot.value.usernameCheck is UsernameCheckFfi.Passed
+            vm.snapshot.value.usernameCheck is CheckStateFfi.Passed
         }
         assertEquals("a burst of five keystrokes is one lookup", 1, vm.checkRunCount)
         record("debounce.checks_for_5_keystrokes", vm.checkRunCount.toString())
@@ -187,7 +187,7 @@ class ProfileViewModelTest {
         val vm = host.create()
         onMain { vm.editUsername("admin") }
         awaitUntil(what = "the taken verdict") {
-            vm.snapshot.value.usernameCheck is UsernameCheckFfi.Failed
+            vm.snapshot.value.usernameCheck is CheckStateFfi.Failed
         }
         assertEquals("That username is already taken.", onMain { vm.inlineError(ProfileFieldId.USERNAME) })
         host.clear()

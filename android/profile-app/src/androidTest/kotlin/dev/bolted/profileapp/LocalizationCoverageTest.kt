@@ -1,13 +1,14 @@
 package dev.bolted.profileapp
 
-import com.example.spike_profile_ffi.ErrorData
-import com.example.spike_profile_ffi.PlainDate
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.SubmitErrorFfi
-import com.example.spike_profile_ffi.UniquenessChecker
-import com.example.spike_profile_ffi.UniquenessVerdictFfi
-import com.example.spike_profile_ffi.UsernameCheckFfi
+import com.example.gen_profile_ffi.AvailabilityRaw
+import com.example.gen_profile_ffi.ErrorData
+import com.example.gen_profile_ffi.PlainDate
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.SubmitErrorFfi
+import com.example.gen_profile_ffi.UsernameChecker
+import com.example.gen_profile_ffi.CheckVerdictFfi
+import com.example.gen_profile_ffi.CheckStateFfi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,8 +67,10 @@ class LocalizationCoverageTest {
                 // range_reversed
                 runCatching {
                     draft.trySetAvailability(
-                        PlainDate(2026.toUShort(), 12.toUByte(), 31.toUByte()),
-                        PlainDate(2026.toUShort(), 1.toUByte(), 1.toUByte()),
+                        AvailabilityRaw(
+                            PlainDate(2026.toUShort(), 12.toUByte(), 31.toUByte()),
+                            PlainDate(2026.toUShort(), 1.toUByte(), 1.toUByte()),
+                        )
                     )
                 }
                 errorsOf(draft).forEach(::assertRenders)
@@ -92,7 +95,7 @@ class LocalizationCoverageTest {
     fun theTier2RuleErrorRendersWithItsParams() {
         seeded().use { store ->
             store.checkout().use { draft ->
-                draft.setUniquenessChecker(alwaysUnique())
+                draft.setUsernameChecker(alwaysUnique())
                 draft.trySetUsername("corp_alice")
                 draft.runUsernameCheck()
                 draft.trySetEmail("alice@other.com")
@@ -120,11 +123,11 @@ class LocalizationCoverageTest {
                 assertTrue(Localization.isProgress(required.error.key))
 
                 // a taken verdict -> a real error
-                draft.setUniquenessChecker(alwaysTaken())
+                draft.setUsernameChecker(alwaysTaken())
                 draft.runUsernameCheck()
                 val check = draft.snapshot().usernameCheck
-                assertTrue(check is UsernameCheckFfi.Failed)
-                assertRenders((check as UsernameCheckFfi.Failed).error)
+                assertTrue(check is CheckStateFfi.Failed)
+                assertRenders((check as CheckStateFfi.Failed).error)
                 assertTrue(!Localization.isProgress(check.error.key))
             }
         }
@@ -154,11 +157,11 @@ class LocalizationCoverageTest {
         }
     }
 
-    private fun alwaysUnique() = object : UniquenessChecker {
-        override fun checkUnique(username: String) = UniquenessVerdictFfi.UNIQUE
+    private fun alwaysUnique() = object : UsernameChecker {
+        override fun check(value: String) = CheckVerdictFfi.PASS
     }
 
-    private fun alwaysTaken() = object : UniquenessChecker {
-        override fun checkUnique(username: String) = UniquenessVerdictFfi.TAKEN
+    private fun alwaysTaken() = object : UsernameChecker {
+        override fun check(value: String) = CheckVerdictFfi.FAIL
     }
 }

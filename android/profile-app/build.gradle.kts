@@ -8,7 +8,7 @@ plugins {
 
 // Consumed IN PLACE from `boltffi pack android`, exactly as the probe does: nothing is vendored, so
 // a stale `pack` fails loudly rather than compiling against a checked-in copy.
-val ffiDist = file("../../crates/spike-profile-ffi/dist/android")
+val ffiDist = file("../../crates/gen-profile-ffi/dist/android")
 
 // `-Pbolted.hw` flips the suite over to the hardware benchmark (`@PhysicalDevice`), which refuses to
 // run on an emulator. By default it is excluded, so the headless GMD suite stays green.
@@ -99,11 +99,11 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// Fail early and legibly if `mise run pack:android` has not run.
+// Fail early and legibly if `mise run pack:android:gen` has not run.
 tasks.withType<com.android.build.gradle.tasks.MergeSourceSetFolders>().configureEach {
     doFirst {
         require(ffiDist.resolve("kotlin").isDirectory && ffiDist.resolve("jniLibs").isDirectory) {
-            "missing $ffiDist — run `mise run pack:android` first"
+            "missing $ffiDist — run `mise run pack:android:gen` first"
         }
     }
 }

@@ -8,34 +8,28 @@ import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.example.spike_profile_ffi.AvailabilityFieldState
-import com.example.spike_profile_ffi.AvailabilityFieldSync
-import com.example.spike_profile_ffi.AvailabilityValidity
-import com.example.spike_profile_ffi.ConstraintFfi
-import com.example.spike_profile_ffi.DraftStatusFfi
-import com.example.spike_profile_ffi.EmailFieldState
-import com.example.spike_profile_ffi.EmailFieldSync
-import com.example.spike_profile_ffi.EmailValidity
-import com.example.spike_profile_ffi.ErrorData
-import com.example.spike_profile_ffi.PersonNameFieldState
-import com.example.spike_profile_ffi.PersonNameFieldSync
-import com.example.spike_profile_ffi.PersonNameValidity
-import com.example.spike_profile_ffi.PlainDate
-import com.example.spike_profile_ffi.PlainDateRange
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.ProfileSnapshot
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.ProfileValues
-import com.example.spike_profile_ffi.SubmitErrorFfi
-import com.example.spike_profile_ffi.UniquenessChecker
-import com.example.spike_profile_ffi.UniquenessVerdictFfi
-import com.example.spike_profile_ffi.UsernameCheckFfi
-import com.example.spike_profile_ffi.UsernameFieldState
-import com.example.spike_profile_ffi.UsernameFieldSync
-import com.example.spike_profile_ffi.UsernameValidity
-import com.example.spike_profile_ffi.ValidationReportFfi
-import com.example.spike_profile_ffi.snapshots
+import com.example.gen_profile_ffi.AvailabilityFieldState
+import com.example.gen_profile_ffi.AvailabilityFieldSync
+import com.example.gen_profile_ffi.AvailabilityValidity
+import com.example.gen_profile_ffi.ConstraintFfi
+import com.example.gen_profile_ffi.DraftStatusFfi
+import com.example.gen_profile_ffi.TextFieldState
+import com.example.gen_profile_ffi.TextFieldSync
+import com.example.gen_profile_ffi.TextValidity
+import com.example.gen_profile_ffi.ErrorData
+import com.example.gen_profile_ffi.PlainDate
+import com.example.gen_profile_ffi.AvailabilityRaw
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.ProfileSnapshot
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.ProfileValues
+import com.example.gen_profile_ffi.SubmitErrorFfi
+import com.example.gen_profile_ffi.UsernameChecker
+import com.example.gen_profile_ffi.CheckVerdictFfi
+import com.example.gen_profile_ffi.CheckStateFfi
+import com.example.gen_profile_ffi.ValidationReportFfi
+import com.example.gen_profile_ffi.snapshots
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -66,7 +60,7 @@ import kotlinx.coroutines.withContext
 class ProfileViewModel(
     private val savedState: SavedStateHandle,
     private val timing: Timing = Timing(),
-    makeChecker: () -> UniquenessChecker = { DefaultChecker(latencyMs = timing.checkLatencyMs) },
+    makeChecker: () -> UsernameChecker = { DefaultChecker(latencyMs = timing.checkLatencyMs) },
 ) : ViewModel() {
 
     /** Injectable so tests can collapse the debounce and stretch the check. */
@@ -136,7 +130,7 @@ class ProfileViewModel(
         val stash = savedState.get<Bundle>(STASH_KEY)?.getString(STASH_JSON)?.let(StashCodec::decode)
         restoredFromStash = stash != null
         draft = if (stash != null) store.restore(stash) else store.checkout()
-        draft.setUniquenessChecker(makeChecker())
+        draft.setUsernameChecker(makeChecker())
 
         // The OS asks for this lazily, exactly when it is about to kill us — so the stash is built
         // once, at save time, not on every keystroke.
@@ -215,7 +209,7 @@ class ProfileViewModel(
 
     fun editAvailability(start: PlainDate, end: PlainDate) = edit(ProfileFieldId.AVAILABILITY) {
         _buffers.value = _buffers.value.copy(start = start, end = end)
-        runCatching { draft.trySetAvailability(start, end) }
+        runCatching { draft.trySetAvailability(AvailabilityRaw(start, end)) }
         reconcile(draft.snapshot())
     }
 
@@ -236,7 +230,7 @@ class ProfileViewModel(
     private fun scheduleCheck() {
         checkJob?.cancel()
         val snap = _snapshot.value
-        if (snap.username.validity !is UsernameValidity.Valid || !snap.username.dirty) return
+        if (snap.username.validity !is TextValidity.Valid || !snap.username.dirty) return
         checkJob = viewModelScope.launch {
             delay(timing.debounceMs)
             runCheckNow()
@@ -250,7 +244,7 @@ class ProfileViewModel(
         withContext(Dispatchers.IO) { draft.runUsernameCheck() }
     }
 
-    val isChecking: Boolean get() = _snapshot.value.usernameCheck is UsernameCheckFfi.Pending
+    val isChecking: Boolean get() = _snapshot.value.usernameCheck is CheckStateFfi.Pending
 
     // ---- conflict resolution --------------------------------------------------------------------
 
@@ -339,7 +333,7 @@ class ProfileViewModel(
     fun inlineError(field: ProfileFieldId, snap: ProfileSnapshot = _snapshot.value): String? {
         validityError(field, snap)?.let { return Localization.message(it) }
         val check = snap.usernameCheck
-        if (field == ProfileFieldId.USERNAME && check is UsernameCheckFfi.Failed) {
+        if (field == ProfileFieldId.USERNAME && check is CheckStateFfi.Failed) {
             return Localization.message(check.error)
         }
         return null
@@ -353,9 +347,9 @@ class ProfileViewModel(
     fun progressHint(field: ProfileFieldId, snap: ProfileSnapshot = _snapshot.value): String? {
         if (field != ProfileFieldId.USERNAME) return null
         return when {
-            snap.usernameCheck is UsernameCheckFfi.Pending ->
+            snap.usernameCheck is CheckStateFfi.Pending ->
                 Localization.message(ErrorData("username_check_pending", emptyList()))
-            snap.username.dirty && snap.usernameCheck is UsernameCheckFfi.Unchecked ->
+            snap.username.dirty && snap.usernameCheck is CheckStateFfi.Unchecked ->
                 Localization.message(ErrorData("username_check_required", emptyList()))
             else -> null
         }
@@ -370,11 +364,11 @@ class ProfileViewModel(
 
     /** Conflict banner data: theirs (and the ancestor) as text, read from `Field` state alone. */
     fun conflict(field: ProfileFieldId, snap: ProfileSnapshot = _snapshot.value): ConflictInfo? = when (field) {
-        ProfileFieldId.USERNAME -> (snap.username.sync as? UsernameFieldSync.Conflicted)
+        ProfileFieldId.USERNAME -> (snap.username.sync as? TextFieldSync.Conflicted)
             ?.let { ConflictInfo(it.base, it.theirs) }
-        ProfileFieldId.NAME -> (snap.name.sync as? PersonNameFieldSync.Conflicted)
+        ProfileFieldId.NAME -> (snap.name.sync as? TextFieldSync.Conflicted)
             ?.let { ConflictInfo(it.base, it.theirs) }
-        ProfileFieldId.EMAIL -> (snap.email.sync as? EmailFieldSync.Conflicted)
+        ProfileFieldId.EMAIL -> (snap.email.sync as? TextFieldSync.Conflicted)
             ?.let { ConflictInfo(it.base, it.theirs) }
         ProfileFieldId.AVAILABILITY -> (snap.availability.sync as? AvailabilityFieldSync.Conflicted)
             ?.let { ConflictInfo(it.base?.let(::rangeText), rangeText(it.theirs)) }
@@ -407,7 +401,7 @@ class ProfileViewModel(
 
     private fun recheckout() {
         draft = store.checkout()
-        draft.setUniquenessChecker(makeChecker())
+        draft.setUsernameChecker(makeChecker())
         focused = null
         focusedTouched = false
         subscribeDraft()
@@ -439,9 +433,9 @@ class ProfileViewModel(
 
     private fun currentCanonicalValues(): ProfileValues? {
         val c = _canonical.value ?: return null
-        val u = c.username.validity as? UsernameValidity.Valid ?: return SEED
-        val n = c.name.validity as? PersonNameValidity.Valid ?: return SEED
-        val e = c.email.validity as? EmailValidity.Valid ?: return SEED
+        val u = c.username.validity as? TextValidity.Valid ?: return SEED
+        val n = c.name.validity as? TextValidity.Valid ?: return SEED
+        val e = c.email.validity as? TextValidity.Valid ?: return SEED
         val a = c.availability.validity as? AvailabilityValidity.Valid ?: return SEED
         return ProfileValues(u.value, n.value, e.value, a.value)
     }
@@ -478,10 +472,10 @@ data class ConflictInfo(val base: String?, val theirs: String)
 class DefaultChecker(
     private val taken: Set<String> = setOf("taken", "admin", "root"),
     private val latencyMs: Long = 0,
-) : UniquenessChecker {
-    override fun checkUnique(username: String): UniquenessVerdictFfi {
+) : UsernameChecker {
+    override fun check(value: String): CheckVerdictFfi {
         if (latencyMs > 0) Thread.sleep(latencyMs)
-        return if (username.lowercase() in taken) UniquenessVerdictFfi.TAKEN else UniquenessVerdictFfi.UNIQUE
+        return if (value.lowercase() in taken) CheckVerdictFfi.FAIL else CheckVerdictFfi.PASS
     }
 }
 
@@ -490,7 +484,7 @@ val SEED: ProfileValues =
         username = "alice",
         name = "Alice Smith",
         email = "alice@example.com",
-        availability = PlainDateRange(
+        availability = AvailabilityRaw(
             start = PlainDate(2026.toUShort(), 1.toUByte(), 1.toUByte()),
             end = PlainDate(2026.toUShort(), 12.toUByte(), 31.toUByte()),
         ),
@@ -498,22 +492,11 @@ val SEED: ProfileValues =
 
 // ---- static projection helpers (the monomorphic per-value cost, on the Kotlin side) -------------
 
-internal fun display(v: UsernameValidity): String = when (v) {
-    is UsernameValidity.Unset -> ""
-    is UsernameValidity.Valid -> v.value
-    is UsernameValidity.Invalid -> v.raw
-}
-
-internal fun display(v: PersonNameValidity): String = when (v) {
-    is PersonNameValidity.Unset -> ""
-    is PersonNameValidity.Valid -> v.value
-    is PersonNameValidity.Invalid -> v.raw
-}
-
-internal fun display(v: EmailValidity): String = when (v) {
-    is EmailValidity.Unset -> ""
-    is EmailValidity.Valid -> v.value
-    is EmailValidity.Invalid -> v.raw
+// D24: username, name and email share one TextValidity, so three overloads became one.
+internal fun display(v: TextValidity): String = when (v) {
+    is TextValidity.Unset -> ""
+    is TextValidity.Valid -> v.value
+    is TextValidity.Invalid -> v.raw
 }
 
 internal fun dateRange(v: AvailabilityValidity): Pair<PlainDate, PlainDate> = when (v) {
@@ -522,25 +505,25 @@ internal fun dateRange(v: AvailabilityValidity): Pair<PlainDate, PlainDate> = wh
     is AvailabilityValidity.Unset -> SEED.availability.start to SEED.availability.end
 }
 
-internal fun rangeText(r: PlainDateRange): String = "${dateText(r.start)} → ${dateText(r.end)}"
+internal fun rangeText(r: AvailabilityRaw): String = "${dateText(r.start)} → ${dateText(r.end)}"
 
 internal fun dateText(d: PlainDate): String =
     "%04d-%02d-%02d".format(d.year.toInt(), d.month.toInt(), d.day.toInt())
 
 internal fun validityError(field: ProfileFieldId, snap: ProfileSnapshot): ErrorData? = when (field) {
-    ProfileFieldId.USERNAME -> (snap.username.validity as? UsernameValidity.Invalid)?.error
-    ProfileFieldId.NAME -> (snap.name.validity as? PersonNameValidity.Invalid)?.error
-    ProfileFieldId.EMAIL -> (snap.email.validity as? EmailValidity.Invalid)?.error
+    ProfileFieldId.USERNAME -> (snap.username.validity as? TextValidity.Invalid)?.error
+    ProfileFieldId.NAME -> (snap.name.validity as? TextValidity.Invalid)?.error
+    ProfileFieldId.EMAIL -> (snap.email.validity as? TextValidity.Invalid)?.error
     ProfileFieldId.AVAILABILITY -> (snap.availability.validity as? AvailabilityValidity.Invalid)?.error
 }
 
 /** An all-unset snapshot, used only before `init` finishes. */
 internal val EMPTY_SNAPSHOT: ProfileSnapshot = ProfileSnapshot(
-    username = UsernameFieldState(UsernameValidity.Unset, UsernameFieldSync.InSync, false),
-    name = PersonNameFieldState(PersonNameValidity.Unset, PersonNameFieldSync.InSync, false),
-    email = EmailFieldState(EmailValidity.Unset, EmailFieldSync.InSync, false),
+    username = TextFieldState(TextValidity.Unset, TextFieldSync.InSync, false),
+    name = TextFieldState(TextValidity.Unset, TextFieldSync.InSync, false),
+    email = TextFieldState(TextValidity.Unset, TextFieldSync.InSync, false),
     availability = AvailabilityFieldState(AvailabilityValidity.Unset, AvailabilityFieldSync.InSync, false),
-    usernameCheck = UsernameCheckFfi.Unchecked,
+    usernameCheck = CheckStateFfi.Unchecked,
     anyDirty = false,
     conflicts = emptyList(),
     status = DraftStatusFfi.LIVE,

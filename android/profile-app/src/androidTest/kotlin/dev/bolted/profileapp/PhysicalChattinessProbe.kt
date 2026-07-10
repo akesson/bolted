@@ -1,8 +1,8 @@
 package dev.bolted.profileapp
 
 import android.os.Build
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileStoreFfi
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before

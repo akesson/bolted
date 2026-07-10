@@ -1,11 +1,11 @@
 package dev.bolted.profileapp
 
-import com.example.spike_profile_ffi.DateRangeFieldStashFfi
-import com.example.spike_profile_ffi.PlainDate
-import com.example.spike_profile_ffi.PlainDateRange
-import com.example.spike_profile_ffi.ProfileStashFfi
-import com.example.spike_profile_ffi.ProfileValues
-import com.example.spike_profile_ffi.TextFieldStashFfi
+import com.example.gen_profile_ffi.AvailabilityStash
+import com.example.gen_profile_ffi.PlainDate
+import com.example.gen_profile_ffi.AvailabilityRaw
+import com.example.gen_profile_ffi.ProfileStashFfi
+import com.example.gen_profile_ffi.ProfileValues
+import com.example.gen_profile_ffi.TextFieldStashFfi
 import org.json.JSONObject
 
 /**
@@ -86,26 +86,26 @@ object StashCodec {
     private fun text(o: JSONObject): TextFieldStashFfi =
         TextFieldStashFfi(raw = o.optNullableString("raw"), base = o.optNullableString("base"))
 
-    private fun range(s: DateRangeFieldStashFfi): JSONObject =
+    private fun range(s: AvailabilityStash): JSONObject =
         JSONObject().apply {
             putOpt("raw", s.raw?.let(::dateRange))
             putOpt("base", s.base?.let(::dateRange))
         }
 
-    private fun range(o: JSONObject): DateRangeFieldStashFfi =
-        DateRangeFieldStashFfi(
+    private fun range(o: JSONObject): AvailabilityStash =
+        AvailabilityStash(
             raw = o.optJSONObject("raw")?.let(::dateRange),
             base = o.optJSONObject("base")?.let(::dateRange),
         )
 
-    private fun dateRange(r: PlainDateRange): JSONObject =
+    private fun dateRange(r: AvailabilityRaw): JSONObject =
         JSONObject().apply {
             put("start", date(r.start))
             put("end", date(r.end))
         }
 
-    private fun dateRange(o: JSONObject): PlainDateRange =
-        PlainDateRange(start = date(o.getJSONObject("start")), end = date(o.getJSONObject("end")))
+    private fun dateRange(o: JSONObject): AvailabilityRaw =
+        AvailabilityRaw(start = date(o.getJSONObject("start")), end = date(o.getJSONObject("end")))
 
     private fun date(d: PlainDate): JSONObject =
         JSONObject().apply {
