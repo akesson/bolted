@@ -7,7 +7,7 @@
 //! The Swift and Kotlin suites are still the real evidence (they exercise the generated *bindings*).
 //! These tests exist because D23 is new behaviour, and new behaviour with no test is a claim.
 
-use bolted_ffi::{CheckStateFfi, CheckVerdictFfi, DraftClosedFfi, TextValidity};
+use bolted_ffi::{CheckStateFfi, CheckVerdictFfi, DraftClosedFfi, TextFieldSync, TextValidity};
 use gen_profile_ffi::custom::{AvailabilityRaw, PlainDate};
 use gen_profile_ffi::generated::*;
 
@@ -303,4 +303,135 @@ fn the_declared_constraints_cross_the_boundary() {
             ConstraintFfi::LenChars { min: 1, max: 30 }
         ]
     );
+}
+
+// =================================================================================================
+// The projection itself
+//
+// Everything above tests the *wrapper's* behaviour. These test what the snapshot SAYS — and they
+// exist because a mutation pass found the wrapper suite blind to all of it. `bolted-conformance`
+// covers the core; nothing covered the boundary between the core and the wire.
+// =================================================================================================
+
+/// M12 / M2. Dirty is per-field and in aggregate, and both cross.
+#[test]
+fn the_snapshot_reports_which_fields_are_dirty() {
+    let store = seeded();
+    let draft = store.checkout();
+    assert!(!draft.snapshot().any_dirty);
+
+    draft.try_set_name("Grace".to_owned()).expect("valid");
+    let snapshot = draft.snapshot();
+    assert!(snapshot.any_dirty);
+    assert!(snapshot.name.dirty);
+    assert!(
+        !snapshot.username.dirty,
+        "only the field that moved is dirty"
+    );
+
+    // D11: dirty is value-based, so typing a value back is not dirty.
+    draft.try_set_name("Ada".to_owned()).expect("valid");
+    assert!(!draft.snapshot().any_dirty);
+    assert!(!draft.snapshot().name.dirty);
+}
+
+/// M1 / M3. A conflict names the field that conflicted, and the list is in declaration order.
+#[test]
+fn conflicts_cross_with_the_right_field_ids_in_declaration_order() {
+    let store = seeded();
+    let draft = store.checkout();
+    draft.try_set_username("mine".to_owned()).expect("valid");
+    draft
+        .try_set_email("mine@corp.example".to_owned())
+        .expect("valid");
+
+    // The server moves both fields the draft has touched.
+    let mut theirs = values("theirs");
+    theirs.email = "theirs@corp.example".to_owned();
+    store.apply_canonical(theirs).expect("valid");
+
+    let snapshot = draft.snapshot();
+    assert_eq!(
+        snapshot.conflicts,
+        vec![ProfileFieldId::Username, ProfileFieldId::Email],
+        "declaration order: a shell walks this list to focus the first conflict"
+    );
+    assert!(matches!(
+        snapshot.username.sync,
+        TextFieldSync::Conflicted { .. }
+    ));
+    assert!(
+        matches!(snapshot.name.sync, TextFieldSync::InSync),
+        "name never moved"
+    );
+}
+
+/// M9. The two resolvers are not the same function.
+#[test]
+fn keep_mine_and_take_theirs_reach_different_outcomes() {
+    let store = seeded();
+    let draft = store.checkout();
+    draft.try_set_username("mine".to_owned()).expect("valid");
+    draft
+        .try_set_email("mine@corp.example".to_owned())
+        .expect("valid");
+
+    let mut theirs = values("theirs");
+    theirs.email = "theirs@corp.example".to_owned();
+    store.apply_canonical(theirs).expect("valid");
+
+    draft
+        .resolve_keep_mine(ProfileFieldId::Username)
+        .expect("live");
+    draft
+        .resolve_take_theirs(ProfileFieldId::Email)
+        .expect("live");
+
+    let snapshot = draft.snapshot();
+    assert!(snapshot.conflicts.is_empty());
+    assert_eq!(
+        snapshot.username.validity,
+        TextValidity::Valid {
+            value: "mine".to_owned()
+        },
+        "keep mine keeps mine"
+    );
+    assert_eq!(
+        snapshot.email.validity,
+        TextValidity::Valid {
+            value: "theirs@corp.example".to_owned()
+        },
+        "take theirs takes theirs"
+    );
+}
+
+/// M14, and §9's *"a real `Pending` across FFI"*.
+///
+/// With a synchronous checker, `begin` and `complete` are atomic inside one call, so a `snapshot()`
+/// taken *after* `run_username_check` returns can never be `Pending`. It is observable from exactly
+/// one place: the draft's stream, which the driver pushes to between the two halves. That is what the
+/// split `begin`/`complete` buys (D10), and it is why a spinner is not a fiction.
+#[test]
+fn a_check_in_flight_is_observably_pending() {
+    let store = seeded();
+    let draft = store.checkout();
+    draft.try_set_username("grace".to_owned()).expect("valid");
+
+    let subscription = draft.snapshots();
+    draft.set_username_checker(Scripted::new(CheckVerdictFfi::Pass).0);
+    assert_eq!(draft.run_username_check(), Ok(true));
+
+    let states: Vec<CheckStateFfi> = std::iter::from_fn(|| subscription.pop_event())
+        .map(|snapshot: ProfileSnapshot| snapshot.username_check)
+        .collect();
+
+    assert_eq!(
+        states,
+        vec![CheckStateFfi::Pending, CheckStateFfi::Passed],
+        "the driver must emit Pending before it calls out, or a shell has nothing to \
+         hang a spinner on"
+    );
+    // ...and after the fact, only the verdict remains. §9 asked whether `Pending` ever reaches a
+    // `snapshot()` caller. With a synchronous checker: no. It reaches a subscriber.
+    assert_eq!(draft.snapshot().username_check, CheckStateFfi::Passed);
 }
