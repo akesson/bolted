@@ -8,8 +8,10 @@
 //! a deliverable (see the step-02 report): it is the honest per-field cost of the "drafts core-side
 //! / snapshot-per-change" decisions.
 
+use bolted_core::FieldStash;
 use bolted_core::report::ErrorData as CoreErrorData;
 use boltffi::*;
+use spike_profile::ProfileStash;
 
 // =================================================================================================
 // Shared primitives
@@ -265,6 +267,43 @@ pub enum UniquenessVerdictFfi {
 }
 
 // =================================================================================================
+// The draft stash (C20) — what a shell persists so an edit session survives process death.
+//
+// **Note the shape, against the field-state families above.** Those needed one struct per *value*
+// type, because `Validity<V>` mentions `V`. The stash mentions only `V::Raw`, so three of the four
+// fields collapse onto ONE `TextFieldStashFfi`. That is the cleanest evidence yet for ARCHITECTURE
+// §9's "codegen dedup by raw type" (step 09): dedup is trivially right here and impossible above.
+// =================================================================================================
+
+/// `bolted_core::FieldStash<String>`. `Option` because a create-flow field has neither.
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextFieldStashFfi {
+    pub raw: Option<String>,
+    pub base: Option<String>,
+}
+
+/// `bolted_core::FieldStash<(Date, Date)>`, with the tuple projected onto a record as usual.
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DateRangeFieldStashFfi {
+    pub raw: Option<PlainDateRange>,
+    pub base: Option<PlainDateRange>,
+}
+
+/// `spike_profile::ProfileStash`. Carries no `sync` and no async verdict, on purpose — see C20.
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileStashFfi {
+    pub username: TextFieldStashFfi,
+    pub name: TextFieldStashFfi,
+    pub email: TextFieldStashFfi,
+    pub availability: DateRangeFieldStashFfi,
+    pub base_version: u64,
+    pub orphaned: bool,
+}
+
+// =================================================================================================
 // Validation report (projection of `ValidationReport<ProfileField>`)
 // =================================================================================================
 
@@ -469,5 +508,66 @@ pub fn to_plain_range(r: &spike_profile::DateRange) -> PlainDateRange {
     PlainDateRange {
         start: to_plain_date(r.start()),
         end: to_plain_date(r.end()),
+    }
+}
+
+// ---- stash conversions (C20) ------------------------------------------------------------------
+
+pub fn to_text_stash_ffi(s: &FieldStash<String>) -> TextFieldStashFfi {
+    TextFieldStashFfi {
+        raw: s.raw.clone(),
+        base: s.base.clone(),
+    }
+}
+
+pub fn to_core_text_stash(s: &TextFieldStashFfi) -> FieldStash<String> {
+    FieldStash {
+        raw: s.raw.clone(),
+        base: s.base.clone(),
+    }
+}
+
+pub fn to_range_stash_ffi(
+    s: &FieldStash<(spike_profile::Date, spike_profile::Date)>,
+) -> DateRangeFieldStashFfi {
+    let project = |(start, end): &(spike_profile::Date, spike_profile::Date)| PlainDateRange {
+        start: to_plain_date(*start),
+        end: to_plain_date(*end),
+    };
+    DateRangeFieldStashFfi {
+        raw: s.raw.as_ref().map(project),
+        base: s.base.as_ref().map(project),
+    }
+}
+
+pub fn to_core_range_stash(
+    s: &DateRangeFieldStashFfi,
+) -> FieldStash<(spike_profile::Date, spike_profile::Date)> {
+    let project = |r: &PlainDateRange| (to_core_date(r.start), to_core_date(r.end));
+    FieldStash {
+        raw: s.raw.as_ref().map(project),
+        base: s.base.as_ref().map(project),
+    }
+}
+
+pub fn to_stash_ffi(s: &ProfileStash) -> ProfileStashFfi {
+    ProfileStashFfi {
+        username: to_text_stash_ffi(&s.username),
+        name: to_text_stash_ffi(&s.name),
+        email: to_text_stash_ffi(&s.email),
+        availability: to_range_stash_ffi(&s.availability),
+        base_version: s.base_version,
+        orphaned: s.orphaned,
+    }
+}
+
+pub fn to_core_stash(s: &ProfileStashFfi) -> ProfileStash {
+    ProfileStash {
+        username: to_core_text_stash(&s.username),
+        name: to_core_text_stash(&s.name),
+        email: to_core_text_stash(&s.email),
+        availability: to_core_range_stash(&s.availability),
+        base_version: s.base_version,
+        orphaned: s.orphaned,
     }
 }

@@ -160,4 +160,90 @@ final class FreezeContractTests: XCTestCase {
             }
         }
     }
+
+    // ---- C19: rebase is a three-way merge --------------------------------------------------------
+
+    /// Editing one field while the server changes a *different* one must not conflict mine. The
+    /// store rebases the whole draft, so `name` is rebased onto its own ancestor.
+    func testC19ADirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() throws {
+        let store = try seededStore()
+        let draft = store.checkout()
+
+        try draft.trySetName(raw: "My Name")
+        var moved = validValues()
+        moved.email = "team@corp.example" // the server touches email, and only email
+        try store.applyCanonical(values: moved)
+
+        let snap = draft.snapshot()
+        XCTAssertTrue(snap.conflicts.isEmpty, "`name`'s canonical never moved")
+        guard case .inSync = snap.name.sync else {
+            return XCTFail("an unmoved canonical must not conflict a dirty field")
+        }
+        XCTAssertTrue(snap.name.dirty)
+        XCTAssertEqual(snap.name.validity, .valid(value: "My Name"))
+    }
+
+    // ---- C20 / C21: the draft stash crosses the boundary and restores ---------------------------
+
+    /// The stash DTO round-trips through BoltFFI, and `restore` rebases it onto whatever canonical
+    /// says now: `email` moved while we were "dead" and comes back **conflicted**; `name` did not
+    /// and comes back merely dirty.
+    func testC21RestoreConflictsOnlyTheFieldsWhoseCanonicalMoved() throws {
+        let store = try seededStore()
+        let stash: ProfileStashFfi
+        do {
+            let draft = store.checkout()
+            try draft.trySetName(raw: "My Name")
+            try draft.trySetEmail(raw: "mine@other.com")
+            stash = draft.stash()
+            XCTAssertEqual(stash.name.raw, "My Name")
+            XCTAssertEqual(stash.name.base, "Alice Smith") // the ancestor crosses too
+        }
+
+        // A new process: a new store, seeded from a server that moved `email`.
+        let fresh = ProfileStoreFfi()
+        var moved = validValues()
+        moved.email = "server@corp.example"
+        try fresh.applyCanonical(values: moved)
+
+        let restored = fresh.restore(stash: stash)
+        let snap = restored.snapshot()
+
+        XCTAssertEqual(snap.conflicts, [.email])
+        guard case .conflicted(_, let theirs) = snap.email.sync else {
+            return XCTFail("email moved on the server; it must come back conflicted")
+        }
+        XCTAssertEqual(theirs, "server@corp.example", "a restored conflict names CURRENT canonical")
+        XCTAssertEqual(snap.email.validity, .valid(value: "mine@other.com"))
+
+        XCTAssertTrue(snap.name.dirty)
+        guard case .inSync = snap.name.sync else {
+            return XCTFail("`name` was untouched by the server; it must not conflict")
+        }
+        XCTAssertEqual(snap.name.validity, .valid(value: "My Name"))
+
+        // The verdict did not survive (C20), so C16 refuses a dirty username until it is re-checked.
+        XCTAssertEqual(snap.usernameCheck, .unchecked)
+        XCTAssertEqual(snap.version, fresh.canonical()?.version)
+    }
+
+    /// The entity was deleted while the process was dead: the restored draft orphans (C11), it does
+    /// not quietly commit and resurrect it.
+    func testC21RestoreIntoADeletedCanonicalOrphansTheDraft() throws {
+        let store = try seededStore()
+        let draft = store.checkout()
+        try draft.trySetName(raw: "My Name")
+        let stash = draft.stash()
+
+        let empty = ProfileStoreFfi() // no canonical: the server 404s
+        let restored = empty.restore(stash: stash)
+
+        XCTAssertEqual(restored.snapshot().status, .orphaned)
+        XCTAssertEqual(empty.liveDraftCount(), 1) // present, but not rebasing
+        XCTAssertThrowsError(try restored.submit()) { error in
+            guard case .orphaned? = error as? SubmitErrorFfi else {
+                return XCTFail("expected .orphaned, got \(error)")
+            }
+        }
+    }
 }

@@ -160,21 +160,27 @@ impl ProfileStoreFfi {
     /// checkouts (no canonical) do not (conformance C12).
     pub fn checkout(&self) -> ProfileDraftFfi {
         let mut g = lock(&self.core);
-        let id = g.next_id;
-        g.next_id += 1;
-        let base = g.canonical.clone();
-        let base_version = g.version;
-        let rebases = base.is_some();
-        let draft = ProfileDraft::from_canonical(base.as_ref(), base_version);
-        let producer = Arc::new(StreamProducer::new(256));
-        g.drafts.insert(
+        let draft = ProfileDraft::from_canonical(g.canonical.as_ref(), g.version);
+        let (id, producer) = adopt_locked(&mut g, draft);
+        ProfileDraftFfi {
             id,
-            DraftEntry {
-                draft: Some(draft),
-                producer: producer.clone(),
-                rebases,
-            },
-        );
+            core: Arc::clone(&self.core),
+            producer,
+            checker: Mutex::new(None),
+        }
+    }
+
+    /// Restore a draft the shell stashed before its process was killed (C21).
+    ///
+    /// The rebase inside `adopt_locked` is the whole point: a field whose canonical moved while the
+    /// process was dead comes back **conflicted**, not silently dirty over a base it never saw. The
+    /// restored draft's async verdict is `Unchecked`, so C16 will demand a fresh check before it
+    /// submits a dirty username — which is why the shell must render `username_check_required` as
+    /// progress rather than as an error on the first frame after a restore.
+    pub fn restore(&self, stash: ProfileStashFfi) -> ProfileDraftFfi {
+        let mut g = lock(&self.core);
+        let draft = ProfileDraft::from_stash(&to_core_stash(&stash));
+        let (id, producer) = adopt_locked(&mut g, draft);
         ProfileDraftFfi {
             id,
             core: Arc::clone(&self.core),
@@ -459,6 +465,20 @@ impl ProfileDraftFfi {
 
     // ---- observation (Feature 2 probes) ----
 
+    /// Flatten this draft to serializable data so the shell can persist it across process death
+    /// (C20). A tombstoned draft has nothing to stash and yields the create-flow (all-`None`) shape,
+    /// consistent with `snapshot()`.
+    ///
+    /// The shell calls this from wherever its platform says "you are about to be killed" —
+    /// `onSaveInstanceState` / `SavedStateHandle` on Android. Restoring is `ProfileStoreFfi::restore`.
+    pub fn stash(&self) -> ProfileStashFfi {
+        let g = lock(&self.core);
+        match g.drafts.get(&self.id).and_then(|e| e.draft.as_ref()) {
+            Some(draft) => to_stash_ffi(&draft.stash()),
+            None => to_stash_ffi(&ProfileDraft::from_canonical(None, 0).stash()),
+        }
+    }
+
     /// The draft's current state on demand — the recovery getter that makes drop-newest stream
     /// overflow non-fatal (a stalled subscriber can always re-read current state). Returns an
     /// all-unset snapshot for a tombstoned draft.
@@ -518,6 +538,46 @@ impl Drop for ProfileDraftFfi {
 
 fn live_draft_mut(core: &mut StoreCore, id: u64) -> Option<&mut ProfileDraft> {
     core.drafts.get_mut(&id).and_then(|e| e.draft.as_mut())
+}
+
+/// Register an externally-built draft and bring it up to date with canonical: the wrapper's copy of
+/// `bolted_core::Store::adopt`, and the single path behind both `checkout` and `restore`.
+///
+/// That the wrapper needs its own copy at all is the standing evidence for ARCHITECTURE §9's store
+/// concurrency question: `Store` is `Rc<RefCell<_>>` and cannot be `Send`, so this crate re-owns the
+/// loop. Adding `restore` to both sides in step 07 doubled that duplication, which is exactly the
+/// kind of measurement step 08 should be deciding on. The rules below must match `Store::adopt`'s
+/// table exactly, or a shell's behaviour depends on which side of the FFI it sits.
+fn adopt_locked(
+    g: &mut MutexGuard<'_, StoreCore>,
+    mut draft: ProfileDraft,
+) -> (u64, Arc<StreamProducer<ProfileSnapshot>>) {
+    let based = draft.is_based();
+    let rebases = match (based, &g.canonical) {
+        (true, Some(entity)) => {
+            let version = g.version;
+            draft.rebase(entity, version);
+            true
+        }
+        (true, None) => {
+            draft.orphan(); // the entity was deleted while the process was dead (C11)
+            false
+        }
+        (false, _) => false, // create-flow never rebases (C12)
+    };
+
+    let id = g.next_id;
+    g.next_id += 1;
+    let producer = Arc::new(StreamProducer::new(256));
+    g.drafts.insert(
+        id,
+        DraftEntry {
+            draft: Some(draft),
+            producer: producer.clone(),
+            rebases,
+        },
+    );
+    (id, producer)
 }
 
 fn build_draft_snapshot(draft: &ProfileDraft) -> ProfileSnapshot {
