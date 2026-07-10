@@ -29,6 +29,15 @@ gen gen-profile gen_profile
 # drift check compares code rather than bytes for exactly this reason; formatting here keeps the two
 # verbs from fighting over the same file.
 cargo fmt -p gen_note_ffi -p gen_profile_ffi
+# The foreign stash codec (D28): profile-app persists a draft across process death, and the codec is
+# emitted from the same declaration. Byte-compared by `mise run check` — no Gradle, NDK or formatter
+# in the loop, which is exactly what makes that comparison honest. Only `gen-profile` has a stash
+# consumer, so only it gets a codec (gen-note does not, as Apple does not).
+cargo run -q -p bolted-ffi-gen --bin gen-kotlin-codec -- \
+  "crates/gen-profile/src/lib.rs" \
+  "com.example.gen_profile_ffi" \
+  "dev.bolted.profileapp.generated" \
+  "android/profile-app/src/main/kotlin/dev/bolted/profileapp/generated/ProfileStashCodec.kt"
 echo
 echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
 """

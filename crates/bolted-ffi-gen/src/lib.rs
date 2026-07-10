@@ -258,3 +258,64 @@ pub fn check_drift(source: &str, feature_crate: &str, committed: &str) -> Result
     }
     Err("the two differ, but no line does — a trailing-newline difference".to_owned())
 }
+
+/// Emit the Kotlin stash codec (D28) for the feature declared in `source`.
+///
+/// `binding_pkg` is the package BoltFFI generates the Kotlin bindings into
+/// (`com.example.gen_profile_ffi`); `codec_pkg` is where the emitted codec lives
+/// (`dev.bolted.profileapp.generated`). Both are shell deployment facts the declaration does not
+/// carry, so they are passed in — exactly as `generate` is passed the feature crate ident.
+pub fn kotlin_stash_codec(source: &str, binding_pkg: &str, codec_pkg: &str) -> syn::Result<String> {
+    let file = syn::parse_file(source)?;
+    let feature = Feature::from_file(&file)?;
+    Ok(foreign::emit_kotlin_stash_codec(
+        &feature,
+        binding_pkg,
+        codec_pkg,
+    ))
+}
+
+/// The drift check for the committed Kotlin stash codec (D28), run inside `mise run check`.
+///
+/// **Byte** equality, not code equality: nothing formats a foreign generated file (rustfmt is why
+/// `check_drift` had to compare code, not bytes — there is no such formatter here), so the committed
+/// bytes must be exactly what `kotlin_stash_codec` writes. If an `.editorconfig`/ktlint hook ever
+/// rewrites the file, this check says so loudly — that is it working. Reports the first differing line.
+pub fn check_kotlin_codec_drift(
+    source: &str,
+    binding_pkg: &str,
+    codec_pkg: &str,
+    committed: &str,
+) -> Result<(), String> {
+    let generated =
+        kotlin_stash_codec(source, binding_pkg, codec_pkg).map_err(|e| e.to_string())?;
+    if !committed.starts_with("// @generated") {
+        return Err(
+            "the committed Kotlin stash codec has lost its `// @generated` banner. \
+                    Run `mise run gen:ffi`."
+                .to_owned(),
+        );
+    }
+    if committed == generated {
+        return Ok(());
+    }
+    let (mut want, mut got) = (committed.lines(), generated.lines());
+    let mut line = 0usize;
+    loop {
+        line += 1;
+        match (want.next(), got.next()) {
+            (None, None) => break,
+            (a, b) if a == b => continue,
+            (a, b) => {
+                return Err(format!(
+                    "the committed Kotlin stash codec drifted from its declaration, first at \
+                     line {line}:\n  committed: {}\n  generated: {}\n\n\
+                     Run `mise run gen:ffi`, then read the diff before you commit it.",
+                    a.unwrap_or("<end of file>"),
+                    b.unwrap_or("<end of file>"),
+                ));
+            }
+        }
+    }
+    Err("the two differ, but no line does — a trailing-newline difference".to_owned())
+}
