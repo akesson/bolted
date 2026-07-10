@@ -1,9 +1,9 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.UniquenessChecker
-import com.example.spike_profile_ffi.UniquenessVerdictFfi
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.UsernameChecker
+import com.example.gen_profile_ffi.CheckVerdictFfi
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicReference
@@ -152,8 +152,8 @@ class LifecycleProbe {
     }
 
     /**
-     * Callback-object lifetime. The generated bindings keep the Kotlin `UniquenessChecker` alive in a
-     * `ConcurrentHashMap<Long, UniquenessChecker>` (a strong reference) for as long as Rust holds the
+     * Callback-object lifetime. The generated bindings keep the Kotlin `UsernameChecker` alive in a
+     * `ConcurrentHashMap<Long, UsernameChecker>` (a strong reference) for as long as Rust holds the
      * callback handle — so abandoning the Kotlin reference is safe, and the checker is still invoked.
      */
     @Test
@@ -164,7 +164,7 @@ class LifecycleProbe {
             record("callback.kotlin_checker_collected", collected.toString())
 
             assertNotNull(
-                "the bindings' UniquenessCheckerMap should hold the checker strongly",
+                "the bindings' UsernameCheckerMap should hold the checker strongly",
                 abandoned.ref.get(),
             )
             draft.trySetUsername("bob_the_user")
@@ -174,8 +174,8 @@ class LifecycleProbe {
 
     /**
      * **And the callback is released deterministically — unlike the handle.** Dropping the Rust
-     * `Box<dyn UniquenessChecker>` (which `close()`ing the draft does) invokes the callback vtable's
-     * `free(handle)`, which lands in `UniquenessCheckerCallbacks.free` → `UniquenessCheckerMap.remove`.
+     * `Box<dyn UsernameChecker>` (which `close()`ing the draft does) invokes the callback vtable's
+     * `free(handle)`, which lands in `UsernameCheckerCallbacks.free` → `UsernameCheckerMap.remove`.
      * No finalizer is involved.
      *
      * The asymmetry with H1 is one of ownership direction: **Rust owns the callback** and can release
@@ -188,7 +188,7 @@ class LifecycleProbe {
         val abandoned = installAndAbandonChecker(draft)
         assertNotNull("held strongly while the draft lives", abandoned.ref.get())
 
-        draft.close() // drops the Rust Box<dyn UniquenessChecker> -> free(handle) -> map.remove
+        draft.close() // drops the Rust Box<dyn UsernameChecker> -> free(handle) -> map.remove
 
         val collected = awaitCollection(abandoned)
         record("callback.collected_after_draft_close", collected.toString())
@@ -223,16 +223,16 @@ class LifecycleProbe {
     private fun checkoutAndAbandon(store: ProfileStoreFfi): Abandoned<ProfileDraftFfi> =
         abandonOnAnotherThread { store.checkout() }
 
-    private fun installAndAbandonChecker(draft: ProfileDraftFfi): Abandoned<UniquenessChecker> =
+    private fun installAndAbandonChecker(draft: ProfileDraftFfi): Abandoned<UsernameChecker> =
         abandonOnAnotherThread {
             // Generated as a plain interface, not a `fun interface` — no SAM conversion.
             val checker =
-                object : UniquenessChecker {
-                    override fun checkUnique(username: String): UniquenessVerdictFfi =
-                        if (username == "admin") UniquenessVerdictFfi.TAKEN
-                        else UniquenessVerdictFfi.UNIQUE
+                object : UsernameChecker {
+                    override fun check(value: String): CheckVerdictFfi =
+                        if (value == "admin") CheckVerdictFfi.FAIL
+                        else CheckVerdictFfi.PASS
                 }
-            draft.setUniquenessChecker(checker)
+            draft.setUsernameChecker(checker)
             checker
         }
 

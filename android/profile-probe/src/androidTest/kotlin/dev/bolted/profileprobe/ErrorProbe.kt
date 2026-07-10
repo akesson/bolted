@@ -1,11 +1,11 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.SubmitErrorFfi
-import com.example.spike_profile_ffi.UsernameErrorFfi
-import com.example.spike_profile_ffi.UsernameValidity
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.SubmitErrorFfi
+import com.example.gen_profile_ffi.UsernameErrorFfi
+import com.example.gen_profile_ffi.TextValidity
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -54,8 +54,8 @@ class ErrorProbe {
     fun aRejectedValueIsRecordedAsInvalidWithTheRawText() {
         runCatching { draft.trySetUsername("ab") }
         val validity = draft.snapshot().username.validity
-        assertTrue("expected Invalid, got $validity", validity is UsernameValidity.Invalid)
-        assertEquals("ab", (validity as UsernameValidity.Invalid).raw)
+        assertTrue("expected Invalid, got $validity", validity is TextValidity.Invalid)
+        assertEquals("ab", (validity as TextValidity.Invalid).raw)
     }
 
     /** A refused submit carries the whole structured report, not a flattened message. */
@@ -84,7 +84,7 @@ class ErrorProbe {
         draft.trySetUsername("corp_alice")
         // C16: a dirty username with an unrun check is itself a rule violation, so without this the
         // report would carry two and the tier-2 rule under test would not be `single()`.
-        draft.setUniquenessChecker(uniqueChecker())
+        draft.setUsernameChecker(uniqueChecker())
         draft.runUsernameCheck()
         try {
             draft.submit()

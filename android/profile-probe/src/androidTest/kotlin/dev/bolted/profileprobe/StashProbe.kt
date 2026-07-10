@@ -1,15 +1,13 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.DraftStatusFfi
-import com.example.spike_profile_ffi.EmailErrorFfi
-import com.example.spike_profile_ffi.EmailFieldSync
-import com.example.spike_profile_ffi.EmailValidity
-import com.example.spike_profile_ffi.PersonNameFieldSync
-import com.example.spike_profile_ffi.PersonNameValidity
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.SubmitErrorFfi
-import com.example.spike_profile_ffi.UsernameCheckFfi
+import com.example.gen_profile_ffi.DraftStatusFfi
+import com.example.gen_profile_ffi.EmailErrorFfi
+import com.example.gen_profile_ffi.TextFieldSync
+import com.example.gen_profile_ffi.TextValidity
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.SubmitErrorFfi
+import com.example.gen_profile_ffi.CheckStateFfi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -22,7 +20,7 @@ import org.junit.Test
  * Android is the platform this mechanism exists for — it is the one that kills processes holding live
  * drafts — so the wire encoding gets exercised here before the Compose app depends on it. Note the
  * nested optionals: `ProfileStashFfi` holds `TextFieldStashFfi(raw: String?, base: String?)` and a
- * `DateRangeFieldStashFfi` whose optionals wrap a *record*. That is the first time an
+ * `AvailabilityStash` whose optionals wrap a *record*. That is the first time an
  * `Option<record>` has crossed on ART.
  *
  * The app-level tier (process death through a real `Bundle` and `Parcel`) lives in `android/profile-app`.
@@ -55,23 +53,23 @@ class StashProbe {
 
                 assertEquals(listOf(ProfileFieldId.EMAIL), snap.conflicts)
                 val sync = snap.email.sync
-                assertTrue(sync is EmailFieldSync.Conflicted)
+                assertTrue(sync is TextFieldSync.Conflicted)
                 assertEquals(
                     "a restored conflict must name the CURRENT canonical",
                     "server@corp.example",
-                    (sync as EmailFieldSync.Conflicted).theirs,
+                    (sync as TextFieldSync.Conflicted).theirs,
                 )
                 val mine = snap.email.validity
-                assertTrue(mine is EmailValidity.Valid && mine.value == "mine@other.com")
+                assertTrue(mine is TextValidity.Valid && mine.value == "mine@other.com")
 
                 // `name` was untouched by the server: dirty, not conflicted (C19 doing the work).
                 assertTrue(snap.name.dirty)
-                assertTrue(snap.name.sync is PersonNameFieldSync.InSync)
+                assertTrue(snap.name.sync is TextFieldSync.InSync)
                 val restoredName = snap.name.validity
-                assertTrue(restoredName is PersonNameValidity.Valid && restoredName.value == "My Name")
+                assertTrue(restoredName is TextValidity.Valid && restoredName.value == "My Name")
 
                 // The verdict did not survive (C20).
-                assertEquals(UsernameCheckFfi.Unchecked, snap.usernameCheck)
+                assertEquals(CheckStateFfi.Unchecked, snap.usernameCheck)
                 record("c21.restored_conflicts", snap.conflicts.toString())
             }
         }
@@ -96,8 +94,8 @@ class StashProbe {
             assertEquals("not-an-email", stash.email.raw)
             store.restore(stash).use { restored ->
                 val validity = restored.snapshot().email.validity
-                assertTrue("the user's rejected text is still theirs", validity is EmailValidity.Invalid)
-                assertEquals("not-an-email", (validity as EmailValidity.Invalid).raw)
+                assertTrue("the user's rejected text is still theirs", validity is TextValidity.Invalid)
+                assertEquals("not-an-email", (validity as TextValidity.Invalid).raw)
             }
         }
     }

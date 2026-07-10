@@ -1,10 +1,10 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileSnapshot
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.UsernameValidity
-import com.example.spike_profile_ffi.snapshots
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileSnapshot
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.TextValidity
+import com.example.gen_profile_ffi.snapshots
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
@@ -46,7 +46,7 @@ class StreamProbe {
     }
 
     private fun usernameOf(snapshot: ProfileSnapshot): String? =
-        (snapshot.username.validity as? UsernameValidity.Valid)?.value
+        (snapshot.username.validity as? TextValidity.Valid)?.value
 
     /** End to end: a mutation produces a snapshot the Kotlin collector receives, with the new value. */
     @Test

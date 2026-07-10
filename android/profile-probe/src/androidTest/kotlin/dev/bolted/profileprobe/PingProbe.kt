@@ -1,7 +1,7 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.ping
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.ping
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * Milestone 1 — the walking skeleton. Proves the whole pipeline before any probe code exists:
  * `boltffi pack android` → jniLibs + generated Kotlin → Gradle → headless GMD emulator → ART loads
- * `libspike_profile_ffi.so` → JNI_OnLoad → a Rust function returns a String across the boundary.
+ * `libgen_profile_ffi.so` → JNI_OnLoad → a Rust function returns a String across the boundary.
  */
 class PingProbe {
     @Test

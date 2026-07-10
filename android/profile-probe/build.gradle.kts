@@ -8,7 +8,7 @@ plugins {
 // The generated Kotlin + the packed .so are consumed IN PLACE from `boltffi pack android`'s output.
 // Nothing is copied or vendored: if `pack` drifts, this project must fail loudly rather than compile
 // against a stale checked-in copy.
-val ffiDist = file("../../crates/spike-profile-ffi/dist/android")
+val ffiDist = file("../../crates/gen-profile-ffi/dist/android")
 
 // `-Pbolted.hazard` flips the suite over to the UB probes (H2), which may kill the instrumented
 // process. By default they are excluded so a native crash cannot destroy the other probes' results.
@@ -72,11 +72,11 @@ dependencies {
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }
 
-// Fail early and legibly if `mise run pack:android` has not run.
+// Fail early and legibly if `mise run pack:android:gen` has not run.
 tasks.withType<com.android.build.gradle.tasks.MergeSourceSetFolders>().configureEach {
     doFirst {
         require(ffiDist.resolve("kotlin").isDirectory && ffiDist.resolve("jniLibs").isDirectory) {
-            "missing $ffiDist — run `mise run pack:android` first"
+            "missing $ffiDist — run `mise run pack:android:gen` first"
         }
     }
 }

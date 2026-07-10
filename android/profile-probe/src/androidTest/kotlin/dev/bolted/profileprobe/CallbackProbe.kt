@@ -1,10 +1,10 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.ProfileDraftFfi
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.UniquenessChecker
-import com.example.spike_profile_ffi.UniquenessVerdictFfi
-import com.example.spike_profile_ffi.UsernameCheckFfi
+import com.example.gen_profile_ffi.ProfileDraftFfi
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.UsernameChecker
+import com.example.gen_profile_ffi.CheckVerdictFfi
+import com.example.gen_profile_ffi.CheckStateFfi
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -36,9 +36,9 @@ class CallbackProbe {
         store.close()
     }
 
-    private fun checker(body: (String) -> UniquenessVerdictFfi) =
-        object : UniquenessChecker {
-            override fun checkUnique(username: String): UniquenessVerdictFfi = body(username)
+    private fun checker(body: (String) -> CheckVerdictFfi) =
+        object : UsernameChecker {
+            override fun check(value: String): CheckVerdictFfi = body(value)
         }
 
     /** No checker installed ⇒ the single-flight driver reports it did not run. */
@@ -51,10 +51,10 @@ class CallbackProbe {
     @Test
     fun aTakenVerdictBlocksAndAUniqueVerdictUnblocks() {
         val seen = AtomicReference<String>()
-        draft.setUniquenessChecker(
+        draft.setUsernameChecker(
             checker { username ->
                 seen.set(username)
-                if (username == "admin") UniquenessVerdictFfi.TAKEN else UniquenessVerdictFfi.UNIQUE
+                if (username == "admin") CheckVerdictFfi.FAIL else CheckVerdictFfi.PASS
             }
         )
 
@@ -63,8 +63,8 @@ class CallbackProbe {
         assertEquals("Rust passed the current text to the Kotlin checker", "admin", seen.get())
 
         val failed = draft.snapshot().usernameCheck
-        assertTrue("expected Failed, got $failed", failed is UsernameCheckFfi.Failed)
-        assertEquals("username_taken", (failed as UsernameCheckFfi.Failed).error.key)
+        assertTrue("expected Failed, got $failed", failed is CheckStateFfi.Failed)
+        assertEquals("username_taken", (failed as CheckStateFfi.Failed).error.key)
         assertTrue(
             "a failed check must block validation",
             draft.validate().ruleErrors.any { it.rule == "username_unique" },
@@ -72,7 +72,7 @@ class CallbackProbe {
 
         draft.trySetUsername("alice_two")
         assertTrue(draft.runUsernameCheck())
-        assertTrue(draft.snapshot().usernameCheck is UsernameCheckFfi.Passed)
+        assertTrue(draft.snapshot().usernameCheck is CheckStateFfi.Passed)
         assertTrue(draft.validate().ruleErrors.none { it.rule == "username_unique" })
     }
 
@@ -82,15 +82,15 @@ class CallbackProbe {
      */
     @Test
     fun editingAfterAVerdictResetsTheCheck() {
-        draft.setUniquenessChecker(checker { UniquenessVerdictFfi.TAKEN })
+        draft.setUsernameChecker(checker { CheckVerdictFfi.FAIL })
         draft.trySetUsername("admin")
         draft.runUsernameCheck()
-        assertTrue(draft.snapshot().usernameCheck is UsernameCheckFfi.Failed)
+        assertTrue(draft.snapshot().usernameCheck is CheckStateFfi.Failed)
 
         draft.trySetUsername("admin2")
         assertTrue(
             "the verdict belonged to 'admin'; it must not survive the edit",
-            draft.snapshot().usernameCheck is UsernameCheckFfi.Unchecked,
+            draft.snapshot().usernameCheck is CheckStateFfi.Unchecked,
         )
     }
 
@@ -102,12 +102,12 @@ class CallbackProbe {
     @Test(timeout = 20_000)
     fun aReentrantCheckerDoesNotDeadlock() {
         val reentered = AtomicReference(false)
-        draft.setUniquenessChecker(
+        draft.setUsernameChecker(
             checker {
                 draft.validate() // read, re-entering the same Rust object
                 draft.trySetName("Reentrant Name") // mutation, ditto
                 reentered.set(true)
-                UniquenessVerdictFfi.UNIQUE
+                CheckVerdictFfi.PASS
             }
         )
 

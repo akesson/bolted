@@ -1,12 +1,12 @@
 package dev.bolted.profileprobe
 
 import android.util.Log
-import com.example.spike_profile_ffi.PlainDate
-import com.example.spike_profile_ffi.PlainDateRange
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.ProfileValues
-import com.example.spike_profile_ffi.UniquenessChecker
-import com.example.spike_profile_ffi.UniquenessVerdictFfi
+import com.example.gen_profile_ffi.PlainDate
+import com.example.gen_profile_ffi.AvailabilityRaw
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.ProfileValues
+import com.example.gen_profile_ffi.UsernameChecker
+import com.example.gen_profile_ffi.CheckVerdictFfi
 
 /**
  * Shared fixture + the measurement channel.
@@ -32,7 +32,7 @@ val SEED: ProfileValues =
         name = "Alice Anderson",
         email = "alice@example.com",
         availability =
-            PlainDateRange(
+            AvailabilityRaw(
                 start = PlainDate(2026.toUShort(), 1.toUByte(), 1.toUByte()),
                 end = PlainDate(2026.toUShort(), 12.toUByte(), 31.toUByte()),
             ),
@@ -47,9 +47,9 @@ fun seededStore(): ProfileStoreFfi = ProfileStoreFfi.new().also { it.applyCanoni
  * a real shell must. Generated as a plain `interface`, not a `fun interface`, so no SAM conversion
  * (step-05 friction 5).
  */
-fun uniqueChecker(): UniquenessChecker =
-    object : UniquenessChecker {
-        override fun checkUnique(username: String): UniquenessVerdictFfi = UniquenessVerdictFfi.UNIQUE
+fun uniqueChecker(): UsernameChecker =
+    object : UsernameChecker {
+        override fun check(value: String): CheckVerdictFfi = CheckVerdictFfi.PASS
     }
 
 /** Sorted elapsed nanos for [iterations] calls of [body], after [warmup] untimed calls (ART JIT). */

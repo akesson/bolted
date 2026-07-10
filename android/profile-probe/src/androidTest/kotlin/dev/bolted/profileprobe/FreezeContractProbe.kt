@@ -1,11 +1,13 @@
 package dev.bolted.profileprobe
 
-import com.example.spike_profile_ffi.PersonNameFieldSync
-import com.example.spike_profile_ffi.PersonNameValidity
-import com.example.spike_profile_ffi.ProfileFieldId
-import com.example.spike_profile_ffi.ProfileStoreFfi
-import com.example.spike_profile_ffi.SubmitErrorFfi
-import com.example.spike_profile_ffi.UsernameCheckFfi
+import com.example.gen_profile_ffi.TextFieldSync
+import com.example.gen_profile_ffi.TextValidity
+import com.example.gen_profile_ffi.ProfileFieldId
+import com.example.gen_profile_ffi.ProfileStoreFfi
+import com.example.gen_profile_ffi.SubmitErrorFfi
+import com.example.gen_profile_ffi.CheckStateFfi
+import com.example.gen_profile_ffi.DraftClosedFfi
+import com.example.gen_profile_ffi.PersonNameErrorFfi
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,7 +22,8 @@ import org.junit.Test
  *
  * The Swift probe (`FreezeContractTests.swift`) asserts the same things. Running both is the point:
  * a contract that only holds on one codegen backend is a property of that generator, not of the
- * design. Step 10 will generate both from the C-IDs.
+ * design. Generating both from the C-IDs per language is a step-12 candidate; step 11 repointed
+ * this file at bindings nobody wrote by hand.
  */
 class FreezeContractProbe {
     private lateinit var store: ProfileStoreFfi
@@ -41,12 +44,12 @@ class FreezeContractProbe {
         store.checkout().use { draft ->
             draft.trySetName("My Name")
             store.applyCanonical(SEED.copy(name = "Server Name"))
-            assertTrue(draft.snapshot().name.sync is PersonNameFieldSync.Conflicted)
+            assertTrue(draft.snapshot().name.sync is TextFieldSync.Conflicted)
 
             draft.trySetName("Server Name") // type their value
 
             val snap = draft.snapshot()
-            assertTrue("editing to theirs must clear the conflict", snap.name.sync is PersonNameFieldSync.InSync)
+            assertTrue("editing to theirs must clear the conflict", snap.name.sync is TextFieldSync.InSync)
             assertFalse(snap.name.dirty)
             assertTrue(snap.conflicts.isEmpty())
             record("c14.auto_converged", "true")
@@ -80,7 +83,7 @@ class FreezeContractProbe {
     fun c16_anUnrunCheckOnADirtyUsernameBlocksSubmit() {
         store.checkout().use { draft ->
             draft.trySetUsername("alice2")
-            assertEquals(UsernameCheckFfi.Unchecked, draft.snapshot().usernameCheck)
+            assertEquals(CheckStateFfi.Unchecked, draft.snapshot().usernameCheck)
 
             try {
                 draft.submit()
@@ -93,9 +96,9 @@ class FreezeContractProbe {
             }
 
             // A passing verdict unblocks it.
-            draft.setUniquenessChecker(uniqueChecker())
+            draft.setUsernameChecker(uniqueChecker())
             assertTrue(draft.runUsernameCheck())
-            assertEquals(UsernameCheckFfi.Passed, draft.snapshot().usernameCheck)
+            assertEquals(CheckStateFfi.Passed, draft.snapshot().usernameCheck)
             draft.submit()
         }
         assertEquals("alice2", canonicalUsername())
@@ -106,7 +109,7 @@ class FreezeContractProbe {
     fun c16_aCleanUsernameNeedsNoCheckToSubmit() {
         store.checkout().use { draft ->
             draft.trySetEmail("bob@example.com")
-            assertEquals(UsernameCheckFfi.Unchecked, draft.snapshot().usernameCheck)
+            assertEquals(CheckStateFfi.Unchecked, draft.snapshot().usernameCheck)
             assertFalse(draft.snapshot().username.dirty)
             draft.submit() // must not throw
         }
@@ -133,12 +136,48 @@ class FreezeContractProbe {
 
             assertTrue("a refused submit must not consume the draft", draft.isLive())
             val validity = draft.snapshot().name.validity
-            assertTrue(validity is PersonNameValidity.Valid && validity.value == "My Name")
+            assertTrue(validity is TextValidity.Valid && validity.value == "My Name")
 
             // Resolve and resubmit on the SAME draft.
             draft.resolveKeepMine(ProfileFieldId.NAME)
             draft.submit()
             assertFalse("a successful submit tombstones the handle", draft.isLive())
+        }
+    }
+
+    /**
+     * D23: a mutating verb on a released handle refuses with a typed error. The positive control for
+     * the migration's one real trap — `runCatching {}` at a call site would swallow this refusal and
+     * reproduce exactly the silent no-op D23 abolished. Verified to go red with the refusal
+     * swallowed (the swallow was planted, watched fail, and removed).
+     */
+    @Test
+    fun d23_aMutatorOnASubmittedDraftThrowsDraftClosed() {
+        store.checkout().use { draft ->
+            // With NO checker set, `runUsernameCheck` short-circuits to `false` before it ever looks
+            // at the draft — the refusal below is only reachable with a checker installed.
+            draft.setUsernameChecker(uniqueChecker())
+            draft.submit() // C17: the store releases the draft
+            assertFalse(draft.isLive())
+
+            try {
+                draft.resolveKeepMine(ProfileFieldId.USERNAME)
+                fail("expected DraftClosedFfi — the refusal must reach the shell, typed")
+            } catch (_: DraftClosedFfi) {
+                record("d23.resolve_refused", "typed")
+            }
+            try {
+                draft.trySetName("Grace")
+                fail("expected PersonNameErrorFfi.DraftClosed")
+            } catch (e: PersonNameErrorFfi) {
+                assertTrue("got $e", e is PersonNameErrorFfi.DraftClosed)
+            }
+            try {
+                draft.runUsernameCheck()
+                fail("expected DraftClosedFfi from runUsernameCheck with a checker installed")
+            } catch (_: DraftClosedFfi) {
+                record("d23.check_refused", "typed")
+            }
         }
     }
 
@@ -158,10 +197,10 @@ class FreezeContractProbe {
 
             val snap = draft.snapshot()
             assertTrue("`name`'s canonical never moved", snap.conflicts.isEmpty())
-            assertTrue(snap.name.sync is PersonNameFieldSync.InSync)
+            assertTrue(snap.name.sync is TextFieldSync.InSync)
             assertTrue("my edit survives", snap.name.dirty)
             val validity = snap.name.validity
-            assertTrue(validity is PersonNameValidity.Valid && validity.value == "My Name")
+            assertTrue(validity is TextValidity.Valid && validity.value == "My Name")
             record("c19.spurious_conflict", "absent")
         }
     }
@@ -197,7 +236,7 @@ class FreezeContractProbe {
 
     private fun canonicalUsername(): String {
         val validity = store.canonical()?.username?.validity
-        return (validity as? com.example.spike_profile_ffi.UsernameValidity.Valid)?.value
+        return (validity as? com.example.gen_profile_ffi.TextValidity.Valid)?.value
             ?: error("canonical must be valid")
     }
 }
