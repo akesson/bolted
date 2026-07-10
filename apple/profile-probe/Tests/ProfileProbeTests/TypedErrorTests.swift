@@ -1,5 +1,5 @@
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// Feature 3 — `Result` methods with typed error enums. The point is that STRUCTURED payloads
 /// (associated values, and the nested validation report) survive to Swift, not flattened strings.
@@ -19,14 +19,15 @@ final class TypedErrorTests: XCTestCase {
         }
     }
 
-    /// The composite value object's error carries its two dates as associated values, and the
-    /// setter takes two arguments — never a tuple.
+    /// The composite value object's error carries its two dates as associated values. The setter
+    /// takes the raw record (D20's shadow: same two dates, same order, same validation — the
+    /// two-argument spelling was the hand-written spike's).
     func testDateRangeSetterThrowsTyped() {
         let draft = ProfileStoreFfi().checkout()
         let start = PlainDate(year: 2026, month: 12, day: 31)
         let end = PlainDate(year: 2026, month: 1, day: 1)
-        XCTAssertThrowsError(try draft.trySetAvailability(start: start, end: end)) { error in
-            XCTAssertEqual(error as? DateRangeErrorFfi, .startAfterEnd(start: start, end: end))
+        XCTAssertThrowsError(try draft.trySetAvailability(raw: AvailabilityRaw(start: start, end: end))) { error in
+            XCTAssertEqual(error as? AvailabilityErrorFfi, .startAfterEnd(start: start, end: end))
         }
     }
 
@@ -74,10 +75,10 @@ final class TypedErrorTests: XCTestCase {
         try draft.trySetUsername(raw: "corp_bob")
         try draft.trySetName(raw: "Bob")
         try draft.trySetEmail(raw: "bob@gmail.com") // not corp.example → rule fires
-        try draft.trySetAvailability(
+        try draft.trySetAvailability(raw: AvailabilityRaw(
             start: PlainDate(year: 2026, month: 1, day: 1),
             end: PlainDate(year: 2026, month: 2, day: 1)
-        )
+        ))
         let report = draft.validate()
         XCTAssertTrue(report.ruleNames.contains("corporate_email"))
         let violation = report.ruleErrors.first { $0.rule == "corporate_email" }

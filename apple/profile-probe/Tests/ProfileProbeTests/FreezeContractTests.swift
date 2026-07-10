@@ -1,13 +1,13 @@
 import XCTest
 
-@testable import SpikeProfileFfi
+@testable import GenProfileFfi
 
 /// The invariants the design freeze (step 06) added, exercised **through BoltFFI** rather than
 /// against `bolted-core` directly. `docs/CONFORMANCE.md` is the normative statement of each; this
 /// file is the Swift half of the evidence that they survive a codegen backend.
 ///
-/// Step 10 will generate these from the C-IDs. Until then they are hand-written, like everything
-/// else in the spike.
+/// Generating these from the C-IDs per language is a step-12 candidate; until then they are
+/// hand-written, driving bindings that no longer are (step 11).
 final class FreezeContractTests: XCTestCase {
 
     private func seededStore() throws -> ProfileStoreFfi {
@@ -83,8 +83,8 @@ final class FreezeContractTests: XCTestCase {
         }
 
         // Run the check; a passing verdict unblocks the submit.
-        draft.setUniquenessChecker(checker: StubChecker(.unique))
-        XCTAssertTrue(draft.runUsernameCheck())
+        draft.setUsernameChecker(checker: StubChecker(.pass))
+        XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
         XCTAssertNoThrow(try draft.submit())
         XCTAssertEqual(store.canonical()?.username.validity, .valid(value: "alice2"))
@@ -142,7 +142,7 @@ final class FreezeContractTests: XCTestCase {
         XCTAssertEqual(draft.snapshot().name.validity, .valid(value: "My Name"), "my edit survived")
 
         // Resolve and resubmit on the SAME draft.
-        draft.resolveKeepMine(field: .name)
+        try draft.resolveKeepMine(field: .name)
         XCTAssertNoThrow(try draft.submit())
         XCTAssertFalse(draft.isLive())
         XCTAssertEqual(store.canonical()?.name.validity, .valid(value: "My Name"))
@@ -158,6 +158,32 @@ final class FreezeContractTests: XCTestCase {
             guard case .alreadySubmitted? = error as? SubmitErrorFfi else {
                 return XCTFail("expected .alreadySubmitted, got \(error)")
             }
+        }
+    }
+
+    // ---- D23: a mutating verb on a released handle refuses, typed --------------------------------
+
+    /// The positive control for the migration's one real trap: `try?` at a call site would swallow
+    /// this refusal and reproduce exactly the silent no-op D23 abolished. Verified to go red with
+    /// the refusal swallowed (the swallow was planted, watched fail, and removed) — a control that
+    /// has never failed is a needle that has never fired.
+    func testD23MutatorOnASubmittedDraftThrowsDraftClosed() throws {
+        let store = try seededStore()
+        let draft = store.checkout()
+        // With NO checker set, `runUsernameCheck` short-circuits to `false` before it ever looks at
+        // the draft — the refusal below is only reachable with a checker installed.
+        draft.setUsernameChecker(checker: StubChecker(.pass))
+        try draft.submit() // C17: the store releases the draft
+        XCTAssertFalse(draft.isLive())
+
+        XCTAssertThrowsError(try draft.resolveKeepMine(field: .username)) { error in
+            XCTAssertEqual(error as? DraftClosedFfi, .draftClosed)
+        }
+        XCTAssertThrowsError(try draft.trySetName(raw: "Grace")) { error in
+            XCTAssertEqual(error as? PersonNameErrorFfi, .draftClosed)
+        }
+        XCTAssertThrowsError(try draft.runUsernameCheck()) { error in
+            XCTAssertEqual(error as? DraftClosedFfi, .draftClosed)
         }
     }
 

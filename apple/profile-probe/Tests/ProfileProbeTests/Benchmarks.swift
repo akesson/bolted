@@ -1,5 +1,5 @@
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// Measurements — recorded, NOT gated. Apple overhead is not evidence for the JNI per-keystroke
 /// bet (step 05 re-measures on Android, VISION's worst case); this is only a baseline. Each

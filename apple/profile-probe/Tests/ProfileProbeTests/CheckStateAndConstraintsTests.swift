@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// Step-03 FFI additions (Deliverable B): the async-check sub-state now reaches the snapshot
 /// (step-02 finding 7) and constraint metadata crosses the boundary. These probes prove both
@@ -17,14 +17,14 @@ final class CheckStateAndConstraintsTests: XCTestCase {
         let draft = store.checkout()
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
 
-        draft.setUniquenessChecker(checker: StubChecker(.unique))
-        XCTAssertTrue(draft.runUsernameCheck())
+        draft.setUsernameChecker(checker: StubChecker(.pass))
+        XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
 
-        // a taken verdict surfaces as .failed carrying the check's ErrorData (username value
+        // a failing verdict surfaces as .failed carrying the check's ErrorData (username value
         // unchanged between checks, so no reset intervenes).
-        draft.setUniquenessChecker(checker: StubChecker(.taken))
-        XCTAssertTrue(draft.runUsernameCheck())
+        draft.setUsernameChecker(checker: StubChecker(.fail))
+        XCTAssertTrue(try draft.runUsernameCheck())
         guard case .failed(let error) = draft.snapshot().usernameCheck else {
             return XCTFail("expected .failed sub-state")
         }
@@ -41,8 +41,8 @@ final class CheckStateAndConstraintsTests: XCTestCase {
         let draft = store.checkout()
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
 
-        let checker = BlockingChecker(.unique)
-        draft.setUniquenessChecker(checker: checker)
+        let checker = BlockingChecker(.pass)
+        draft.setUsernameChecker(checker: checker)
 
         // Subscribe first — streams are future-only — then drive the (blocking) check off-thread.
         let stream = draft.snapshots()
@@ -65,7 +65,7 @@ final class CheckStateAndConstraintsTests: XCTestCase {
         DispatchQueue.global().async { driver.run() }
 
         await fulfillment(of: [sawPending], timeout: 5)  // emitted before the callout completes
-        checker.releaseChecker()                         // let the callout return .unique
+        checker.releaseChecker()                         // let the callout return .pass
         await fulfillment(of: [sawPassed], timeout: 5)   // now it settles
         observer.cancel()
 
@@ -79,14 +79,14 @@ final class CheckStateAndConstraintsTests: XCTestCase {
         try store.applyCanonical(values: validValues())
         let draft = store.checkout()
 
-        draft.setUniquenessChecker(checker: StubChecker(.unique))
-        XCTAssertTrue(draft.runUsernameCheck())
+        draft.setUsernameChecker(checker: StubChecker(.pass))
+        XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
 
         try draft.trySetUsername(raw: "different")             // value moved -> reset
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
 
-        XCTAssertTrue(draft.runUsernameCheck())                // re-endorse "different"
+        XCTAssertTrue(try draft.runUsernameCheck())            // re-endorse "different"
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
         try draft.trySetUsername(raw: "different")             // same value -> verdict stands
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
@@ -100,8 +100,8 @@ final class CheckStateAndConstraintsTests: XCTestCase {
             try store.applyCanonical(values: validValues())      // username "alice"
             let draft = store.checkout()
             try draft.trySetUsername(raw: "mine")                // dirty
-            draft.setUniquenessChecker(checker: StubChecker(.unique))
-            XCTAssertTrue(draft.runUsernameCheck())              // verdict endorses "mine"
+            draft.setUsernameChecker(checker: StubChecker(.pass))
+            XCTAssertTrue(try draft.runUsernameCheck())          // verdict endorses "mine"
             XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
             var conflicting = validValues()
             conflicting.username = "theirs"
@@ -112,11 +112,11 @@ final class CheckStateAndConstraintsTests: XCTestCase {
         }
 
         let takeDraft = try conflictedDraft()
-        takeDraft.resolveTakeTheirs(field: .username)
+        try takeDraft.resolveTakeTheirs(field: .username)
         XCTAssertEqual(takeDraft.snapshot().usernameCheck, .unchecked)
 
         let keepDraft = try conflictedDraft()
-        keepDraft.resolveKeepMine(field: .username)
+        try keepDraft.resolveKeepMine(field: .username)
         XCTAssertEqual(keepDraft.snapshot().usernameCheck, .passed)
     }
 
@@ -151,14 +151,14 @@ final class CheckStateAndConstraintsTests: XCTestCase {
 
 // --- Step-03 test helpers ----------------------------------------------------------------------
 
-/// Blocks inside `checkUnique` until the test releases it, so a stream consumer can observe the
+/// Blocks inside `check` until the test releases it, so a stream consumer can observe the
 /// in-flight `Pending` snapshot. `@unchecked Sendable`: the semaphore and the immutable verdict are
 /// the only state and both are thread-safe.
-final class BlockingChecker: UniquenessChecker, @unchecked Sendable {
+final class BlockingChecker: UsernameChecker, @unchecked Sendable {
     private let release = DispatchSemaphore(value: 0)
-    private let verdict: UniquenessVerdictFfi
-    init(_ verdict: UniquenessVerdictFfi) { self.verdict = verdict }
-    func checkUnique(username: String) -> UniquenessVerdictFfi {
+    private let verdict: CheckVerdictFfi
+    init(_ verdict: CheckVerdictFfi) { self.verdict = verdict }
+    func check(value: String) -> CheckVerdictFfi {
         release.wait()
         return verdict
     }
@@ -170,5 +170,5 @@ final class BlockingChecker: UniquenessChecker, @unchecked Sendable {
 final class CheckDriver: @unchecked Sendable {
     private let draft: ProfileDraftFfi
     init(_ draft: ProfileDraftFfi) { self.draft = draft }
-    func run() { _ = draft.runUsernameCheck() }
+    func run() { _ = try? draft.runUsernameCheck() }
 }

@@ -1,5 +1,5 @@
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// Milestone 1 — the walking skeleton. Proves the whole pipeline crosses end to end
 /// (annotate → `boltffi pack apple` → XCFramework → local SwiftPM dep → `swift test` on the

@@ -1,5 +1,5 @@
 import Foundation
-import SpikeProfileFfi
+import GenProfileFfi
 
 // Shared fixtures + tiny helpers for the probe tests.
 
@@ -9,7 +9,7 @@ func validValues() -> ProfileValues {
         username: "alice",
         name: "Alice Smith",
         email: "alice@example.com",
-        availability: PlainDateRange(
+        availability: AvailabilityRaw(
             start: PlainDate(year: 2026, month: 1, day: 1),
             end: PlainDate(year: 2026, month: 12, day: 31)
         )
@@ -36,25 +36,25 @@ final class SnapshotBox: @unchecked Sendable {
     var value: ProfileSnapshot?
 }
 
-// --- Uniqueness-checker capability stubs (implemented on the Swift side) ---
+// --- Username-checker capability stubs (implemented on the Swift side) ---
 
 /// Returns a fixed verdict.
-final class StubChecker: UniquenessChecker {
-    let verdict: UniquenessVerdictFfi
-    init(_ verdict: UniquenessVerdictFfi) { self.verdict = verdict }
-    func checkUnique(username: String) -> UniquenessVerdictFfi { verdict }
+final class StubChecker: UsernameChecker {
+    let verdict: CheckVerdictFfi
+    init(_ verdict: CheckVerdictFfi) { self.verdict = verdict }
+    func check(value: String) -> CheckVerdictFfi { verdict }
 }
 
 /// Synchronously re-enters the SAME draft from inside the callback — the reentrancy/deadlock probe.
-final class ReentrantChecker: UniquenessChecker {
+final class ReentrantChecker: UsernameChecker {
     weak var draft: ProfileDraftFfi?
     var reentered = false
-    func checkUnique(username: String) -> UniquenessVerdictFfi {
+    func check(value: String) -> CheckVerdictFfi {
         if let draft {
             _ = draft.validate() // a reentrant READ (locks the store's Mutex)
             try? draft.trySetName(raw: "Reentrant") // a reentrant MUTATION (locks + emits)
             reentered = true
         }
-        return .unique
+        return .pass
     }
 }

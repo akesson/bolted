@@ -1,5 +1,5 @@
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// Feature 1 — classes / handles. Records observed behaviour, not just success.
 final class ClassHandleTests: XCTestCase {
@@ -48,10 +48,11 @@ final class ClassHandleTests: XCTestCase {
         _ = keep.id()
     }
 
-    /// A submitted draft becomes an inert tombstone: `isLive()` is false, mutating calls are silent
-    /// no-ops (do not throw), a second submit reports `AlreadySubmitted`, and it is not "live".
-    /// This is why `submit` never needs to consume the foreign handle (partly dissolving F3/Q6 at
-    /// the FFI layer) — recorded, not fixed here.
+    /// A submitted draft becomes an inert tombstone: `isLive()` is false, a mutating call refuses
+    /// with the typed `draftClosed` (D23 — before step 10 this was a silent no-op), a second submit
+    /// reports `AlreadySubmitted`, and it is not "live". This is why `submit` never needs to
+    /// consume the foreign handle (partly dissolving F3/Q6 at the FFI layer) — recorded, not fixed
+    /// here.
     func testPostSubmitTombstone() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
@@ -61,7 +62,9 @@ final class ClassHandleTests: XCTestCase {
         try draft.submit()
 
         XCTAssertFalse(draft.isLive())
-        XCTAssertNoThrow(try draft.trySetUsername(raw: "ignored")) // silent no-op
+        XCTAssertThrowsError(try draft.trySetUsername(raw: "ignored")) { error in
+            XCTAssertEqual(error as? UsernameErrorFfi, .draftClosed) // D23: typed, not silent
+        }
         XCTAssertEqual(store.liveDraftCount(), 0)
         XCTAssertThrowsError(try draft.submit()) { error in
             XCTAssertEqual(error as? SubmitErrorFfi, .alreadySubmitted)

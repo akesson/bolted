@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// Feature 2 — async streams (snapshots). BoltFFI exposes each `#[ffi_stream]` as a Swift
 /// `AsyncStream` with an `.unbounded` buffer, fed by a background poll loop that drains the Rust
