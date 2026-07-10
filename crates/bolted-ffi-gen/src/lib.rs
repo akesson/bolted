@@ -289,12 +289,48 @@ pub fn check_kotlin_codec_drift(
 ) -> Result<(), String> {
     let generated =
         kotlin_stash_codec(source, binding_pkg, codec_pkg).map_err(|e| e.to_string())?;
+    kotlin_drift("Kotlin stash codec", committed, &generated)
+}
+
+/// Emit the Kotlin per-language contract suite (D28) for the feature declared in `source`.
+///
+/// `binding_pkg` is the package BoltFFI generates the Kotlin bindings into; `suite_pkg` is where the
+/// emitted suite lives — both shell deployment facts the declaration does not carry, so passed in.
+pub fn kotlin_contract_suite(
+    source: &str,
+    binding_pkg: &str,
+    suite_pkg: &str,
+) -> syn::Result<String> {
+    let file = syn::parse_file(source)?;
+    let feature = Feature::from_file(&file)?;
+    Ok(foreign::emit_kotlin_contract_suite(
+        &feature,
+        binding_pkg,
+        suite_pkg,
+    ))
+}
+
+/// The drift check for the committed Kotlin contract suite (D28), run inside `mise run check`.
+pub fn check_kotlin_contract_suite_drift(
+    source: &str,
+    binding_pkg: &str,
+    suite_pkg: &str,
+    committed: &str,
+) -> Result<(), String> {
+    let generated =
+        kotlin_contract_suite(source, binding_pkg, suite_pkg).map_err(|e| e.to_string())?;
+    kotlin_drift("Kotlin contract suite", committed, &generated)
+}
+
+/// **Byte** equality, not code equality: nothing formats a foreign generated file (rustfmt is why
+/// `check_drift` had to compare code, not bytes — there is no such formatter here), so the committed
+/// bytes must be exactly what the emitter writes. If an `.editorconfig`/ktlint hook ever rewrites the
+/// file, this check says so loudly — that is it working. Reports the first differing line.
+fn kotlin_drift(what: &str, committed: &str, generated: &str) -> Result<(), String> {
     if !committed.starts_with("// @generated") {
-        return Err(
-            "the committed Kotlin stash codec has lost its `// @generated` banner. \
-                    Run `mise run gen:ffi`."
-                .to_owned(),
-        );
+        return Err(format!(
+            "the committed {what} has lost its `// @generated` banner. Run `mise run gen:ffi`."
+        ));
     }
     if committed == generated {
         return Ok(());
@@ -308,8 +344,8 @@ pub fn check_kotlin_codec_drift(
             (a, b) if a == b => continue,
             (a, b) => {
                 return Err(format!(
-                    "the committed Kotlin stash codec drifted from its declaration, first at \
-                     line {line}:\n  committed: {}\n  generated: {}\n\n\
+                    "the committed {what} drifted from its declaration, first at line {line}:\n  \
+                     committed: {}\n  generated: {}\n\n\
                      Run `mise run gen:ffi`, then read the diff before you commit it.",
                     a.unwrap_or("<end of file>"),
                     b.unwrap_or("<end of file>"),

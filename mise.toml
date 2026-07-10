@@ -38,6 +38,14 @@ cargo run -q -p bolted-ffi-gen --bin gen-kotlin-codec -- \
   "com.example.gen_profile_ffi" \
   "dev.bolted.profileapp.generated" \
   "android/profile-app/src/main/kotlin/dev/bolted/profileapp/generated/ProfileStashCodec.kt"
+# The per-language contract suite (D28, step 13): every emitted C-ID projected through the public
+# generated surface, generic over the hand-written values-only fixture beside it. Byte-compared by
+# `mise run check`; run on the emulator by `test:android`. Only `gen-profile` has a probe tier.
+cargo run -q -p bolted-ffi-gen --bin gen-kotlin-suite -- \
+  "crates/gen-profile/src/lib.rs" \
+  "com.example.gen_profile_ffi" \
+  "dev.bolted.profileprobe.generated" \
+  "android/profile-probe/src/androidTest/kotlin/dev/bolted/profileprobe/generated/ProfileConformanceSuite.kt"
 echo
 echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
 """

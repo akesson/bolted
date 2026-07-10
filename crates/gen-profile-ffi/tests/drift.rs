@@ -36,3 +36,22 @@ fn the_committed_kotlin_stash_codec_matches_the_declaration() {
         panic!("{e}");
     }
 }
+
+/// D28: the committed Kotlin contract suite is exactly what the declaration generates. Byte equality,
+/// same as the codec — the suite is emitted; the values-only `ProfileConformanceFixture.kt` beside it
+/// is hand-written and not drift-checked (its correctness is the Kotlin compiler's + the emulator's).
+#[test]
+fn the_committed_kotlin_contract_suite_matches_the_declaration() {
+    let source = include_str!("../../gen-profile/src/lib.rs");
+    let committed = include_str!(
+        "../../../android/profile-probe/src/androidTest/kotlin/dev/bolted/profileprobe/generated/ProfileConformanceSuite.kt"
+    );
+    if let Err(e) = bolted_ffi_gen::check_kotlin_contract_suite_drift(
+        source,
+        "com.example.gen_profile_ffi",
+        "dev.bolted.profileprobe.generated",
+        committed,
+    ) {
+        panic!("{e}");
+    }
+}
