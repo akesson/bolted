@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.4, step 06; amended steps 07, 08, 09 and 10).** Phase 1 validated this design against
+**Status: FROZEN (v1.5, step 06; amended steps 07, 08, 09, 10 and the step-12 design pass).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -15,8 +15,13 @@ is amended to state the precedence of its own refusals — a rule both spikes ha
 source, committed and drift-checked; **D23** gives a released draft a typed refusal; **D24** shares one
 field-state family per raw type; **D25** makes the declaration parsed once. Step 10 also **corrects §5**:
 a proc macro can never emit an FFI surface, because BoltFFI's bindgen reads source text and never sees
-expanded Rust. A freeze is a commitment to a design, not a promise that the design was already correct —
-the record of what changed, and why, is the point.
+expanded Rust. **v1.5** carries the step-12 design pass's two, resolving the §9 questions that blocked
+that step: **D26** declines the `Cleaner` backstop — leak-freedom becomes a per-language contract test
+over C22's live-draft count, and the use-after-close half stays an upstream filing; **D27** makes the
+draft stash a versioned, parse-don't-validate envelope — wholesale refusal only at the parse gate,
+per-field salvage inside it, and constraint tightening a build-time event. A freeze is a commitment to
+a design, not a promise that the design was already correct — the record of what changed, and why, is
+the point.
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
@@ -428,26 +433,13 @@ what, and why it was worth it.
 | **D23** — a mutating verb on a released draft returns a typed `DraftClosed`; observers stay total | Make the FFI draft an id the store resolves, so a stale handle simply finds nothing; or probe-and-defer | Step 10, answering §9. Two hazards look alike and are not. **(a)** C17's submit releases the draft store-side while the foreign object lives on — ours, and a silent `Ok(())` for `trySetUsername` after submit is the framework lying about a write. Mutators (`try_set_*`, `resolve_*`, `run_*_check`) now refuse; `snapshot`, `validate`, `stash`, `is_live` stay total because a shell must be able to *ask* whether a draft is alive without catching an exception. **(b)** a foreign object released by Kotlin's `close()` frees the Rust object; a later call is a dangling pointer, and the generated Kotlin holds a `__boltffi_closed` flag it never reads. **(b) is not fixable from our side** and is filed upstream |
 | **D24** — one field-state DTO family per **raw** type, hosted in `bolted-ffi` (`TextValidity`, `TextFieldSync`, `TextFieldState`); error types stay per **value** | One family per value type (what `spike-profile-ffi` hand-wrote) | Step 10, answering §9's dedup residue (D19). `#[data]` forbids generics, so the FFI must monomorphize what `Field<V>` keeps generic — but the axis it must key on is `V::Raw`, not `V`: a validity is `Valid(Raw)` or `Invalid { raw, error }`, and only the *error* differs per value. Three text fields collapse from nine types to three. Errors do not collapse: `UsernameError` and `EmailError` have different variants, and merging them would give Swift a `case tooShort` on an email. The measurement is in `step-10-surface-delta.md` — 11 declarations become 3, and every shell change is a rename |
 | **D25** — the declaration is parsed **once**, by `bolted-decl`; `bolted-macros` and `bolted-ffi-gen` are both emitters over it | Each emitter parses the source it needs | Step 10. Two parsers are two contracts, and they disagree in ways nothing catches: `len_chars(min = 0)` raises no `TooShort`, so an FFI generator that re-derived the variant list would emit a `UsernameErrorFfi::TooShort` its own `From` impl could never construct — and rustc would accept it. Worse, the drift check would then compare a generator against itself. The one shared `ValueDecl::error_variants` is the whole argument. Undeclared value types (composites, D20) are not guessed at: the generator emits `use crate::custom::*;` and names the types it needs, so a missing one is a **compile error** (rung 2), not a binding that quietly lost a field |
+| **D26** — **no `Cleaner` backstop.** Leak-freedom is a **contract test** over C22's live-draft count (teardown returns the count to its baseline, per language), `close()` in `onCleared()` is the tested Kotlin rule, and the use-after-`close()` half stays an upstream filing | Emit a Kotlin layer that registers a `java.lang.ref.Cleaner` per handle, so a forgotten `close()` leaks until GC rather than forever | Step-12 design pass. Three reasons, in order of hardness. **Ownership**: the handle class, its `__boltffi_closed` CAS and its free shim are BoltFFI bindgen output (step 05 read them, step 11 M0 re-read them) — a Cleaner registered from outside that class must reach the free shim while holding no reference to the object, i.e. bypass the idempotence guard, trading a deterministic leak for a nondeterministic double-free and coupling Bolted to upstream internals. **Doctrine**: it is D16's rejected mechanic again — a framework device that acts only at runtime, at GC's discretion; under a Cleaner a forgotten `close()` *passes every test* that does not provoke a collection, which absolves the exact bug C18 exists to make loud. **Coverage**: the dangerous half, H2's use-after-`close()` UB, a Cleaner cannot touch — freed-at-GC dangles exactly like freed-at-close. The only real fix is generated methods consulting the flag they already carry, which is upstream's flag and upstream's filing (step 12 drafts it). What Bolted owns is the store side, and C22 already counts it — so the backstop Bolted ships is *detection at the contract-test tier*, not absolution at runtime. If upstream grows an opt-in Cleaner inside bindgen, where the CAS makes it safe, revisit |
+| **D27** — the stash envelope is **versioned, parse-don't-validate data**: the schema version is stamped into the *generated* stash DTO from the declaration; an envelope that fails the version/shape gate is refused **wholesale and typed**; inside a parsed envelope, restore salvages **per field** (step 07's degradation stands) and never refuses; constraint *tightening* is a **build-time** event — `bolted-check`'s constraint-semver snapshot (Phase 4) fails the build until the team makes a version decision | Refuse the whole stash whenever any field is stale; or bump the version on every constraint change so old stashes die at the gate; or the status quo — a hand-written shell codec owning an ad-hoc `FORMAT_VERSION` | Step-12 design pass. The raws inside a stash are the user's own keystrokes, and C06 already gives an unparseable raw a home (`Invalid { raw }`) — refusing them all because *one* field's constraints tightened is data loss as policy, the bug live-rebase exists to prevent; so the semantic case keeps per-field degradation (`base` → `None`). The degraded field is then *dirty from unset*, so the next rebase against live canonical must surface it as a **conflict** the UI already renders — a claim step 12 tests (C23) rather than assumes. The *structural* case is different: an envelope that cannot be parsed has nothing to salvage, and refusing it wholesale is just tier 1 applied to the envelope. The deciding fact is where today's only version gate lives: `StashCodec.kt`, a hand-written shell file that step 12's codec-deletion item would otherwise silently delete — the version therefore moves into the generated stash DTO, and the gate travels with the generated codec. What no runtime path can do is *warn the team* that a tightening happened; that is the build-time rung, and it is `bolted-check`'s (Phase 4). Costs nothing in the core: `Stashable::from_stash` stays infallible — the gate is at the DTO boundary, where the untrusted bytes are |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
 Each names the step that owns it. Nothing below blocks Phase 3.
 
-- **A `Cleaner` backstop for a forgotten `close()`** — *step 12.* The half of the use-after-close
-  question D23 could not answer. D23 makes a **store-side** release (C17's submit) a typed
-  `DraftClosed` on every mutating verb. It cannot touch the **foreign-side** release: BoltFFI handles
-  are raw pointers, generated instance methods never consult the `__boltffi_closed` flag they carry,
-  so on Kotlin a use-after-`close()` reads freed memory and, after allocator churn, **silently aliases
-  another live draft** (step 05, H2 — no crash). Filed upstream. Meanwhile: should `<feature>-ffi`
-  emit a `java.lang.ref.Cleaner` backstop, so a forgotten `close()` leaks until GC rather than forever?
-- **Stash schema evolution** — *step 12 and Phase 4 (`bolted-check`).* The stash is the
-  framework's first **untrusted input**: bytes the OS kept while the process was dead, possibly
-  written by an *older version of the app*. C01 says a value's raw form roundtrips — so an ancestor
-  that no longer parses means the constraints were tightened between releases. Step 07 degrades that
-  field to create-flow (no ancestor), which is safe but silent. Should the whole stash be refused?
-  Should `bolted-check`'s constraint-semver snapshots make a tightening a *build* error when a stash
-  format version does not also change? Introduced by D15, and it is the one question stash/restore
-  opened rather than closed.
 - **One-shot effects** (focus-first-invalid-field, toasts, **navigation**) — *its own session.*
   Likely `Option<(Request, Generation)>` state + ack, but navigation deserves the session.
 - **Process topology for OS-integration surfaces** (daemons, tray, file-manager extensions) — *its own
@@ -476,7 +468,11 @@ with a synchronous checker `begin`/`complete` are atomic inside one call, so a `
 a `snapshot()` caller — it reaches a **stream subscriber**, because the generated check driver pushes a
 snapshot between the two halves. `gen-profile-ffi`'s `a_check_in_flight_is_observably_pending` asserts
 the sequence `[Pending, Passed]` off the subscription. A spinner bound to the stream is real; one bound
-to `snapshot()` is not, and no split `begin`/`complete` across FFI is needed to make it so.
+to `snapshot()` is not, and no split `begin`/`complete` across FFI is needed to make it so ·
+*the `Cleaner` backstop* → **D26** (declined: leak-freedom becomes a per-language contract test over
+C22's count; the use-after-close half stays an upstream filing) · *stash schema evolution* → **D27**
+(versioned envelope, wholesale refusal only at the parse gate, per-field salvage inside it; tightening
+becomes a build-time `bolted-check` event in Phase 4).
 
 ## 10. Prior art
 

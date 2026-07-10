@@ -25,10 +25,11 @@ work around them.
 | 09 | bolted-macros | 3 — Extraction | **done** — [plan](steps/step-09-bolted-macros.md) · [report](steps/step-09-report.md); `value`/`entity`/`rules` ship, two **generated** features pass the suite unmodified, `feature_model` **cut** (D21) |
 | 10 | bolted-ffi + a generated FFI layer | 3 — Extraction | **done** — [plan](steps/step-10-bolted-ffi.md) · [report](steps/step-10-report.md); the FFI layer **generates** and runs from Swift (D22–D25). A macro could never have done it: bindgen reads source text. **Deliverable 10 (repoint the shells) deferred to 11** |
 | 11 | Migrate the shells onto the generated FFI | 3 — Extraction | **done** — [plan](steps/step-11-migrate-shells.md) · [report](steps/step-11-report.md); all four shells link `gen-profile-ffi`, `pack:*` repointed, spike kept as reference. D23 controls planted-and-watched on both platforms. Hardware "after": **0.0432 ms p50** per keystroke on the Pixel 8a (~23× under KC5); `test:apple:ui` 9/9 on generated |
-| 12 | FFI hardening + per-language contract tests | 3 — Extraction | pending — needs a design pass on two §9 questions first |
-| 13 | C# port + generator | 3 — Extraction | pending |
+| 12 | FFI hardening | 3 — Extraction | **ready** — [plan](steps/step-12-ffi-hardening.md); design pass done: **D26** (no `Cleaner`; leak-freedom as a contract test) and **D27** (versioned stash envelope), ARCHITECTURE **v1.5**. Contract-test generation split to step 13 |
+| 13 | Per-language contract tests from the C-IDs | 3 — Extraction | pending — split out of 12; needs generated typed field accessors (step 08, friction 1) and step 12's answer on emitting foreign-language source |
+| 14 | C# port + generator | 3 — Extraction | pending |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
-| 14+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
+| 15+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
 
 ## Phase 1 — Design validation spike
 
@@ -188,22 +189,26 @@ reference the generated code is diffed against.
   which generalizes past codegen: **a test that forbids something can be forbidding nothing** —
   `golden.rs`'s needles were written against `quote`'s token spacing and matched no line of a
   `prettyplease`-formatted file, green and vacuous. Pin a forbidding test from both sides.
-- **Step 12 — FFI hardening + per-language contract tests.** Split out of step 11, which was three steps
-  in a trench coat. **Blocked on a design pass**: two of its items are ARCHITECTURE §9 OPEN questions —
-  the **`java.lang.ref.Cleaner` backstop** (D23 fixed the store-side hazard; the foreign-side
-  use-after-`close()` is BoltFFI's raw pointers) and **stash schema evolution**. Neither may be resolved
-  in an implementation session. The rest, all of them generator changes whose only test is a shell that
-  consumes generated bindings: **`@Parcelize`/`Codable`** for DTOs (which deletes `StashCodec.kt`, whose
-  length is the argument); the **Compose parameter-passing rule** (a Compose shell must never read core
-  state by calling a VM method — strong skipping makes it invisible); **l10n key coverage per target**,
-  now tractable because `pending_key`/`required_key`/`failed_key` are all declared; a Kotlin ViewModel
-  must `close()` in `onCleared()`; `Send + Sync` Rust classes as `Sendable` Swift classes; `fun interface`
-  for single-method capability traits; a platform-stdlib **name-collision policy** (`Date`, `URL`, `Data`,
-  `Error`); **per-language contract tests generated from the C-IDs**, which need generated typed field
-  accessors (step 08, friction 1). Also: **file the three upstream bugs** — `boltffi pack android`'s
-  missing expansion env (delete the workaround in `mise run pack:android`), generated methods not
-  consulting `__boltffi_closed`, and bindgen silently ignoring macro-generated items.
-- **Step 13 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
+- **Step 12 — FFI hardening.** Split out of step 11, then split again: the old sketch bundled the
+  hardening with the contract-test generator, which is its own step (13). The design pass is **done**
+  (ARCHITECTURE **v1.5**): **D26** declines the `Cleaner` backstop — leak-freedom becomes a
+  per-language contract test over C22's live-draft count, `close()` in `onCleared()` a tested rule,
+  and the use-after-`close()` UB stays an upstream filing; **D27** makes the stash a versioned,
+  parse-don't-validate envelope — the schema version moves from `StashCodec.kt`'s hand-written gate
+  into the generated stash DTO before that file is deleted, wholesale refusal is typed and happens
+  only at the parse gate, per-field degradation stands, and constraint tightening becomes a Phase-4
+  `bolted-check` build error. The step also fixes a **D23 conformance bug step 11's controls found**
+  (the generated check driver consults the checker slot before the draft, so a dead draft with no
+  checker answers `Ok(false)` instead of refusing), deletes the hand-written codec on whichever
+  branch M0's passthrough probe picks, lands the ergonomics batch (checker lambda helper, `Sendable`
+  extensions, a name-collision *refusal*, declaration-driven l10n key coverage on **both** shells),
+  encodes the Compose parameter-passing rule, and drafts — not files — the three upstream bugs.
+  *Detailed step doc exists.*
+- **Step 13 — per-language contract tests from the C-IDs.** A new generator target: test code emitted
+  in Swift and Kotlin, plus the generated typed field accessors it needs (step 08, friction 1). Split
+  from 12 because it is a full session; step 12's M0 answers whether foreign-language emission can
+  lean on any upstream passthrough or is entirely ours.
+- **Step 14 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)
