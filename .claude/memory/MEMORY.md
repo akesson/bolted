@@ -7,3 +7,5 @@
 - [Echo rule: touched, not dirty](echo-rule-predicate-is-touched-not-dirty.md) — sanitization makes a field clean while the user is still typing in it
 - [Compose cannot see ViewModel method reads](compose-cannot-see-viewmodel-method-reads.md) — strong skipping + a StateFlow read = a UI that never updates
 - [A missing prop_assume asserts the bug](a-missing-prop-assume-asserts-the-bug.md) — the generator never samples the counterexample your precondition forgot to exclude
+- [The core ships no lock](the-core-ships-no-lock.md) — id-keyed store, effects as data, and close(id) as the only release path
+- [A suite with one implementor is shaped like it](a-suite-with-one-implementor-is-shaped-like-it.md) — write the opposite fixture, then mutate both

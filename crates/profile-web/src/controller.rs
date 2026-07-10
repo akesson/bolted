@@ -170,6 +170,13 @@ impl ProfileController {
         }
     }
 
+    /// How many drafts the store is holding. Exists so a test can prove what D16 makes the shell's
+    /// duty: this controller keeps exactly one draft alive at a time, so it never has to `close()`
+    /// one. A shell with a cancel button would.
+    pub fn draft_count(&self) -> usize {
+        self.store.draft_count()
+    }
+
     /// Is there a draft, and is it still attached to a canonical entity?
     pub fn is_live(&self) -> bool {
         self.store

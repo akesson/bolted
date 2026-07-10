@@ -21,8 +21,8 @@ work around them.
 | 05 | Android headless probe | 1 — Spike | **done** — [plan](steps/step-05-android-probe.md) · [report](steps/step-05-report.md); chattiness kill criterion clears (~80×), `close()` proven mandatory on ART |
 | 06 | Design freeze | 2 — Freeze | **done** — [plan](steps/step-06-design-freeze.md) · [report](steps/step-06-report.md); ARCHITECTURE **frozen (v1.0)**, [CONFORMANCE.md](CONFORMANCE.md) C01–C18 with a build-time drift check |
 | 07 | Kotlin/Compose spike app | 2 — Freeze | **done** — [plan](steps/step-07-kotlin-compose-app.md) · [report](steps/step-07-report.md); stash/restore lands (C20/C21), a **frozen-core defect** found and fixed (C19), Compose UI tests run **headless**. Kill criterion 4 (hardware chattiness) **unassessed** — no device |
-| 08 | Extract bolted-core + conformance suite | 3 — Extraction | **ready** |
-| 09 | bolted-macros | 3 — Extraction | pending |
+| 08 | Extract bolted-core + conformance suite | 3 — Extraction | **done** — [plan](steps/step-08-extract-bolted-core.md) · [report](steps/step-08-report.md); store is id-keyed and **lock-free** (D16), the FFI's store loop is deleted, suite is generic and runs against **two** features |
+| 09 | bolted-macros | 3 — Extraction | **ready** |
 | 10 | bolted-ffi + regenerate Swift/Kotlin | 3 — Extraction | pending |
 | 11 | C# port + generator | 3 — Extraction | pending |
 | 12+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
@@ -109,33 +109,48 @@ falsify the design cheaply — friction logs from these steps are the input to t
 Extract from evidence, in dependency order; the hand-written spike code becomes the golden
 reference the generated code is diffed against.
 
-- **Step 08 — Extract `bolted-core`** generics + conformance suite as a reusable crate. Inherits from
-  the freeze: make the suite **generic over a feature** (21 IDs / 30 tests, `spike-profile`-shaped
-  today); decide the **store concurrency model** under step-02's three non-negotiable constraints
-  (`Send` state behind one lock, id-keyed handles not `Rc` clones, never emit under the lock) — the
-  FFI wrapper now carries a *third* hand-written copy of the store loop, and step 07's `restore`
-  doubled the surface that must agree with `Store` by discipline alone; decide whether the store holds
-  drafts **weakly** now that a forgotten `close()` leaks a rebasing zombie. `Store::adopt` and
-  `StoreDraft::is_based` (D15) must survive the extraction.
+- **Step 08 — Extract `bolted-core` + the conformance suite.** **Done. No kill criteria hit.** The
+  store concurrency question is answered by **D16**: `Store<D>` owns its drafts in a
+  `BTreeMap<DraftId, _>`, ships **no lock**, and returns its fan-out as data — so it is `Send` by
+  construction and one implementation serves the lock-free web shell and the FFI's single `Mutex`
+  alike. `spike-profile-ffi`'s hand-written store loop is **deleted**. The weak-drafts question is not
+  answered but **dissolved**: with the store owning drafts and handles being `Copy` ids, there is no
+  owner to drop. The price is named in **C18** — `close(id)` is now mandatory in Rust too, and the
+  reference implementation stops being forgiving in the one way the GC platforms are not. The RAII
+  alternative was built and rejected on evidence (its `Drop` panics on an already-borrowed `RefCell`;
+  rung 4). **D17** moves the resolvers onto `Draft` and adds `Stashable`. The suite is extracted into
+  **`bolted-conformance`** (22 IDs, 31 generic functions, three tiers, macro-stamped so a fixture
+  cannot skip one) and now runs against **two** features — `spike-note` was written expressly to
+  falsify "generic", and immediately did: a `StoreDraft::is_based` that consults a single field passed
+  all 21 other invariants, on both features. **C12** gained a clause and a test. Also: the
+  `liveDraftCount` divergence step 07 could only document is closed by construction (**C22**).
 - **Step 09 — `bolted-macros`** (`value`, `entity`, `rules`, `feature_model`); macro output
-  must reproduce the hand-written spike code (golden tests). Inherits: **never emit `Copy`** on a
-  value object (D8); `#[bolted::entity]` must emit `stash`/`from_stash`/`is_based`; **dedup by raw
-  type is per-shape, not per-crate** — step 07 settled §9's question by example (snapshot DTOs mention
-  `V` and cannot dedup; stash DTOs mention only `V::Raw` and collapse 3→1).
+  must reproduce the hand-written spike code (golden tests) **and pass `bolted-conformance` against a
+  generated fixture**. Inherits: **never emit `Copy`** on a value object (D8); `#[bolted::entity]` must
+  emit `stash`/`from_stash`/`is_based`, the two `Draft` resolvers, and `Stashable` (D17); **`is_based`
+  must OR over every field** — a single-field emission is invisible to 21 of 22 invariants and silently
+  overwrites the server (step 08, C12); the emitted **`dirty_fields()` order is declaration order** and
+  is observable; **dedup by raw type is per-shape, not per-crate** (step 07). Open first: **where does
+  the async check's surface live** — `begin`/`complete`/`state` are on no trait, and step 08's
+  `AsyncCheckFeature` had to declare its own (§9). A generated fixture is a **marker type** naming its
+  value, not an impl on the value (orphan rule).
 - **Step 10 — `bolted-ffi`** (only crate importing boltffi) + regenerate the Swift and Kotlin
   spike apps from macros; per-language contract tests generated from the C-IDs. Inherits a
   requirements list the probes wrote: **use-after-close must raise a typed error** (silent UB today,
-  §9 — and step 07 shows it distorting a ViewModel's shape) and probably a `Cleaner` backstop; emit
-  **`@Parcelize`/`Codable`** for DTOs (a shell that persists one hand-writes a codec today); emit the
-  **Compose parameter-passing rule** (a Compose shell must never read core state by calling a VM
-  method — strong skipping makes it invisible); pin **`liveDraftCount`'s semantics to a C-ID** (it
-  means "un-submitted" in the wrapper and "would be rebased" in the core); **verify l10n key coverage
-  per target**; a Kotlin ViewModel must `close()` in `onCleared()`; project `Send + Sync` Rust classes
-  as `Sendable` Swift classes; emit `fun interface` for single-method capability traits; a
-  platform-stdlib **name-collision policy** (`Date`, `URL`, `Data`, `Error`); no hyphens in crate
-  names; expose the split `begin`/`complete` so `Pending` is observable to a `snapshot()` caller. Also:
-  **report the `boltffi pack android` bug upstream** and delete the workaround in
-  `mise run pack:android`.
+  §9 — and step 07 shows it distorting a ViewModel's shape) and probably a `Cleaner` backstop — note
+  D16 hands the mechanism over, since a stale `DraftId` is simply *not live* and the remaining UB
+  belongs to BoltFFI's raw-pointer handles, not to the registry; emit **`@Parcelize`/`Codable`** for
+  DTOs (a shell that persists one hand-writes a codec today); emit the **Compose parameter-passing
+  rule** (a Compose shell must never read core state by calling a VM method — strong skipping makes it
+  invisible); **verify l10n key coverage per target**; a Kotlin ViewModel must `close()` in
+  `onCleared()`; project `Send + Sync` Rust classes as `Sendable` Swift classes; emit `fun interface`
+  for single-method capability traits; a platform-stdlib **name-collision policy** (`Date`, `URL`,
+  `Data`, `Error`); no hyphens in crate names; expose the split `begin`/`complete` so `Pending` is
+  observable to a `snapshot()` caller. Per-language contract tests will need **generated typed field
+  accessors**: `Draft` is id-keyed and cannot expose `Field<V>` heterogeneously, which is why
+  `ConformanceFeature` supplies them (step 08, friction 1). `liveDraftCount`'s semantics no longer need
+  pinning — C22 did it. Also: **report the `boltffi pack android` bug upstream** and delete the
+  workaround in `mise run pack:android`.
 - **Step 11 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 

@@ -614,3 +614,29 @@ fn echo_rule_a_focused_field_that_sanitizes_back_to_base_still_keeps_its_text() 
     c.blur(Username);
     assert_eq!(c.username_buf(), "alice");
 }
+
+/// D16 made `close(id)` the only release path, which sounds like a burden this shell now carries.
+/// It does not: the controller holds exactly one draft, and `submit` releases it before the next
+/// `checkout`. Ten round trips later the store is still holding one draft, not eleven.
+///
+/// This is the whole of the evidence that D16's ergonomic cost is small, and it is thin evidence:
+/// one Rust shell, one draft, no cancel button. A shell that opens a draft per row would have to
+/// close them, exactly as Kotlin does.
+#[test]
+fn the_controller_never_accumulates_drafts_across_submits() {
+    let mut c = controller();
+    assert_eq!(c.draft_count(), 1);
+
+    for i in 0..10 {
+        c.focus(Name);
+        c.edit_name(format!("Name {i}"));
+        c.blur(Name);
+        c.submit();
+        assert!(
+            matches!(c.last_submit(), Some(SubmitOutcome::Success)),
+            "submit {i} must succeed: {:?}",
+            c.last_submit()
+        );
+        assert_eq!(c.draft_count(), 1, "after submit {i}");
+    }
+}
