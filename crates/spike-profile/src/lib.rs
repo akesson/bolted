@@ -8,7 +8,7 @@
 pub mod profile;
 pub mod value_types;
 
-pub use profile::{Profile, ProfileDraft, ProfileField, ProfileStash, ProfileStore};
+pub use profile::{Profile, ProfileCheck, ProfileDraft, ProfileField, ProfileStash, ProfileStore};
 pub use value_types::{
     Date, DateRange, DateRangeError, Email, EmailError, PersonName, PersonNameError, Username,
     UsernameError,

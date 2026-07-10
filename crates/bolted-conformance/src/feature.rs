@@ -6,8 +6,8 @@
 //! but of `spike-profile`.
 
 use bolted_core::{
-    CheckState, CheckToken, CommitError, Draft, DraftId, DraftStatus, ErrorData, Field,
-    SingleFlight, Stashable, Store, StoreDraft, SubmitError, ValidationReport, Value,
+    CheckState, Checked, CommitError, Draft, DraftId, DraftStatus, ErrorData, Field, SingleFlight,
+    Stashable, Store, StoreDraft, SubmitError, ValidationReport, Value,
 };
 
 /// Shorthand for the field-id type of a fixture's draft.
@@ -101,9 +101,16 @@ pub trait RuleFeature: ConformanceFeature {
 /// A feature with an async, single-flight check pinned to one field. C10, C13 and C16 are its
 /// invariants.
 ///
-/// Note what this trait has to declare that no `bolted-core` trait does: `begin`/`complete`/`state`
-/// for the check. Every generated shell re-derives that surface today. Step 09/10 should promote it.
-pub trait AsyncCheckFeature: ConformanceFeature {
+/// Until step 09 this trait declared `begin` / `complete` / `state` **itself**, because no
+/// `bolted-core` trait named them, and it carried a comment saying a later step should promote them.
+/// D18 did: they are [`Checked`], and the supertrait bound below is the whole of what this fixture
+/// now has to say about them. The four members that vanished were never fixture concerns — they were
+/// a missing contract, borrowed.
+///
+/// What remains is genuinely fixture: which value type the check guards, texts to drive it with, and
+/// the two stable strings its violation reports under. The *pinned field* is no longer asked for
+/// either — [`Checked::check_pins`] knows it.
+pub trait AsyncCheckFeature: ConformanceFeature<Draft: Checked> {
     type Checked: Value<Raw = String>;
 
     /// `entity()`'s checked-field text, and two distinct valid alternatives.
@@ -115,21 +122,16 @@ pub trait AsyncCheckFeature: ConformanceFeature {
     const CHECK_RULE: &'static str;
     const CHECK_REQUIRED_KEY: &'static str;
 
+    /// Which check. A feature may declare several; these invariants are about the one guarding
+    /// [`Self::Checked`].
+    fn check_id() -> <Self::Draft as Checked>::CheckId;
+
     fn with_checked(entity: &Self::Entity, raw: &str) -> Self::Entity;
-    fn checked_id() -> FieldIdOf<Self>;
     fn checked(draft: &Self::Draft) -> &Field<Self::Checked>;
     fn set_checked(
         draft: &mut Self::Draft,
         raw: &str,
     ) -> Result<(), <Self::Checked as Value>::Error>;
-
-    fn begin_check(draft: &mut Self::Draft) -> CheckToken;
-    fn complete_check(
-        draft: &mut Self::Draft,
-        token: CheckToken,
-        verdict: Result<(), ErrorData>,
-    ) -> bool;
-    fn check_state(draft: &Self::Draft) -> &CheckState<Result<(), ErrorData>>;
 }
 
 // =================================================================================================
@@ -151,11 +153,22 @@ fn base_text<V: Value<Raw = String>>(field: &Field<V>) -> Option<String> {
 /// Drive the async check to a pass, if the feature has one. The base suite cannot call this, which
 /// is exactly why [`ConformanceFeature::fill_valid`] exists.
 fn pass_check<F: AsyncCheckFeature>(draft: &mut F::Draft) {
-    let token = F::begin_check(draft);
+    let token = draft.begin_check(F::check_id());
     assert!(
-        F::complete_check(draft, token, Ok(())),
+        draft.complete_check(F::check_id(), token, Ok(())),
         "a fresh token's completion must land"
     );
+}
+
+/// The field the check endorses. Derived from the contract, not asked of the fixture — which is what
+/// makes [`Checked::check_pins`] load-bearing rather than decorative.
+fn checked_id<F: AsyncCheckFeature>() -> FieldIdOf<F> {
+    <F::Draft as Checked>::check_pins(F::check_id())
+}
+
+/// A check's current sub-state.
+fn check_state<F: AsyncCheckFeature>(draft: &F::Draft) -> &CheckState<Result<(), ErrorData>> {
+    draft.check_state(F::check_id())
 }
 
 fn checked_out<F: ConformanceFeature>() -> (Store<F::Draft>, DraftId) {
@@ -295,14 +308,11 @@ pub fn c10_latest_check_wins<F: AsyncCheckFeature>() {
 
     // ...and on a draft: a stale FAILING verdict must not resurrect after a fresh PASSING one
     let mut draft = F::Draft::from_canonical(None, 0);
-    let first = F::begin_check(&mut draft);
-    let second = F::begin_check(&mut draft);
-    assert!(!F::complete_check(
-        &mut draft,
-        first,
-        Err(ErrorData::new("stale"))
-    ));
-    assert!(F::complete_check(&mut draft, second, Ok(())));
+    let check = F::check_id();
+    let first = draft.begin_check(check);
+    let second = draft.begin_check(check);
+    assert!(!draft.complete_check(check, first, Err(ErrorData::new("stale"))));
+    assert!(draft.complete_check(check, second, Ok(())));
     assert!(!rule_present(&draft.validate(), F::CHECK_RULE));
 }
 
@@ -310,13 +320,13 @@ pub fn c10_latest_check_wins<F: AsyncCheckFeature>() {
 /// leaves the value unchanged leaves the verdict standing.
 pub fn c13_verdicts_are_value_bound<F: AsyncCheckFeature>() {
     let entity = F::entity();
-    let passed = |d: &F::Draft| matches!(F::check_state(d), CheckState::Done { verdict: Ok(()) });
+    let passed = |d: &F::Draft| matches!(check_state::<F>(d), CheckState::Done { verdict: Ok(()) });
 
     // (a) passed, then edit to a DIFFERENT value -> reset
     let mut a = F::Draft::from_canonical(Some(&entity), 0);
     pass_check::<F>(&mut a);
     F::set_checked(&mut a, F::CHECKED_MINE).expect("valid");
-    assert!(matches!(F::check_state(&a), CheckState::Idle));
+    assert!(matches!(check_state::<F>(&a), CheckState::Idle));
 
     // (b) passed, then edit to the SAME value -> the verdict stands (value-based, like dirty)
     let mut b = F::Draft::from_canonical(Some(&entity), 0);
@@ -328,7 +338,7 @@ pub fn c13_verdicts_are_value_bound<F: AsyncCheckFeature>() {
     let mut c = F::Draft::from_canonical(Some(&entity), 0);
     pass_check::<F>(&mut c);
     c.rebase(&F::with_checked(&entity, F::CHECKED_THEIRS), 1);
-    assert!(matches!(F::check_state(&c), CheckState::Idle));
+    assert!(matches!(check_state::<F>(&c), CheckState::Idle));
 
     // (d) dirty field, rebase CONFLICTS (yours preserved) -> value unchanged -> verdict stands
     let mut d = F::Draft::from_canonical(Some(&entity), 0);
@@ -344,15 +354,15 @@ pub fn c13_verdicts_are_value_bound<F: AsyncCheckFeature>() {
     F::set_checked(&mut take, F::CHECKED_MINE).expect("valid");
     pass_check::<F>(&mut take);
     take.rebase(&F::with_checked(&entity, F::CHECKED_THEIRS), 1);
-    take.resolve_take_theirs(F::checked_id());
+    take.resolve_take_theirs(checked_id::<F>());
     assert_eq!(text(F::checked(&take)).as_deref(), Some(F::CHECKED_THEIRS));
-    assert!(matches!(F::check_state(&take), CheckState::Idle));
+    assert!(matches!(check_state::<F>(&take), CheckState::Idle));
 
     let mut keep = F::Draft::from_canonical(Some(&entity), 0);
     F::set_checked(&mut keep, F::CHECKED_MINE).expect("valid");
     pass_check::<F>(&mut keep);
     keep.rebase(&F::with_checked(&entity, F::CHECKED_THEIRS), 1);
-    keep.resolve_keep_mine(F::checked_id());
+    keep.resolve_keep_mine(checked_id::<F>());
     assert_eq!(text(F::checked(&keep)).as_deref(), Some(F::CHECKED_MINE));
     assert!(passed(&keep));
 }
@@ -365,7 +375,7 @@ pub fn c16_an_unrun_check_blocks_a_dirty_field<F: AsyncCheckFeature>() {
     // clean checked field, check never run, an unrelated edit -> commits
     let mut clean = F::Draft::from_canonical(Some(&entity), 0);
     F::set_primary(&mut clean, F::PRIMARY_MINE).expect("valid");
-    assert!(matches!(F::check_state(&clean), CheckState::Idle));
+    assert!(matches!(check_state::<F>(&clean), CheckState::Idle));
     assert!(clean.validate().is_ok());
     assert!(clean.commit().is_ok());
 
@@ -379,7 +389,7 @@ pub fn c16_an_unrun_check_blocks_a_dirty_field<F: AsyncCheckFeature>() {
         .find(|v| v.rule == F::CHECK_RULE)
         .expect("an unrun check on a dirty field must block");
     assert_eq!(violation.error.key, F::CHECK_REQUIRED_KEY);
-    assert_eq!(violation.pins, vec![F::checked_id()]);
+    assert_eq!(violation.pins, vec![checked_id::<F>()]);
     assert!(matches!(
         dirty.commit(),
         Err((_, CommitError::Validation(_)))
@@ -411,7 +421,7 @@ pub fn c20_an_async_verdict_does_not_survive_the_stash<F: AsyncCheckFeature>() {
 
     let restored = F::Draft::from_stash(&draft.stash());
 
-    assert!(matches!(F::check_state(&restored), CheckState::Idle));
+    assert!(matches!(check_state::<F>(&restored), CheckState::Idle));
     assert!(F::checked(&restored).is_dirty());
     let report = restored.validate();
     let violation = report

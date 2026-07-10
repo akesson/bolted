@@ -10,11 +10,12 @@
 //! feature without a uniqueness check does not owe them. Likewise C08 arrives with `RuleFeature`.
 
 use bolted_conformance::{AsyncCheckFeature, ConformanceFeature, RuleFeature, ValueFixture};
-use bolted_core::{CheckState, CheckToken, Draft, ErrorData, Field, Value};
+use bolted_core::{Draft, Field, Value};
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use spike_profile::{
-    Date, DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, ProfileStash, Username,
+    Date, DateRange, Email, PersonName, Profile, ProfileCheck, ProfileDraft, ProfileField,
+    ProfileStash, Username,
 };
 
 // =================================================================================================
@@ -218,6 +219,9 @@ impl RuleFeature for ProfileFixture {
     }
 }
 
+/// Since D18 the fixture names *which* check, and nothing else about it: `begin`/`complete`/`state`
+/// are `bolted_core::Checked`, and the pinned field comes from `Checked::check_pins`. Four members
+/// went away, and no test changed.
 impl AsyncCheckFeature for ProfileFixture {
     type Checked = Username;
 
@@ -227,6 +231,10 @@ impl AsyncCheckFeature for ProfileFixture {
     const CHECK_RULE: &'static str = "username_unique";
     const CHECK_REQUIRED_KEY: &'static str = "username_check_required";
 
+    fn check_id() -> ProfileCheck {
+        ProfileCheck::UsernameUnique
+    }
+
     fn with_checked(entity: &Profile, raw: &str) -> Profile {
         Profile {
             username: username(raw),
@@ -234,28 +242,11 @@ impl AsyncCheckFeature for ProfileFixture {
         }
     }
 
-    fn checked_id() -> ProfileField {
-        ProfileField::Username
-    }
     fn checked(draft: &ProfileDraft) -> &Field<Username> {
         &draft.username
     }
     fn set_checked(draft: &mut ProfileDraft, raw: &str) -> Result<(), <Username as Value>::Error> {
         draft.try_set_username(raw.to_string())
-    }
-
-    fn begin_check(draft: &mut ProfileDraft) -> CheckToken {
-        draft.begin_username_check()
-    }
-    fn complete_check(
-        draft: &mut ProfileDraft,
-        token: CheckToken,
-        verdict: Result<(), ErrorData>,
-    ) -> bool {
-        draft.complete_username_check(token, verdict)
-    }
-    fn check_state(draft: &ProfileDraft) -> &CheckState<Result<(), ErrorData>> {
-        draft.username_check_state()
     }
 }
 

@@ -7,7 +7,7 @@ use crate::value_types::{
     UsernameError,
 };
 use bolted_core::{
-    CheckState, CheckToken, CommitError, Constraint, Draft, DraftStatus, ErrorData, Field,
+    CheckState, CheckToken, Checked, CommitError, Constraint, Draft, DraftStatus, ErrorData, Field,
     FieldStash, RuleViolation, SingleFlight, Stashable, Store, StoreDraft, ValidationReport,
     Validity, Value,
 };
@@ -47,6 +47,14 @@ impl ProfileField {
         out.extend_from_slice(intrinsic);
         out
     }
+}
+
+/// Typed check identifiers — the `Checked::CheckId` for this feature (ARCHITECTURE §8, D18). One
+/// variant per declared async check; `#[bolted::entity]` emits it from the `#[check(..)]` attributes.
+/// A concrete enum, so it crosses the FFI boundary exactly as [`ProfileField`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProfileCheck {
+    UsernameUnique,
 }
 
 /// The store specialised to this feature. A handle is a `bolted_core::DraftId` — there is no
@@ -116,8 +124,11 @@ impl ProfileDraft {
     /// Read the async uniqueness check's sub-state, so the FFI layer can project it into snapshots
     /// (step-02 finding 7). The field stays private; this is a read-only getter — `validate()` is
     /// unchanged (a `Pending`/`Done(Err)` check still blocks; `Idle`/`Done(Ok)` still pass).
+    ///
+    /// Since D18 the real surface is [`Checked`]; the three inherent methods below are named
+    /// delegates kept so the FFI wrapper and the web shell did not churn in step 09.
     pub fn username_check_state(&self) -> &CheckState<Result<(), ErrorData>> {
-        self.username_check.state()
+        self.check_state(ProfileCheck::UsernameUnique)
     }
 
     // --- monomorphic setters (one per field; `try_set_availability` takes the grouped raw) ---
@@ -141,7 +152,7 @@ impl ProfileDraft {
     // --- async uniqueness check (single-flight, driven by the shell/test) ---
 
     pub fn begin_username_check(&mut self) -> CheckToken {
-        self.username_check.begin()
+        self.begin_check(ProfileCheck::UsernameUnique)
     }
 
     pub fn complete_username_check(
@@ -149,7 +160,7 @@ impl ProfileDraft {
         token: CheckToken,
         verdict: Result<(), ErrorData>,
     ) -> bool {
-        self.username_check.complete(token, verdict)
+        self.complete_check(ProfileCheck::UsernameUnique, token, verdict)
     }
 
     /// Tier-2 rule `corporate_email`, pinned to `Email` (as `#[rule(pins(email))]` would emit): a
@@ -443,6 +454,43 @@ impl Stashable for ProfileDraft {
                 DraftStatus::Live
             },
             base_version: stash.base_version,
+        }
+    }
+}
+
+/// The async uniqueness check, as the contract names it since D18. Every method is a one-line
+/// delegation to the `SingleFlight` that owns the sequencing — which is the whole point: the trait
+/// exists so that shells, the FFI and the conformance suite stop each inventing this surface, not so
+/// that anyone can reimplement `begin`/`complete` per feature.
+impl Checked for ProfileDraft {
+    type CheckId = ProfileCheck;
+
+    fn begin_check(&mut self, check: ProfileCheck) -> CheckToken {
+        match check {
+            ProfileCheck::UsernameUnique => self.username_check.begin(),
+        }
+    }
+
+    fn complete_check(
+        &mut self,
+        check: ProfileCheck,
+        token: CheckToken,
+        verdict: Result<(), ErrorData>,
+    ) -> bool {
+        match check {
+            ProfileCheck::UsernameUnique => self.username_check.complete(token, verdict),
+        }
+    }
+
+    fn check_state(&self, check: ProfileCheck) -> &CheckState<Result<(), ErrorData>> {
+        match check {
+            ProfileCheck::UsernameUnique => self.username_check.state(),
+        }
+    }
+
+    fn check_pins(check: ProfileCheck) -> ProfileField {
+        match check {
+            ProfileCheck::UsernameUnique => ProfileField::Username,
         }
     }
 }
