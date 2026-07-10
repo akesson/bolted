@@ -17,9 +17,9 @@ packages:
   # The app package itself (this directory) — for the ProfileFeature library product.
   ProfileFeature:
     path: .
-  # The boltffi-generated bindings + xcframework (ProfileApp.swift imports SpikeProfileFfi directly).
-  SpikeProfileFfi:
-    path: ../../crates/spike-profile-ffi/dist/apple
+  # The boltffi-generated bindings + xcframework (ProfileApp.swift imports GenProfileFfi directly).
+  GenProfileFfi:
+    path: ../../crates/gen-profile-ffi/dist/apple
 
 # NOTE: the Xcode app target is deliberately NOT named "ProfileApp". The app package (referenced
 # below at path ".") has a SwiftPM `executableTarget` named `ProfileApp`, which builds a *bare*
@@ -35,8 +35,8 @@ targets:
     dependencies:
       - package: ProfileFeature
         product: ProfileFeature
-      - package: SpikeProfileFfi
-        product: SpikeProfileFfi
+      - package: GenProfileFfi
+        product: GenProfileFfi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.bolted.BoltedProfile

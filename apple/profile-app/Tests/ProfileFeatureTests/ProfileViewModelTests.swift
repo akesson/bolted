@@ -1,5 +1,5 @@
 import XCTest
-import SpikeProfileFfi
+import GenProfileFfi
 @testable import ProfileFeature
 
 /// Headless ViewModel probes for the four behaviours on trial (echo rule, conflict UI, live rebase,
@@ -13,7 +13,7 @@ final class ProfileViewModelTests: XCTestCase {
             username: "alice",
             name: "Alice Smith",
             email: "alice@example.com",
-            availability: PlainDateRange(
+            availability: AvailabilityRaw(
                 start: PlainDate(year: 2026, month: 1, day: 1),
                 end: PlainDate(year: 2026, month: 12, day: 31)
             )

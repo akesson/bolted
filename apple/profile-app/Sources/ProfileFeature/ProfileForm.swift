@@ -1,5 +1,5 @@
 import SwiftUI
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// The profile editor. Every "what" it shows — labels' required markers, counters' maxima, error
 /// sentences' numbers, conflict data — comes from the core via the ViewModel; the view adds only
@@ -242,9 +242,9 @@ struct ServerSimulatorPane: View {
                     Text("canonical").font(.caption2).foregroundStyle(.secondary)
                     Text("username: \(valueText(c.username.validity))").font(.caption)
                         .accessibilityIdentifier("canonical-username")
-                    Text("name: \(nameText(c.name.validity))").font(.caption)
+                    Text("name: \(valueText(c.name.validity))").font(.caption)
                         .accessibilityIdentifier("canonical-name")
-                    Text("email: \(emailText(c.email.validity))").font(.caption)
+                    Text("email: \(valueText(c.email.validity))").font(.caption)
                         .accessibilityIdentifier("canonical-email")
                 }
             }
@@ -263,15 +263,8 @@ struct ServerSimulatorPane: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    func valueText(_ v: UsernameValidity) -> String {
-        if case .valid(let s) = v { return s }
-        return "—"
-    }
-    func nameText(_ v: PersonNameValidity) -> String {
-        if case .valid(let s) = v { return s }
-        return "—"
-    }
-    func emailText(_ v: EmailValidity) -> String {
+    // D24: one shared TextValidity for the three text fields, so one helper.
+    func valueText(_ v: TextValidity) -> String {
         if case .valid(let s) = v { return s }
         return "—"
     }

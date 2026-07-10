@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// The hand-written stand-in for the ViewModel a shell generator (step 10/11) would emit. It owns a
 /// draft checkout and translates between the core's snapshot contract and SwiftUI, adding only
@@ -37,7 +37,7 @@ public final class ProfileViewModel {
     private let store: ProfileStoreFfi
     private var draft: ProfileDraftFfi
     private let seed: ProfileValues
-    private let makeChecker: () -> any UniquenessChecker
+    private let makeChecker: () -> any UsernameChecker
     private let debounce: Duration
     private var focused: ProfileFieldId?
     /// Has the user typed into the focused control since the core last wrote its buffer? This — not
@@ -57,7 +57,7 @@ public final class ProfileViewModel {
     public init(
         seed: ProfileValues,
         debounce: Duration = .milliseconds(400),
-        makeChecker: @escaping () -> any UniquenessChecker = { DefaultChecker() }
+        makeChecker: @escaping () -> any UsernameChecker = { DefaultChecker() }
     ) throws {
         self.store = ProfileStoreFfi()
         try store.applyCanonical(values: seed)
@@ -66,7 +66,7 @@ public final class ProfileViewModel {
         self.makeChecker = makeChecker
 
         let d = store.checkout()
-        d.setUniquenessChecker(checker: makeChecker())
+        d.setUsernameChecker(checker: makeChecker())
         self.draft = d
 
         let snap = d.snapshot()
@@ -134,7 +134,7 @@ public final class ProfileViewModel {
     public func editAvailability() {
         guard draft.isLive() else { return }
         touch(.availability)
-        try? draft.trySetAvailability(start: startDate, end: endDate)
+        try? draft.trySetAvailability(raw: AvailabilityRaw(start: startDate, end: endDate))
         reconcile(draft.snapshot())
     }
 
@@ -170,13 +170,13 @@ public final class ProfileViewModel {
 
     public func resolveKeepMine(_ field: ProfileFieldId) {
         guard draft.isLive() else { return }
-        draft.resolveKeepMine(field: field)
+        try? draft.resolveKeepMine(field: field) // isLive-guarded; a dead handle is handled above, not swallowed
         applyResolved(field)
     }
 
     public func resolveTakeTheirs(_ field: ProfileFieldId) {
         guard draft.isLive() else { return }
-        draft.resolveTakeTheirs(field: field)
+        try? draft.resolveTakeTheirs(field: field) // isLive-guarded; a dead handle is handled above, not swallowed
         applyResolved(field)
     }
 
@@ -320,7 +320,7 @@ public final class ProfileViewModel {
 
     private func recheckout() {
         let d = store.checkout()
-        d.setUniquenessChecker(checker: makeChecker())
+        d.setUsernameChecker(checker: makeChecker())
         draft = d
         focused = nil
         focusedTouched = false
@@ -383,21 +383,21 @@ public struct ConflictInfo: Equatable, Sendable {
 final class CheckDriver: @unchecked Sendable {
     private let draft: ProfileDraftFfi
     init(_ draft: ProfileDraftFfi) { self.draft = draft }
-    func run() { _ = draft.runUsernameCheck() }
+    func run() { _ = try? draft.runUsernameCheck() }
 }
 
-/// A default foreign uniqueness checker: a small in-memory taken-set, so the manual tester can see
+/// A default foreign username checker: a small in-memory taken-set, so the manual tester can see
 /// a `.failed` verdict without a backend.
-public final class DefaultChecker: UniquenessChecker, @unchecked Sendable {
+public final class DefaultChecker: UsernameChecker, @unchecked Sendable {
     private let taken: Set<String>
     private let delay: Duration
     public init(taken: Set<String> = ["taken", "admin", "root"], delay: Duration = .zero) {
         self.taken = taken
         self.delay = delay
     }
-    public func checkUnique(username: String) -> UniquenessVerdictFfi {
+    public func check(value: String) -> CheckVerdictFfi {
         if delay != .zero { Thread.sleep(forTimeInterval: Double(delay.components.seconds)) }
-        return taken.contains(username.lowercased()) ? .taken : .unique
+        return taken.contains(value.lowercased()) ? .fail : .pass
     }
 }
 
@@ -413,23 +413,8 @@ extension ProfileViewModel {
         }
     }
 
-    static func display(_ v: UsernameValidity) -> String {
-        switch v {
-        case .unset: ""
-        case .valid(let value): value
-        case .invalid(let raw, _): raw
-        }
-    }
-
-    static func display(_ v: PersonNameValidity) -> String {
-        switch v {
-        case .unset: ""
-        case .valid(let value): value
-        case .invalid(let raw, _): raw
-        }
-    }
-
-    static func display(_ v: EmailValidity) -> String {
+    /// D24: username, name and email share one `TextValidity`, so three overloads became one.
+    static func display(_ v: TextValidity) -> String {
         switch v {
         case .unset: ""
         case .valid(let value): value
@@ -445,7 +430,7 @@ extension ProfileViewModel {
         }
     }
 
-    static func rangeText(_ r: PlainDateRange) -> String {
+    static func rangeText(_ r: AvailabilityRaw) -> String {
         "\(dateText(r.start)) → \(dateText(r.end))"
     }
 

@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import SpikeProfileFfi
+import GenProfileFfi
 import ProfileFeature
 
 /// Promotes this CLI-launched, *unbundled* executable to a regular foreground app. A bare SwiftPM
@@ -28,7 +28,7 @@ struct ProfileApp: App {
             username: "alice",
             name: "Alice Smith",
             email: "alice@example.com",
-            availability: PlainDateRange(
+            availability: AvailabilityRaw(
                 start: PlainDate(year: 2026, month: 1, day: 1),
                 end: PlainDate(year: 2026, month: 12, day: 31)
             )

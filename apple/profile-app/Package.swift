@@ -2,7 +2,7 @@
 import PackageDescription
 
 // The step-03 SwiftUI spike app. A `swift run`/`swift test` package (no Xcode project) that puts a
-// real editing surface on the step-02 bindings. Lives under `apple/`, OUTSIDE the cargo workspace,
+// real editing surface on the generated bindings (step 11). Lives under `apple/`, OUTSIDE the cargo workspace,
 // so `mise run check` stays Xcode-free. Depends on the generated `dist/apple` package exactly as
 // the probe does (its SwiftPM identity is the directory basename `apple`).
 //
@@ -18,13 +18,13 @@ let package = Package(
         .library(name: "ProfileFeature", targets: ["ProfileFeature"]),
     ],
     dependencies: [
-        .package(path: "../../crates/spike-profile-ffi/dist/apple"),
+        .package(path: "../../crates/gen-profile-ffi/dist/apple"),
     ],
     targets: [
         .target(
             name: "ProfileFeature",
             dependencies: [
-                .product(name: "SpikeProfileFfi", package: "apple"),
+                .product(name: "GenProfileFfi", package: "apple"),
             ]
         ),
         .executableTarget(

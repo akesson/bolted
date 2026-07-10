@@ -1,4 +1,4 @@
-import SpikeProfileFfi
+import GenProfileFfi
 
 /// The shell owns the *sentence*, never the *numbers*. Every template maps an `ErrorData.key` (the
 /// core's stable, language-free identifier) to an English string; `{param}` placeholders are filled
