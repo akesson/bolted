@@ -1723,7 +1723,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
             XCTAssertThrowsError(try draft.@@S_SET@@(raw: fixture.secondaryInvalid)) // records Invalid{raw}
             stash = draft.stash()
         }
-        // ProfileStashFfi's text stash carries only raw + base — "no sync" is a fact of the type.
+        // TextFieldStashFfi carries only raw + base — "no sync" is a compile-time fact of the type.
         XCTAssertEqual(stash.@@P_PROP@@.raw, fixture.primaryMine)
         XCTAssertEqual(stash.@@P_PROP@@.base, fixture.primaryBase)
         XCTAssertEqual(stash.@@S_PROP@@.raw, fixture.secondaryInvalid)

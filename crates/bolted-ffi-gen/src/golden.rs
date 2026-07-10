@@ -360,3 +360,103 @@ fn a_generated_type_named_like_a_platform_builtin_is_refused() {
         syn::parse_str("pub struct ProfileSnapshot { pub v: u64 }").expect("valid");
     assert!(crate::reject_reserved_type_names(&clean).is_ok());
 }
+
+// ======================================================================================
+// The foreign emitter's genericity (step 13, deliverable 6).
+//
+// A generator with one input is shaped like that input — the lesson `gen-note` exists to hold (step 08,
+// then 09), now carried to the *foreign* emitter. The emitted Kotlin/Swift suites for `gen-note` are
+// the falsifier: `gen-note` names no profile concept, so any profile identifier in their text is the
+// emitter hardcoding what it must project from the declaration. This test caught a `ProfileStashFfi`
+// a Swift C20 comment had frozen in — the Kotlin side had it generic, the Swift side did not.
+//
+// Text level is the honest scope: packing and running a second feature on both platforms is tier cost
+// that teaches nothing more about the *emitter* (step 13 non-goal). The genericity that matters here is
+// the string-building's, and a string is what this reads.
+// ======================================================================================
+
+/// The real second feature — two plain text fields, no check, no rule, no composite (`crates/gen-note`).
+/// Read from source, not a lookalike, so this also fails if `gen-note` ever grows a profile-shaped field.
+const NOTE: &str = include_str!("../../gen-note/src/lib.rs");
+/// The first feature, for the can-fire control below — generated in memory from the same source
+/// `mise run check` drift-checks the committed suites against.
+const PROFILE: &str = include_str!("../../gen-profile/src/lib.rs");
+
+fn note_kotlin() -> String {
+    crate::kotlin_contract_suite(
+        NOTE,
+        "com.example.gen_note_ffi",
+        "dev.bolted.noteprobe.generated",
+    )
+    .expect("the Kotlin contract suite generates for gen-note")
+}
+fn note_swift() -> String {
+    crate::swift_contract_suite(NOTE, "GenNoteFfi")
+        .expect("the Swift contract suite generates for gen-note")
+}
+fn profile_kotlin() -> String {
+    crate::kotlin_contract_suite(
+        PROFILE,
+        "com.example.gen_profile_ffi",
+        "dev.bolted.profileprobe.generated",
+    )
+    .expect("the Kotlin contract suite generates for gen-profile")
+}
+fn profile_swift() -> String {
+    crate::swift_contract_suite(PROFILE, "GenProfileFfi")
+        .expect("the Swift contract suite generates for gen-profile")
+}
+
+/// Concepts from `gen-profile` alone — the entity, a field, or a field's value type. None is a word the
+/// emitter has any business writing for another feature. Every one is proved to actually appear in the
+/// profile suite by [`every_profile_concept_actually_appears_in_the_profile_suite`], so excluding it
+/// from the note suite is a real constraint, not a vacuous one. (Fixture-only concepts — `PlainDate`,
+/// `DateRange`, `corporate_email` — are deliberately absent: they live in the hand-written fixture, not
+/// the emitted suite, so they could never fire here.)
+const PROFILE_CONCEPTS: &[&str] = &[
+    "Profile",
+    "username",
+    "Username",
+    "email",
+    "Email",
+    "PersonName",
+    "availability",
+    "Availability",
+];
+
+/// The emitter, run on `gen-note`, produces plausible output that names no `gen-profile` concept.
+#[test]
+fn a_suite_emitted_for_another_feature_names_no_profile_concept() {
+    for (lang, src) in [("Kotlin", note_kotlin()), ("Swift", note_swift())] {
+        // Plausible: it is a suite for *this* feature, not an empty degenerate stub.
+        assert!(
+            src.contains("NoteConformanceSuite") && src.contains("NoteStoreFfi"),
+            "the {lang} suite emitted for `gen-note` does not name the Note feature — it degenerated"
+        );
+        for concept in PROFILE_CONCEPTS {
+            assert!(
+                !src.contains(concept),
+                "the {lang} suite emitted for `gen-note` names `{concept}`, a `gen-profile` concept: \
+                 the emitter is carrying its first feature's shape into its second (step 08's lesson). \
+                 Project the name from the declaration; do not hardcode it."
+            );
+        }
+    }
+}
+
+/// A falsifier that cannot fire falsifies nothing — [`the_forbidden_needles_can_actually_fire`], one
+/// deliverable out. Each profile concept must genuinely appear in the profile suite, or its absence
+/// from the note suite above proves nothing and the needle is dead.
+#[test]
+fn every_profile_concept_actually_appears_in_the_profile_suite() {
+    for (lang, src) in [("Kotlin", profile_kotlin()), ("Swift", profile_swift())] {
+        for concept in PROFILE_CONCEPTS {
+            assert!(
+                src.contains(concept),
+                "`{concept}` never appears in the {lang} profile suite, so \
+                 `a_suite_emitted_for_another_feature_names_no_profile_concept` forbids nothing by \
+                 listing it. Drop the dead needle, or fix it to one that fires."
+            );
+        }
+    }
+}

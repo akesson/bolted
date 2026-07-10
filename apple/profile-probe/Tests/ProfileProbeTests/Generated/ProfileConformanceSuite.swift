@@ -387,7 +387,7 @@ final class ProfileConformanceSuite: XCTestCase {
             XCTAssertThrowsError(try draft.trySetEmail(raw: fixture.secondaryInvalid)) // records Invalid{raw}
             stash = draft.stash()
         }
-        // ProfileStashFfi's text stash carries only raw + base — "no sync" is a fact of the type.
+        // TextFieldStashFfi carries only raw + base — "no sync" is a compile-time fact of the type.
         XCTAssertEqual(stash.name.raw, fixture.primaryMine)
         XCTAssertEqual(stash.name.base, fixture.primaryBase)
         XCTAssertEqual(stash.email.raw, fixture.secondaryInvalid)
