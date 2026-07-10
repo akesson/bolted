@@ -1,8 +1,8 @@
 [package]
-name = "spike-profile"
+name = "spike-note"
 version.workspace = true
 edition.workspace = true
-publish = false
+publish.workspace = true
 
 [dependencies]
 bolted-core = { path = "../bolted-core" }

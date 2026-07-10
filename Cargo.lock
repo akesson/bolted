@@ -135,6 +135,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolted-conformance"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "proptest",
+]
+
+[[package]]
 name = "bolted-core"
 version = "0.0.0"
 
@@ -1717,9 +1725,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
+name = "spike-note"
+version = "0.0.0"
+dependencies = [
+ "bolted-conformance",
+ "bolted-core",
+ "proptest",
+]
+
+[[package]]
 name = "spike-profile"
 version = "0.0.0"
 dependencies = [
+ "bolted-conformance",
  "bolted-core",
  "proptest",
 ]

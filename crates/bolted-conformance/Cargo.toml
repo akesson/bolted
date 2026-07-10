@@ -1,12 +1,9 @@
 [package]
-name = "spike-profile"
+name = "bolted-conformance"
 version.workspace = true
 edition.workspace = true
-publish = false
+publish.workspace = true
 
 [dependencies]
 bolted-core = { path = "../bolted-core" }
-
-[dev-dependencies]
-bolted-conformance = { path = "../bolted-conformance" }
 proptest = "1"

@@ -1,25 +1,32 @@
 # Bolted — Conformance suite
 
-**Status: frozen with ARCHITECTURE.md (step 06); C03 amended and C19 added in step 07.** These are the
-design's falsifiable claims. Each one is normative: an implementation of the Bolted contract that
-violates any of them is not a Bolted implementation, whatever else it does.
+**Status: frozen with ARCHITECTURE.md (step 06); C03 amended and C19 added in step 07; C12/C17/C18
+amended and C22 added in step 08.** These are the design's falsifiable claims. Each one is normative:
+an implementation of the Bolted contract that violates any of them is not a Bolted implementation,
+whatever else it does.
 
-Every `CNN` below has at least one `cNN_*` test in
-[`crates/spike-profile/tests/conformance.rs`](../crates/spike-profile/tests/conformance.rs), and a
-test in that file guarantees this document and the suite cannot drift apart
-(`conformance_manifest_has_a_test_for_every_id`). That check is the suite's own rung-3 claim on
-[VISION](VISION.md)'s verification ladder: the mapping is verified by the build, not by review.
+Every `CNN` below has at least one `cNN_*` function in
+[`crates/bolted-conformance`](../crates/bolted-conformance/src), generic over a feature, and
+[`tests/manifest.rs`](../crates/bolted-conformance/tests/manifest.rs) guarantees this document and
+the suite cannot drift apart — three ways: every documented ID has a function, every function is a
+documented ID, and every function is stamped by exactly one `*_suite!` macro, so a fixture cannot
+skip one. That check is the suite's own rung-3 claim on [VISION](VISION.md)'s verification ladder:
+the mapping is verified by the build, not by review.
 
 ## Where this suite is going
 
 | Step | What happens to it |
 |------|--------------------|
-| 06 (now) | Named, documented, and running against `spike-profile`, the hand-written "as-if-generated" reference implementation. |
-| 08 | Made **generic over a feature** and extracted alongside `bolted-core`. Doing it now would mean inventing a fixture trait with exactly one implementor. |
+| 06 | Named, documented, and running against `spike-profile`, the hand-written "as-if-generated" reference implementation. |
+| 08 (now) | **Generic over a feature**, extracted into `bolted-conformance`, and run against **two** — `spike-profile` (rule + async check + composite value) and `spike-note` (neither). A suite with one implementor proves nothing about genericity. |
 | 10 | Emitted as **per-language contract tests** (Swift, Kotlin, C#) from the same IDs, so a generated binding that breaks C09 fails its own build. |
 
 Wording convention: **must** is normative. "The field" means an editable `Field<V>` of a draft; "the
 draft" means a value implementing `Draft`; "theirs" is an incoming canonical value.
+
+Not every feature owes every invariant. C08 presupposes a tier-2 rule; C10, C13 and C16 presuppose an
+async check; a feature with neither still satisfies the rest. The suite says so in trait bounds
+(`RuleFeature`, `AsyncCheckFeature`) rather than in prose.
 
 ## The invariants
 
@@ -36,7 +43,7 @@ draft" means a value implementing `Draft`; "theirs" is an incoming canonical val
 | C09 | **Resolution semantics.** `resolve_keep_mine`: value stays yours, base becomes theirs, the field stays dirty and returns to `InSync`. `resolve_take_theirs`: value and base become theirs, clean, `InSync`. |
 | C10 | **Latest check wins.** A completion carrying a superseded token must be discarded. At most one check is in flight. |
 | C11 | **Deletion orphans.** Deleting the canonical entity under a live draft must set status `Orphaned`, and submitting an orphaned draft must be a typed outcome, never a silent failure or a resurrection. |
-| C12 | **Create-flow never rebases.** A draft with no base entity must not be moved by any canonical change, and must commit normally. |
+| C12 | **Create-flow never rebases.** A draft with no base entity must not be moved by any canonical change, and must commit normally. Conversely, a draft that retains an ancestor in **any** field is entity-backed: it rebases, and it orphans. |
 | C13 | **Verdicts are value-bound.** Any change to a checked field's *value* — by edit, rebase, or `resolve_take_theirs` — must reset its async check to unchecked. A verdict endorses a value, so a changed value un-endorses it. A mutation that leaves the value unchanged (edit-to-same, `resolve_keep_mine`, a conflict that preserves your value) must leave the verdict standing. |
 | C14 | **Auto-converge on edit.** Editing a conflicted field to a value equal to `theirs` must resolve the conflict: base adopted, clean, `InSync`. This is C04 with the two events in the other order, and it must reach the same state. |
 | C15 | **The base version tracks the rebase.** After a canonical change rebases a draft, the draft's `base_version` must equal the store's version. An orphaned draft is based on no canonical and its stamp must stop moving. |
@@ -48,7 +55,7 @@ draft" means a value implementing `Draft`; "theirs" is an incoming canonical val
 | C21 | **Restore is a rebase.** Adopting a restored draft must conflict exactly those fields whose canonical moved while it was away, and leave the others dirty and `InSync` (C19). A resolution taken before the restore must survive it, because its effect lives in the ancestor. Adopting an entity-backed draft into a store with no canonical must orphan it (C11). A create-flow draft must never be moved (C12). |
 | C22 | **"A draft exists" and "a draft rebases" are different questions.** The store must answer both, separately. A create-flow draft (C12) and an orphan (C11) exist but do not rebase; `close` removes a draft from both counts. No single count may stand for the pair. |
 
-## Notes on five of them
+## Notes on six of them
 
 **C13 + C16 together** are what make client-side async validation trustworthy. C13 guarantees a
 surviving `Done(Ok)` was computed for the value now in the field; C16 guarantees the value in a dirty
@@ -86,6 +93,14 @@ are essentially never equal. `c08_rebase_reruns_tier2_rule` had been producing a
 `email` since it was written, and passed, because it only asserted on the rule. The lesson is about
 property tests, not about rebase: **an `assume` set that is missing a precondition does not weaken the
 property — it silently asserts the bug.**
+
+**C12's second sentence was added in step 08, and it is the only thing that tests `is_based`.** Every
+draft the rest of the suite builds has an ancestor in all of its fields or in none, so a `StoreDraft`
+that decides entity-backedness by consulting a *single* field passes all 21 other invariants — on both
+features, verified by mutation. It matters because a partially-ancestored draft is not hypothetical:
+the stash is an untrusted input, and a constraint tightened between app versions leaves exactly this
+shape. A draft misjudged create-flow is never rebased and never orphaned, and it silently overwrites
+the server on submit. Step 09 will *generate* `is_based`; this is the test that will catch it.
 
 **C22 was added in step 08, and it is a bug given a name.** Phase 1 wrote the store loop twice, and
 each copy grew a `live_draft_count()`: the core's meant *"how many drafts would a canonical change

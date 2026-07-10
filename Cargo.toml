@@ -2,7 +2,9 @@
 resolver = "3"
 members = [
     "crates/bolted-core",
+    "crates/bolted-conformance",
     "crates/spike-profile",
+    "crates/spike-note",
     "crates/spike-profile-ffi",
     "crates/profile-web",
 ]
