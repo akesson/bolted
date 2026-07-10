@@ -76,7 +76,8 @@ pub struct Profile {
     #[check(
         rule = "username_unique",
         pending_key = "username_check_pending",
-        required_key = "username_check_required"
+        required_key = "username_check_required",
+        failed_key = "username_taken"
     )]
     pub username: Username,
     pub name: PersonName,

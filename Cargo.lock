@@ -156,6 +156,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolted-ffi-gen"
+version = "0.0.0"
+dependencies = [
+ "bolted-decl",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "bolted-macros"
 version = "0.0.0"
 dependencies = [
@@ -164,6 +175,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "bolted_ffi"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "boltffi",
 ]
 
 [[package]]
@@ -654,6 +673,28 @@ dependencies = [
  "bolted-macros",
  "proptest",
  "spike-profile",
+]
+
+[[package]]
+name = "gen_note_ffi"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "bolted-ffi-gen",
+ "bolted_ffi",
+ "boltffi",
+ "gen-note",
+]
+
+[[package]]
+name = "gen_profile_ffi"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "bolted-ffi-gen",
+ "bolted_ffi",
+ "boltffi",
+ "gen-profile",
 ]
 
 [[package]]

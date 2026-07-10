@@ -27,7 +27,12 @@ impl EntityField {
     }
 }
 
-/// `#[check(rule = "…", pending_key = "…", required_key = "…")]`
+/// `#[check(rule = "…", pending_key = "…", required_key = "…", failed_key = "…")]`
+///
+/// Three of the four keys are l10n keys the shells ship. `failed_key` is the one the *core* never
+/// uses: it names the error a foreign checker's `Fail` verdict raises, and it is declared here rather
+/// than supplied by the shell so that every key a feature can produce is in one place, checkable
+/// against every target's strings file (step 09, friction 3).
 pub struct Check {
     /// The stable rule name a violation reports under.
     pub rule: String,
@@ -37,6 +42,8 @@ pub struct Check {
     pub slot: Ident,
     pub pending_key: String,
     pub required_key: String,
+    /// FFI-only: the key a `CheckVerdictFfi::Fail` becomes.
+    pub failed_key: String,
 }
 
 /// A parsed `#[bolted::entity]` struct.
@@ -131,7 +138,7 @@ fn parse_fields(item: &mut ItemStruct) -> syn::Result<Vec<EntityField>> {
 }
 
 fn parse_check(attr: &syn::Attribute, field: &Ident) -> syn::Result<Check> {
-    let (mut rule, mut pending_key, mut required_key) = (None, None, None);
+    let (mut rule, mut pending_key, mut required_key, mut failed_key) = (None, None, None, None);
     attr.parse_nested_meta(|m| {
         let target = if m.path.is_ident("rule") {
             &mut rule
@@ -139,21 +146,24 @@ fn parse_check(attr: &syn::Attribute, field: &Ident) -> syn::Result<Check> {
             &mut pending_key
         } else if m.path.is_ident("required_key") {
             &mut required_key
+        } else if m.path.is_ident("failed_key") {
+            &mut failed_key
         } else {
-            return Err(m.error("expected `rule`, `pending_key` or `required_key`"));
+            return Err(m.error("expected `rule`, `pending_key`, `required_key` or `failed_key`"));
         };
         *target = Some(m.value()?.parse::<LitStr>()?.value());
         Ok(())
     })?;
 
-    let (Some(rule), Some(pending_key), Some(required_key)) = (rule, pending_key, required_key)
+    let (Some(rule), Some(pending_key), Some(required_key), Some(failed_key)) =
+        (rule, pending_key, required_key, failed_key)
     else {
-        // All three are l10n keys that shells already ship. Defaulting them from the field name
+        // All four are l10n keys that shells already ship. Defaulting them from the field name
         // would move a translation key on a rename, silently.
         return Err(syn::Error::new(
             attr.span(),
-            "`#[check(..)]` needs `rule`, `pending_key` and `required_key` — they are stable \
-             localisation keys, and a macro must not invent them",
+            "`#[check(..)]` needs `rule`, `pending_key`, `required_key` and `failed_key` — they \
+             are stable localisation keys, and a macro must not invent them",
         ));
     };
 
@@ -172,5 +182,6 @@ fn parse_check(attr: &syn::Attribute, field: &Ident) -> syn::Result<Check> {
         rule,
         pending_key,
         required_key,
+        failed_key,
     })
 }

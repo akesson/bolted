@@ -1,0 +1,20 @@
+[package]
+name = "bolted-ffi-gen"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Emits the FFI layer as Rust **source text** (D22), because BoltFFI's bindgen discovers its surface by
+# parsing source files off disk and never sees expanded code (step 10, M0). So this crate does NOT
+# depend on boltffi: it writes `#[data]` and `#[export]` as tokens, and the generated crate is what
+# imports them.
+#
+# `prettyplease` is a normal dependency, not a dev-dependency: the drift check in `mise run check`
+# compares formatted text against a committed file, so formatting is part of the output, not the test.
+
+[dependencies]
+bolted-decl = { path = "../bolted-decl" }
+prettyplease = "0.2"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing"] }

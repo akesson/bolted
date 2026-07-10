@@ -146,7 +146,7 @@ mod tests {
 
         #[bolted_macros::entity(rules)]
         pub struct Profile {
-            #[check(rule = "username_unique", pending_key = "p", required_key = "r")]
+            #[check(rule = "username_unique", pending_key = "p", required_key = "r", failed_key = "f")]
             pub username: Username,
             pub availability: DateRange,
         }

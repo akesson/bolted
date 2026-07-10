@@ -10,6 +10,29 @@ rust = "1.95.0"
 # onto a machine that only wants to build Rust. Same spirit as step 02 keeping `boltffi_cli` out of
 # `[tools]`. See docs/steps/step-05-android-probe.md (Deliverable 3).
 
+# --- Step 10: the generated FFI layer (D22). BoltFFI's bindgen reads source text and never sees
+# expanded code, so the FFI surface must EXIST as source. `check` regenerates it in memory and
+# byte-compares (crates/gen-*-ffi/tests/drift.rs), which is why this verb is not part of `check`:
+# a verb that rewrites the file it is meant to verify cannot verify it. ---
+
+[tasks."gen:ffi"]
+description = "Regenerate the committed FFI source for every generated feature (D22)."
+run = """
+set -eu
+gen() {
+  cargo run -q -p bolted-ffi-gen --bin gen-ffi -- \
+    "crates/$1/src/lib.rs" "$2" "crates/$1-ffi/src/generated.rs"
+}
+gen gen-note    gen_note
+gen gen-profile gen_profile
+# `check` also runs `cargo fmt --all --check`, and rustfmt owns every file in the workspace. The
+# drift check compares code rather than bytes for exactly this reason; formatting here keeps the two
+# verbs from fighting over the same file.
+cargo fmt -p gen_note_ffi -p gen_profile_ffi
+echo
+echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
+"""
+
 [tasks.test]
 run = "cargo test --workspace"
 

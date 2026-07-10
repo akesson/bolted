@@ -1,0 +1,22 @@
+# Underscores: BoltFFI derives native symbol names from the crate name and rejects hyphens.
+[package]
+name = "gen_note_ffi"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# The whole FFI layer of `gen-note` is `src/generated.rs` — committed, and byte-checked against the
+# declaration on every `mise run check` (D22). `gen-note` is the *simple* feature: two `String`
+# newtypes, no rule, no async check, no composite. It exists to keep the generator honest, and it was
+# written before `gen-profile-ffi` for exactly the reason step 09 wrote `gen-note` before `gen-profile`.
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+bolted-core = { path = "../bolted-core" }
+bolted_ffi = { path = "../bolted-ffi" }
+gen-note = { path = "../gen-note" }
+boltffi = "0.27.3"
+
+[dev-dependencies]
+bolted-ffi-gen = { path = "../bolted-ffi-gen" }

@@ -1,0 +1,19 @@
+# Package name uses underscores: BoltFFI derives native symbol names from the crate name and rejects
+# hyphens. The directory stays `bolted-ffi`. (Step 05's finding, still true.)
+[package]
+name = "bolted_ffi"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# The only HAND-WRITTEN crate importing boltffi — the swappable seam (ARCHITECTURE §5). Each
+# `<feature>_ffi` crate imports boltffi too, but every line of those is generated from a declaration
+# and byte-checked against it on every `mise run check` (D22).
+#
+# `rlib` only: this crate is never packed on its own. Its `#[data]` types reach a shell because
+# bindgen scans the root crate's direct, boltffi-depending dependencies (step 10, M0, row 5) — which
+# is exactly what makes D24's shared `TextFieldState` possible.
+
+[dependencies]
+bolted-core = { path = "../bolted-core" }
+boltffi = "0.27.3"

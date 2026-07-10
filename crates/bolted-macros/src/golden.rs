@@ -115,7 +115,8 @@ fn entity_profile() {
                     #[check(
                         rule = "username_unique",
                         pending_key = "username_check_pending",
-                        required_key = "username_check_required"
+                        required_key = "username_check_required",
+                        failed_key = "username_taken"
                     )]
                     pub username: Username,
                     pub name: PersonName,
@@ -383,7 +384,7 @@ fn every_mutation_path_routes_through_the_single_guard() {
         quote!(),
         quote! {
             pub struct Profile {
-                #[check(rule = "u", pending_key = "p", required_key = "r")]
+                #[check(rule = "u", pending_key = "p", required_key = "r", failed_key = "f")]
                 pub username: Username,
                 pub name: PersonName,
             }
@@ -431,7 +432,7 @@ fn an_unchecked_fields_setter_does_not_pay_for_the_guard() {
         quote!(),
         quote! {
             pub struct Profile {
-                #[check(rule = "u", pending_key = "p", required_key = "r")]
+                #[check(rule = "u", pending_key = "p", required_key = "r", failed_key = "f")]
                 pub username: Username,
                 pub name: PersonName,
                 pub email: Email,
@@ -473,7 +474,7 @@ fn the_emitted_code_makes_no_judgement_of_its_own() {
         quote!(rules),
         quote! {
             pub struct Profile {
-                #[check(rule = "u", pending_key = "p", required_key = "r")]
+                #[check(rule = "u", pending_key = "p", required_key = "r", failed_key = "f")]
                 pub username: Username,
                 pub name: PersonName,
             }
