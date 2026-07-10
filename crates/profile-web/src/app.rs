@@ -267,9 +267,9 @@ fn inline_error(app: App, field: ProfileField) -> impl IntoView {
     }
 }
 
-/// Mine vs theirs (and the common ancestor) straight out of `SyncState::Conflicted { base,
-/// theirs }` — the framework's field-level ceiling, rendered. *Mine* needs no display: it is the
-/// field's own validity, already in the input above.
+/// Mine vs theirs (and the common ancestor) straight out of `Field` — the framework's field-level
+/// ceiling, rendered. *Mine* needs no display: it is the field's own validity, already in the input
+/// above. Since C14 this banner disappears the moment the user types their value.
 fn conflict_banner(app: App, field: ProfileField) -> impl IntoView {
     move || {
         app.read(|c| c.conflict(field)).map(|info: ConflictInfo| {
@@ -344,6 +344,12 @@ fn submit_result(app: App) -> impl IntoView {
                     <p class="err" id="submit-orphaned">
                         {l10n::message(&bolted_core::ErrorData::new("draft_orphaned"))}
                     </p>
+                }
+                .into_any(),
+                // Unreachable here (a successful submit re-checks-out immediately), but the
+                // contract has the variant since the handle outlives its draft (C17).
+                SubmitOutcome::AlreadySubmitted => view! {
+                    <p class="err" id="submit-already">"This edit session has already been submitted."</p>
                 }
                 .into_any(),
             })

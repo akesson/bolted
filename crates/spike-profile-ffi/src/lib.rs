@@ -29,8 +29,8 @@ use boltffi::*;
 
 use bolted_core::report::ErrorData as CoreErrorData;
 use bolted_core::{
-    CheckState, Constraint, Draft, DraftStatus, Field, StoreDraft, SyncState, ValidationReport,
-    Validity, Value,
+    CheckState, CommitError, Constraint, Draft, DraftStatus, Field, StoreDraft, SyncState,
+    ValidationReport, Validity, Value,
 };
 use spike_profile::{DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, Username};
 
@@ -141,7 +141,7 @@ impl ProfileStoreFfi {
                     continue;
                 }
                 if let Some(draft) = entry.draft.as_mut() {
-                    draft.rebase(&profile);
+                    draft.rebase(&profile, version);
                     emits.push((entry.producer.clone(), build_draft_snapshot(draft)));
                 }
             }
@@ -398,21 +398,19 @@ impl ProfileDraftFfi {
         }
     }
 
-    /// Submit this draft: re-validate everything, then (if clean) commit and adopt the result as
-    /// the new canonical, rebasing every other live draft. The draft is consumed either way; the
-    /// foreign handle becomes a tombstone. Mirrors `bolted_core::Store::submit`.
+    /// Submit this draft: commit it and adopt the result as the new canonical, rebasing every other
+    /// live draft. On success the draft is consumed and the foreign handle becomes a tombstone
+    /// (C17). On refusal the draft goes straight back into the registry: the edit session survives.
+    ///
+    /// There is no pre-check pass. `Draft::commit` owns the gates and reports them typed, so the
+    /// wrapper takes the draft, asks, and puts it back if the answer is no — the same shape as
+    /// `bolted_core::Store::submit`. This is the FFI half of kill criterion 1: a self-consuming
+    /// `commit` that returns `Self` in its error arm crosses the boundary fine, because the wrapper
+    /// owns the draft it moved out of its own `HashMap`, not a foreign handle.
     pub fn submit(&self) -> Result<(), SubmitErrorFfi> {
         let outcome = {
             let mut g = lock(&self.core);
 
-            // Pre-check without consuming.
-            // Refused pre-checks propagate straight out of `submit`: nothing consumed, no emit.
-            match g.drafts.get(&self.id).and_then(|e| e.draft.as_ref()) {
-                None => return Err(SubmitErrorFfi::AlreadySubmitted),
-                Some(draft) => pre_submit_check(draft)?,
-            }
-
-            // Passed: move the draft out (single-owner move) and commit.
             let taken = g
                 .drafts
                 .get_mut(&self.id)
@@ -431,7 +429,7 @@ impl ProfileDraftFfi {
                             continue;
                         }
                         if let Some(other) = entry.draft.as_mut() {
-                            other.rebase(&entity);
+                            other.rebase(&entity, version);
                             emits.push((entry.producer.clone(), build_draft_snapshot(other)));
                         }
                     }
@@ -442,10 +440,12 @@ impl ProfileDraftFfi {
                     ));
                     Ok(emits)
                 }
-                // Unreachable (validated above with no intervening rebase); defensively report.
-                Err(report) => Err(SubmitErrorFfi::Validation {
-                    report: project_report(&report),
-                }),
+                Err((draft, error)) => {
+                    if let Some(entry) = g.drafts.get_mut(&self.id) {
+                        entry.draft = Some(draft);
+                    }
+                    Err(commit_error_to_dto(error))
+                }
             }
         };
         match outcome {
@@ -612,8 +612,10 @@ fn project_username(f: &Field<Username>) -> UsernameFieldState {
     };
     let sync = match f.sync() {
         SyncState::InSync => UsernameFieldSync::InSync,
-        SyncState::Conflicted { base, theirs } => UsernameFieldSync::Conflicted {
-            base: base.as_ref().map(|u| u.as_str().to_string()),
+        // The DTO keeps the full 3-way shape for shells; the core no longer stores the ancestor
+        // twice, so it is read from the field itself (step-01 F7).
+        SyncState::Conflicted { theirs } => UsernameFieldSync::Conflicted {
+            base: f.base().map(|u| u.as_str().to_string()),
             theirs: theirs.as_str().to_string(),
         },
     };
@@ -637,8 +639,10 @@ fn project_name(f: &Field<PersonName>) -> PersonNameFieldState {
     };
     let sync = match f.sync() {
         SyncState::InSync => PersonNameFieldSync::InSync,
-        SyncState::Conflicted { base, theirs } => PersonNameFieldSync::Conflicted {
-            base: base.as_ref().map(|u| u.as_str().to_string()),
+        // The DTO keeps the full 3-way shape for shells; the core no longer stores the ancestor
+        // twice, so it is read from the field itself (step-01 F7).
+        SyncState::Conflicted { theirs } => PersonNameFieldSync::Conflicted {
+            base: f.base().map(|u| u.as_str().to_string()),
             theirs: theirs.as_str().to_string(),
         },
     };
@@ -662,8 +666,10 @@ fn project_email(f: &Field<Email>) -> EmailFieldState {
     };
     let sync = match f.sync() {
         SyncState::InSync => EmailFieldSync::InSync,
-        SyncState::Conflicted { base, theirs } => EmailFieldSync::Conflicted {
-            base: base.as_ref().map(|u| u.as_str().to_string()),
+        // The DTO keeps the full 3-way shape for shells; the core no longer stores the ancestor
+        // twice, so it is read from the field itself (step-01 F7).
+        SyncState::Conflicted { theirs } => EmailFieldSync::Conflicted {
+            base: f.base().map(|u| u.as_str().to_string()),
             theirs: theirs.as_str().to_string(),
         },
     };
@@ -690,8 +696,8 @@ fn project_availability(f: &Field<DateRange>) -> AvailabilityFieldState {
     };
     let sync = match f.sync() {
         SyncState::InSync => AvailabilityFieldSync::InSync,
-        SyncState::Conflicted { base, theirs } => AvailabilityFieldSync::Conflicted {
-            base: base.as_ref().map(to_plain_range),
+        SyncState::Conflicted { theirs } => AvailabilityFieldSync::Conflicted {
+            base: f.base().map(to_plain_range),
             theirs: to_plain_range(theirs),
         },
     };
@@ -724,24 +730,19 @@ fn project_report(r: &ValidationReport<ProfileField>) -> ValidationReportFfi {
     }
 }
 
-fn pre_submit_check(draft: &ProfileDraft) -> Result<(), SubmitErrorFfi> {
-    match draft.status() {
-        DraftStatus::Orphaned => return Err(SubmitErrorFfi::Orphaned),
-        DraftStatus::Live => {}
-    }
-    let conflicts = draft.conflicts();
-    if !conflicts.is_empty() {
-        return Err(SubmitErrorFfi::Conflicted {
-            fields: conflicts.into_iter().map(to_field_id).collect(),
-        });
-    }
-    let report = draft.validate();
-    if !report.is_ok() {
-        return Err(SubmitErrorFfi::Validation {
+/// Project the core's typed `CommitError` onto the FFI enum. `AlreadySubmitted` has no core
+/// `CommitError` analogue — a draft you own cannot already be submitted — so it is raised by
+/// `submit` when the registry slot is empty, and never appears here.
+fn commit_error_to_dto(e: CommitError<ProfileField>) -> SubmitErrorFfi {
+    match e {
+        CommitError::Validation(report) => SubmitErrorFfi::Validation {
             report: project_report(&report),
-        });
+        },
+        CommitError::Conflicted { fields } => SubmitErrorFfi::Conflicted {
+            fields: fields.into_iter().map(to_field_id).collect(),
+        },
+        CommitError::Orphaned => SubmitErrorFfi::Orphaned,
     }
-    Ok(())
 }
 
 fn build_profile(v: &ProfileValues) -> Result<Profile, ValidationReportFfi> {

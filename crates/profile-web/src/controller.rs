@@ -10,7 +10,7 @@
 
 use crate::l10n;
 use bolted_core::{
-    CheckState, CheckToken, Constraint, Draft, DraftStatus, ErrorData, SubmitError, SyncState,
+    CheckState, CheckToken, Constraint, Draft, DraftStatus, ErrorData, Field, SubmitError,
     ValidationReport, Validity, Value,
 };
 use spike_profile::{
@@ -51,6 +51,9 @@ pub enum SubmitOutcome {
     Validation(ValidationReport<ProfileField>),
     Conflicted(Vec<ProfileField>),
     Orphaned,
+    /// The handle was already a tombstone. Unreachable in this shell (a successful submit
+    /// immediately checks out a fresh draft), but the contract has the variant, so the shell does.
+    AlreadySubmitted,
 }
 
 /// Conflict banner data: the incoming `theirs` (and the common-ancestor `base`) as display text.
@@ -134,12 +137,34 @@ impl ProfileController {
 
     /// Shared access to the live core draft, for assertions and power-reads. This IS the
     /// "read the contract directly" claim: no snapshot copy exists anywhere in this shell.
-    pub fn draft(&self) -> Ref<'_, ProfileDraft> {
+    /// `None` once the handle is a tombstone (submitted or closed).
+    pub fn draft(&self) -> Option<Ref<'_, ProfileDraft>> {
         self.handle.borrow()
     }
 
+    /// Read the draft, or fall back. The handle's tombstone state (C17) meets the shell here, and
+    /// exactly here: every other read goes through this one function.
+    fn with_draft<R: Default>(&self, f: impl FnOnce(&ProfileDraft) -> R) -> R {
+        match self.handle.borrow() {
+            Some(d) => f(&d),
+            None => R::default(),
+        }
+    }
+
+    /// Mutate the draft, if there is one and it is still editable. A tombstoned handle and an
+    /// orphaned draft are both inert — the shell never has to ask which.
+    fn edit<R: Default>(&self, f: impl FnOnce(&mut ProfileDraft) -> R) -> R {
+        match self.handle.borrow_mut() {
+            Some(mut d) if d.status() == DraftStatus::Live => f(&mut d),
+            _ => R::default(),
+        }
+    }
+
+    /// Is there a draft, and is it still attached to a canonical entity?
     pub fn is_live(&self) -> bool {
-        matches!(self.handle.borrow().status(), DraftStatus::Live)
+        self.handle
+            .borrow()
+            .is_some_and(|d| d.status() == DraftStatus::Live)
     }
 
     pub fn username_buf(&self) -> &str {
@@ -163,28 +188,22 @@ impl ProfileController {
     }
 
     pub fn is_dirty(&self, field: ProfileField) -> bool {
-        let d = self.handle.borrow();
-        match field {
-            ProfileField::Username => d.username.is_dirty(),
-            ProfileField::Name => d.name.is_dirty(),
-            ProfileField::Email => d.email.is_dirty(),
-            ProfileField::Availability => d.availability.is_dirty(),
-        }
+        self.with_draft(|d| dirty_of(d, field))
     }
 
     pub fn any_dirty(&self) -> bool {
-        !self.handle.borrow().dirty_fields().is_empty()
+        self.with_draft(|d| !d.dirty_fields().is_empty())
     }
 
     /// The inline error for a field: its tier-1 `Invalid` error, plus (for username) a failed
     /// uniqueness verdict. The full report (required, rules) surfaces on submit.
     pub fn inline_error(&self, field: ProfileField) -> Option<String> {
-        let d = self.handle.borrow();
+        let d = self.handle.borrow()?;
         let validity_error: Option<ErrorData> = match field {
-            ProfileField::Username => invalid_error(&d.username),
-            ProfileField::Name => invalid_error(&d.name),
-            ProfileField::Email => invalid_error(&d.email),
-            ProfileField::Availability => invalid_error(&d.availability),
+            ProfileField::Username => d.username.invalid_error(),
+            ProfileField::Name => d.name.invalid_error(),
+            ProfileField::Email => d.email.invalid_error(),
+            ProfileField::Availability => d.availability.invalid_error(),
         };
         if let Some(e) = validity_error {
             return Some(l10n::message(&e));
@@ -197,25 +216,28 @@ impl ProfileController {
         None
     }
 
-    /// Conflict banner data, if the field is conflicted. Built from `Field` data alone
-    /// (`SyncState::Conflicted { base, theirs }`) — the §4 claim on trial.
+    /// Conflict banner data, if the field is conflicted. Built from `Field` data alone — the §4
+    /// claim on trial. The ancestor comes from `Field::base()` now that the core stores it once.
     pub fn conflict(&self, field: ProfileField) -> Option<ConflictInfo> {
-        let d = self.handle.borrow();
+        let d = self.handle.borrow()?;
         match field {
-            ProfileField::Username => conflict_info(d.username.sync(), |v| v.as_str().to_string()),
-            ProfileField::Name => conflict_info(d.name.sync(), |v| v.as_str().to_string()),
-            ProfileField::Email => conflict_info(d.email.sync(), |v| v.as_str().to_string()),
-            ProfileField::Availability => conflict_info(d.availability.sync(), range_text),
+            ProfileField::Username => conflict_info(&d.username, |v| v.as_str().to_string()),
+            ProfileField::Name => conflict_info(&d.name, |v| v.as_str().to_string()),
+            ProfileField::Email => conflict_info(&d.email, |v| v.as_str().to_string()),
+            ProfileField::Availability => conflict_info(&d.availability, range_text),
         }
     }
 
     pub fn conflicts(&self) -> Vec<ProfileField> {
-        self.handle.borrow().conflicts()
+        self.with_draft(|d| d.conflicts())
     }
 
-    /// The async check's core-owned sub-state (cloned): drives the spinner and the I13 asserts.
+    /// The async check's core-owned sub-state (cloned): drives the spinner and the C13 asserts.
     pub fn username_check(&self) -> CheckState<Result<(), ErrorData>> {
-        self.handle.borrow().username_check_state().clone()
+        match self.handle.borrow() {
+            Some(d) => d.username_check_state().clone(),
+            None => CheckState::Idle,
+        }
     }
 
     pub fn is_checking(&self) -> bool {
@@ -261,31 +283,28 @@ impl ProfileController {
     /// Returns the debounce ticket for this edit (see [`Self::fire_check_if_current`]).
     pub fn edit_username(&mut self, text: String) -> u64 {
         self.username_buf = text;
-        if self.is_live() {
-            let _ = self
-                .handle
-                .borrow_mut()
-                .try_set_username(self.username_buf.clone());
-        }
+        let raw = self.username_buf.clone();
+        self.edit(|d| {
+            let _ = d.try_set_username(raw);
+        });
         self.edit_gen += 1;
         self.edit_gen
     }
 
     pub fn edit_name(&mut self, text: String) {
         self.name_buf = text;
-        if self.is_live() {
-            let _ = self.handle.borrow_mut().try_set_name(self.name_buf.clone());
-        }
+        let raw = self.name_buf.clone();
+        self.edit(|d| {
+            let _ = d.try_set_name(raw);
+        });
     }
 
     pub fn edit_email(&mut self, text: String) {
         self.email_buf = text;
-        if self.is_live() {
-            let _ = self
-                .handle
-                .borrow_mut()
-                .try_set_email(self.email_buf.clone());
-        }
+        let raw = self.email_buf.clone();
+        self.edit(|d| {
+            let _ = d.try_set_email(raw);
+        });
     }
 
     pub fn edit_start(&mut self, text: String) {
@@ -302,11 +321,10 @@ impl ProfileController {
     /// `try_set_availability(start, end)`. An unparseable buffer (mid-edit / cleared picker) is
     /// a widget state, not a value: skip the set and keep the core's last recorded attempt.
     fn try_set_dates(&mut self) {
-        if !self.is_live() {
-            return;
-        }
         if let (Some(start), Some(end)) = (parse_date(&self.start_buf), parse_date(&self.end_buf)) {
-            let _ = self.handle.borrow_mut().try_set_availability(start, end);
+            self.edit(|d| {
+                let _ = d.try_set_availability(start, end);
+            });
         }
     }
 
@@ -321,23 +339,21 @@ impl ProfileController {
             return None;
         }
         let name = {
-            let d = self.handle.borrow();
+            let d = self.handle.borrow()?;
             if !d.username.is_dirty() {
                 return None;
             }
             d.username.value()?.as_str().to_string()
         };
-        let token = self.handle.borrow_mut().begin_username_check();
+        let token = self.handle.borrow_mut()?.begin_username_check();
         self.check_run_count += 1;
         Some((token, name))
     }
 
-    /// Deliver a verdict. A stale token (superseded, or reset by a value change — I10/I13) is
+    /// Deliver a verdict. A stale token (superseded, or reset by a value change — C10/C13) is
     /// discarded by the core; the return says whether the verdict landed.
     pub fn complete_check(&mut self, token: CheckToken, verdict: Result<(), ErrorData>) -> bool {
-        self.handle
-            .borrow_mut()
-            .complete_username_check(token, verdict)
+        self.edit(|d| d.complete_username_check(token, verdict))
     }
 
     // ---- conflict resolution ------------------------------------------------------------------
@@ -345,41 +361,39 @@ impl ProfileController {
     /// A resolution moves the field's value from outside a keystroke, so its buffer refreshes
     /// even if focused (unlike per-keystroke sanitization — the echo rule's one exception).
     pub fn resolve_keep_mine(&mut self, field: ProfileField) {
-        self.handle.borrow_mut().resolve_keep_mine(field);
+        self.edit(|d| d.resolve_keep_mine(field));
         self.refresh_buffers(Some(field));
     }
 
     pub fn resolve_take_theirs(&mut self, field: ProfileField) {
-        self.handle.borrow_mut().resolve_take_theirs(field);
+        self.edit(|d| d.resolve_take_theirs(field));
         self.refresh_buffers(Some(field));
     }
 
     // ---- submit --------------------------------------------------------------------------------
 
-    /// `Store::submit` **consumes** the handle, but the handle lives in a struct field and is
-    /// `!Clone` — so it cannot simply be moved out from behind `&mut self`. The slot must be
-    /// vacated with something: a scratch `checkout()` (below), or an `Option<ProfileHandle>`
-    /// whose `None` is unreachable yet forces every read to handle it (or `expect`, forbidden).
-    /// Recorded as the `!Clone`-handle ergonomics finding. On success a real post-commit
-    /// `checkout()` replaces the scratch — the next edit session, based on the new canonical. On
-    /// refusal the original handle comes back inside the error (F3, on the real
-    /// `bolted_core::Store`) and is swapped back: the user's edits survive, the draft stays live.
+    /// `Store::submit` borrows the handle and leaves a tombstone behind on success (C17), so a
+    /// handle living in a struct field submits with no ceremony at all. Before the freeze this
+    /// function had to vacate the slot with a throwaway `checkout()` — a real allocation, and a
+    /// real registration in the store's rebase list — because `submit` consumed a `!Clone` handle
+    /// that could not be moved out from behind `&mut self` (step-04 friction 1).
+    ///
+    /// On success a fresh `checkout()` starts the next edit session on the new canonical. On
+    /// refusal the draft is still there and still live: the user's edits survive (F3).
     pub fn submit(&mut self) {
-        let scratch = self.store.checkout();
-        let submitted = std::mem::replace(&mut self.handle, scratch);
-        match self.store.submit(submitted) {
+        match self.store.submit(&mut self.handle) {
             Ok(()) => {
-                self.handle = self.store.checkout(); // drops the scratch
+                self.handle = self.store.checkout();
                 self.last_submit = Some(SubmitOutcome::Success);
                 self.focused = None;
                 self.refresh_buffers(None);
             }
-            Err(failure) => {
-                self.handle = failure.handle; // drops the scratch
-                self.last_submit = Some(match failure.error {
+            Err(error) => {
+                self.last_submit = Some(match error {
                     SubmitError::Validation(report) => SubmitOutcome::Validation(report),
                     SubmitError::Conflicted { fields } => SubmitOutcome::Conflicted(fields),
                     SubmitError::Orphaned => SubmitOutcome::Orphaned,
+                    SubmitError::AlreadySubmitted => SubmitOutcome::AlreadySubmitted,
                 });
             }
         }
@@ -435,29 +449,48 @@ impl ProfileController {
 
     // ---- private ---------------------------------------------------------------------------------
 
-    /// Refresh editing buffers from the core, skipping the focused field (echo rule) unless
-    /// `force` names it (its value moved from outside a keystroke, e.g. a resolution).
+    /// Refresh editing buffers from the core.
+    ///
+    /// The echo rule (§6): the native control owns its text while focused **and dirty**. A focused
+    /// field the user has actually typed into keeps its buffer, so core sanitization can never move
+    /// the caret. A focused *clean* field holds nothing the user typed, so it adopts a rebase
+    /// immediately — before the freeze it stayed stale until blur, and the running app showed the
+    /// canonical pane and the focused field disagreeing with nothing to explain it (step-04).
+    ///
+    /// `force` names a field whose value moved from outside a keystroke (a resolution): refresh it
+    /// regardless.
     fn refresh_buffers(&mut self, force: Option<ProfileField>) {
-        let (username, name, email, dates) = {
-            let d = self.handle.borrow();
+        let Some((username, name, email, dates, dirty)) = self.handle.borrow().map(|d| {
             (
                 display(&d.username, |v| v.as_str().to_string()),
                 display(&d.name, |v| v.as_str().to_string()),
                 display(&d.email, |v| v.as_str().to_string()),
                 date_bufs(&d.availability, &self.seed.availability),
+                [
+                    ProfileField::Username,
+                    ProfileField::Name,
+                    ProfileField::Email,
+                    ProfileField::Availability,
+                ]
+                .map(|f| dirty_of(&d, f)),
             )
+        }) else {
+            return; // a tombstoned handle has no state to show
         };
-        let skip = |field: ProfileField| self.focused == Some(field) && force != Some(field);
-        if !skip(ProfileField::Username) {
+
+        let keep = |field: ProfileField, i: usize| {
+            self.focused == Some(field) && dirty[i] && force != Some(field)
+        };
+        if !keep(ProfileField::Username, 0) {
             self.username_buf = username;
         }
-        if !skip(ProfileField::Name) {
+        if !keep(ProfileField::Name, 1) {
             self.name_buf = name;
         }
-        if !skip(ProfileField::Email) {
+        if !keep(ProfileField::Email, 2) {
             self.email_buf = email;
         }
-        if !skip(ProfileField::Availability) {
+        if !keep(ProfileField::Availability, 3) {
             (self.start_buf, self.end_buf) = dates;
         }
     }
@@ -488,30 +521,25 @@ fn date_bufs(field: &bolted_core::Field<DateRange>, seed: &DateRange) -> (String
     (fmt_date(start), fmt_date(end))
 }
 
-/// Tier-1 error of the field's current validity, if `Invalid`. (`Unset` renders on submit as
-/// `required` via the report; inline it would nag untouched fields.)
-fn invalid_error<V>(field: &bolted_core::Field<V>) -> Option<ErrorData>
-where
-    V: Value,
-    V::Error: Clone + Into<ErrorData>,
-{
-    match field.validity() {
-        Validity::Invalid { error, .. } => Some(error.clone().into()),
-        _ => None,
+/// Per-field dirtiness. The `match field` fan-out the generator will emit; there is no way around
+/// it without reflection (step-04 friction 2, the monomorphization tax).
+fn dirty_of(d: &ProfileDraft, field: ProfileField) -> bool {
+    match field {
+        ProfileField::Username => d.username.is_dirty(),
+        ProfileField::Name => d.name.is_dirty(),
+        ProfileField::Email => d.email.is_dirty(),
+        ProfileField::Availability => d.availability.is_dirty(),
     }
 }
 
-fn conflict_info<V: Value>(
-    sync: &SyncState<V>,
-    show: impl Fn(&V) -> String,
-) -> Option<ConflictInfo> {
-    match sync {
-        SyncState::Conflicted { base, theirs } => Some(ConflictInfo {
-            base: base.as_ref().map(&show),
-            theirs: show(theirs),
-        }),
-        SyncState::InSync => None,
-    }
+/// The 3-way merge data a conflict banner needs: the ancestor (`base`), theirs, and — already on
+/// screen — yours. `Field` is the single source; the core stores the ancestor exactly once.
+fn conflict_info<V: Value>(field: &Field<V>, show: impl Fn(&V) -> String) -> Option<ConflictInfo> {
+    let theirs = field.theirs()?;
+    Some(ConflictInfo {
+        base: field.base().map(&show),
+        theirs: show(theirs),
+    })
 }
 
 fn range_text(r: &DateRange) -> String {

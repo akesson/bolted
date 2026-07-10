@@ -143,7 +143,7 @@ async fn a_rejected_input_renders_the_core_error_and_keeps_the_raw_text() {
 
 /// A simulator click mutates canonical, the store rebases the live draft *underneath* the shell,
 /// and the version tick repaints. A clean field adopts; a dirty one conflicts with mine preserved
-/// and the banner rendered from `SyncState::Conflicted { base, theirs }` alone.
+/// and the banner rendered from `Field` data alone (theirs from `sync`, the ancestor from `base`).
 #[wasm_bindgen_test]
 async fn a_simulator_click_rebases_into_the_rendered_fields() {
     fresh_app(Timing::default());

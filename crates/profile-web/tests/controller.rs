@@ -10,10 +10,26 @@ use bolted_core::{CheckState, Draft, DraftStatus, ErrorData, SyncState, Validity
 use profile_web::controller::{
     ProfileController, SubmitOutcome, is_required, max_len, simulated_lookup,
 };
+use spike_profile::ProfileDraft;
 use spike_profile::ProfileField::{Availability, Email, Name, Username};
+use std::cell::Ref;
 
 fn controller() -> ProfileController {
     ProfileController::new().expect("the seed profile validates")
+}
+
+/// `ProfileController::draft()` yields `None` once the handle is a tombstone (C17). This shell
+/// never observes that state — a successful submit checks out a fresh draft in the same call — so
+/// the tests read through here rather than threading an `Option` into every assertion.
+fn draft(c: &ProfileController) -> Ref<'_, ProfileDraft> {
+    c.draft().expect("this shell always holds a live draft")
+}
+
+/// Drive the uniqueness check to a pass. C16 refuses a submit whose dirty username was never
+/// checked, so any test that edits the username and expects to submit must do this — as must any
+/// real shell.
+fn pass_check(c: &mut ProfileController, ticket: u64) {
+    assert_eq!(run_check(c, ticket), Some(true), "the check must land");
 }
 
 /// Drive a debounced check to completion the way the view layer does: the timer for `ticket`
@@ -44,7 +60,7 @@ fn echo_rule_focused_buffer_is_never_rewritten_from_core() {
 
     // The core sanitized (trim) and validated per keystroke...
     assert_eq!(
-        c.draft().username.value().map(|u| u.as_str()),
+        draft(&c).username.value().map(|u| u.as_str()),
         Some("bob_1")
     );
     // ...but the focused buffer still holds exactly what the user typed. Cursor safety.
@@ -67,7 +83,7 @@ fn echo_rule_invalid_raw_is_preserved_through_blur() {
     c.edit_username("ab".to_string()); // too short
 
     assert!(matches!(
-        c.draft().username.validity(),
+        draft(&c).username.validity(),
         Validity::Invalid { .. }
     ));
     assert_eq!(
@@ -86,7 +102,7 @@ fn echo_rule_email_lowercasing_defers_to_blur() {
     c.focus(Email);
     c.edit_email("Foo@BAR.com".to_string());
     assert_eq!(
-        c.draft().email.value().map(|e| e.as_str()),
+        draft(&c).email.value().map(|e| e.as_str()),
         Some("foo@bar.com")
     );
     assert_eq!(c.email_buf(), "Foo@BAR.com");
@@ -110,7 +126,7 @@ fn reversed_date_range_is_invalid_and_renders_the_core_sentence() {
     let mut c = controller();
     c.edit_end("2025-01-01".to_string()); // before the seed's start
     assert!(matches!(
-        c.draft().availability.validity(),
+        draft(&c).availability.validity(),
         Validity::Invalid { .. }
     ));
     assert_eq!(
@@ -126,9 +142,9 @@ fn live_rebase_clean_field_adopts_silently() {
     let mut c = controller();
     c.sim_set_name("Server Name");
 
-    assert!(matches!(c.draft().name.sync(), SyncState::InSync));
+    assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
     assert_eq!(
-        c.draft().name.value().map(|n| n.as_str()),
+        draft(&c).name.value().map(|n| n.as_str()),
         Some("Server Name")
     );
     assert!(!c.is_dirty(Name));
@@ -143,7 +159,7 @@ fn live_rebase_dirty_field_conflicts_and_preserves_mine() {
     c.sim_set_name("Server Name");
 
     // Yours is preserved in the validity dimension; the sync dimension carries the 3-way data.
-    assert_eq!(c.draft().name.value().map(|n| n.as_str()), Some("My Name"));
+    assert_eq!(draft(&c).name.value().map(|n| n.as_str()), Some("My Name"));
     assert_eq!(c.name_buf(), "My Name");
     let info = c.conflict(Name).expect("conflicted");
     assert_eq!(info.theirs, "Server Name");
@@ -156,28 +172,42 @@ fn live_rebase_convergent_edit_lands_clean() {
     let mut c = controller();
     c.edit_name("Server Name".to_string()); // the same edit the "server" is about to make
     c.sim_set_name("Server Name");
-    assert!(matches!(c.draft().name.sync(), SyncState::InSync));
+    assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
     assert!(!c.is_dirty(Name)); // I4
 }
 
-/// The §9 case XCUITest could not drive in step 03 (focus/blur can't be ordered against an async
-/// rebase) and the wasm tier can't either: pinned here, exactly as the Swift shell pinned it.
-/// A focused-but-untouched (clean) field adopts in the core immediately, but its visible buffer
-/// only repaints on blur — the echo rule's deliberate consequence.
+/// **D9, the sharpened echo rule.** The control owns its text while focused *and dirty*. A focused
+/// field the user never typed into holds nothing worth protecting, so a rebase repaints it at once.
+///
+/// Before the freeze this field stayed stale until blur, and the running app showed the canonical
+/// pane and the focused field disagreeing with nothing on screen to explain it (step-04). This is
+/// the §9 case XCUITest could not drive (focus/blur cannot be ordered against an async rebase),
+/// pinned here exactly as the Swift shell pins it.
 #[test]
-fn live_rebase_focused_clean_field_is_stale_until_blur() {
+fn live_rebase_focused_clean_field_adopts_live() {
     let mut c = controller();
     c.focus(Name);
     c.sim_set_name("Server Name");
 
     assert_eq!(
-        c.draft().name.value().map(|n| n.as_str()),
+        draft(&c).name.value().map(|n| n.as_str()),
         Some("Server Name")
     ); // core: current
-    assert_eq!(c.name_buf(), "Alice Smith"); // screen: stale
+    assert_eq!(c.name_buf(), "Server Name"); // screen: current too
+    assert!(!c.is_dirty(Name));
+}
 
-    c.blur(Name);
-    assert_eq!(c.name_buf(), "Server Name");
+/// ...and the protection the echo rule *does* give: a focused **dirty** field is never repainted
+/// from the core, so per-keystroke sanitization can never move the caret.
+#[test]
+fn live_rebase_focused_dirty_field_keeps_the_users_text() {
+    let mut c = controller();
+    c.focus(Name);
+    c.edit_name("My Name".to_string());
+    c.sim_set_name("Server Name");
+
+    assert_eq!(c.name_buf(), "My Name");
+    assert_eq!(c.conflict(Name).expect("conflicted").theirs, "Server Name");
 }
 
 #[test]
@@ -185,7 +215,7 @@ fn canonical_deletion_orphans_the_draft() {
     let mut c = controller();
     c.sim_delete();
     assert!(!c.is_live());
-    assert!(matches!(c.draft().status(), DraftStatus::Orphaned));
+    assert!(matches!(draft(&c).status(), DraftStatus::Orphaned));
     assert!(c.canonical_view().is_none());
 }
 
@@ -198,12 +228,12 @@ fn resolve_keep_mine_rebases_the_base_and_stays_dirty() {
     c.sim_set_name("Server Name");
     c.resolve_keep_mine(Name);
 
-    assert_eq!(c.draft().name.value().map(|n| n.as_str()), Some("My Name"));
+    assert_eq!(draft(&c).name.value().map(|n| n.as_str()), Some("My Name"));
     assert_eq!(
-        c.draft().name.base().map(|n| n.as_str()),
+        draft(&c).name.base().map(|n| n.as_str()),
         Some("Server Name")
     );
-    assert!(matches!(c.draft().name.sync(), SyncState::InSync));
+    assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
     assert!(c.is_dirty(Name)); // I9
     assert_eq!(c.name_buf(), "My Name");
 }
@@ -217,30 +247,33 @@ fn resolve_take_theirs_adopts_and_cleans_even_when_focused() {
     c.resolve_take_theirs(Name);
 
     assert_eq!(
-        c.draft().name.value().map(|n| n.as_str()),
+        draft(&c).name.value().map(|n| n.as_str()),
         Some("Server Name")
     );
     assert!(!c.is_dirty(Name));
-    assert!(matches!(c.draft().name.sync(), SyncState::InSync));
+    assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
     // The value moved from *outside* a keystroke, so the focused buffer IS refreshed (the echo
     // rule's one exception — the control no longer owns a value the user did not type).
     assert_eq!(c.name_buf(), "Server Name");
 }
 
-/// F6: typing a conflicted field until it equals *theirs* does NOT clear the conflict — only an
-/// explicit `resolve_*` does. `try_set` touches validity, never sync.
+/// **C14 (was F6).** Typing a conflicted field until it equals *theirs* now resolves the conflict,
+/// exactly as a convergent rebase does when the canonical change arrives second (C04).
+///
+/// The old behaviour left a "Keep mine / Take theirs" banner on screen whose two buttons did
+/// visibly the same thing, beside a lit dirty marker. The running app's verdict was that a user
+/// cannot tell what is being asked.
 #[test]
-fn f6_conflicted_field_edited_to_equal_theirs_stays_conflicted() {
+fn c14_conflicted_field_edited_to_equal_theirs_auto_converges() {
     let mut c = controller();
     c.edit_name("My Name".to_string());
     c.sim_set_name("Server Name");
     c.edit_name("Server Name".to_string());
 
-    assert!(matches!(
-        c.draft().name.sync(),
-        SyncState::Conflicted { .. }
-    ));
-    assert_eq!(c.conflicts(), vec![Name]);
+    assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
+    assert!(c.conflicts().is_empty());
+    assert!(!c.is_dirty(Name));
+    assert!(c.conflict(Name).is_none()); // and the banner is gone
 }
 
 /// I13, visible through the shell: take-theirs on username moves its value, so a completed
@@ -278,7 +311,7 @@ fn rebase_adopting_username_resets_the_async_check() {
     assert!(matches!(c.username_check(), CheckState::Idle)); // the edit itself already reset it
     c.sim_set_username("server_user");
     assert_eq!(
-        c.draft().username.value().map(|u| u.as_str()),
+        draft(&c).username.value().map(|u| u.as_str()),
         Some("server_user")
     );
     assert!(matches!(c.username_check(), CheckState::Idle));
@@ -389,7 +422,8 @@ fn submit_invalid_returns_a_validation_report() {
 #[test]
 fn submit_surfaces_the_tier2_rule_error() {
     let mut c = controller();
-    c.edit_username("corp_bob".to_string());
+    let ticket = c.edit_username("corp_bob".to_string());
+    pass_check(&mut c, ticket); // otherwise C16 refuses first, and the tier-2 rule never shows
     c.submit(); // email is still alice@example.com, not the corp domain
 
     let Some(SubmitOutcome::Validation(report)) = c.last_submit() else {
@@ -413,7 +447,7 @@ fn submit_conflicted_is_refused_and_leaves_the_draft_alive() {
     assert!(matches!(c.last_submit(), Some(SubmitOutcome::Conflicted(f)) if f == &[Name]));
     assert!(c.is_live());
     // The draft is not just alive but *editable*, with my value intact.
-    assert_eq!(c.draft().name.value().map(|n| n.as_str()), Some("My Name"));
+    assert_eq!(draft(&c).name.value().map(|n| n.as_str()), Some("My Name"));
 
     c.resolve_keep_mine(Name);
     c.submit();
@@ -441,7 +475,7 @@ fn submit_success_updates_canonical_and_rechecks_out() {
     // ...and it is registered for live rebase, like any other checkout.
     c.sim_set_name("Server Name");
     assert_eq!(
-        c.draft().name.value().map(|n| n.as_str()),
+        draft(&c).name.value().map(|n| n.as_str()),
         Some("Server Name")
     );
     assert!(!c.is_dirty(Name));
@@ -456,19 +490,67 @@ fn submit_on_an_orphaned_draft_is_a_typed_refusal() {
     assert!(matches!(c.last_submit(), Some(SubmitOutcome::Orphaned)));
 }
 
-/// **F2 evidence** (ARCHITECTURE §9): a username that was never checked reaches a *passing*
-/// submit with no effort at all — `CheckState::Idle` does not block `validate()`. As in the Swift
-/// shell, this is the default path, not a corner case: any submit that does not edit the username
-/// (or that beats the debounce) commits client-side unverified.
+/// **C16 (was F2).** A username that was never checked can no longer reach a passing submit.
+///
+/// This is the finding that made the freeze act: `"admin"` is taken, the check would have refused
+/// it, and before the freeze `CheckState::Idle` sailed through `validate()` — on *both* shells, on
+/// the *default* path (any submit that beats the 400 ms debounce). Now the core refuses, typed, and
+/// the shell's own debounced check unblocks it.
 #[test]
-fn f2_a_never_checked_username_submits_successfully() {
+fn c16_an_unrun_check_on_a_dirty_username_blocks_submit() {
     let mut c = controller();
-    c.edit_username("admin".to_string()); // "admin" IS taken — the check would have refused it
+    let ticket = c.edit_username("admin".to_string());
     assert!(matches!(c.username_check(), CheckState::Idle));
     c.submit();
 
+    let Some(SubmitOutcome::Validation(report)) = c.last_submit() else {
+        panic!("expected a refusal, got {:?}", c.last_submit());
+    };
+    assert_eq!(
+        report.rule_errors[0].error,
+        ErrorData::new("username_check_required")
+    );
+    assert_eq!(report.rule_errors[0].pins, vec![Username]);
+    assert_eq!(c.canonical_view().expect("canonical").username, "alice");
+
+    // Let the check run: "admin" is taken, so the submit is still refused — now on the merits.
+    assert_eq!(run_check(&mut c, ticket), Some(true));
+    c.submit();
+    let Some(SubmitOutcome::Validation(report)) = c.last_submit() else {
+        panic!("expected a refusal, got {:?}", c.last_submit());
+    };
+    assert_eq!(
+        report.rule_errors[0].error,
+        ErrorData::new("username_taken")
+    );
+}
+
+/// ...and a clean username never needs a check to submit: it still holds the canonical value, which
+/// was verified when it was committed. Without this half, editing only your email would be
+/// unsubmittable until a pointless uniqueness lookup ran.
+#[test]
+fn c16_a_clean_username_needs_no_check_to_submit() {
+    let mut c = controller();
+    c.edit_email("bob@example.com".to_string());
+    assert!(matches!(c.username_check(), CheckState::Idle));
+    assert!(!c.is_dirty(Username));
+    c.submit();
+
     assert!(matches!(c.last_submit(), Some(SubmitOutcome::Success)));
-    assert_eq!(c.canonical_view().expect("canonical").username, "admin");
+    assert_eq!(c.check_run_count(), 0);
+}
+
+/// C17 through the shell: a successful submit tombstones the handle, and this controller
+/// immediately checks out a fresh draft — so the tombstone is never observable from the outside.
+#[test]
+fn c17_submit_tombstones_the_handle_and_the_shell_rechecks_out() {
+    let mut c = controller();
+    c.edit_name("My Name".to_string());
+    c.submit();
+
+    assert!(matches!(c.last_submit(), Some(SubmitOutcome::Success)));
+    assert!(c.draft().is_some(), "the shell holds a fresh draft");
+    assert!(c.is_live() && !c.any_dirty());
 }
 
 /// A pending check *does* block submit (it is modelled as a rule violation pinned to Username),
