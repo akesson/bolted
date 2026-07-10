@@ -7,8 +7,8 @@ use crate::value_types::{
     UsernameError,
 };
 use bolted_core::{
-    CheckState, CheckToken, Constraint, Draft, DraftHandle, DraftStatus, ErrorData, Field,
-    RuleViolation, SingleFlight, Store, StoreDraft, SyncState, ValidationReport, Validity, Value,
+    CheckState, CheckToken, CommitError, Constraint, Draft, DraftHandle, DraftStatus, ErrorData,
+    Field, RuleViolation, SingleFlight, Store, StoreDraft, ValidationReport, Validity, Value,
 };
 
 /// The always-valid entity (canonical state). `#[bolted::entity]` would generate this alongside
@@ -139,10 +139,6 @@ impl ProfileDraft {
         })
     }
 
-    pub fn base_version(&self) -> u64 {
-        self.base_version
-    }
-
     /// Tier-2 rule `corporate_email`, pinned to `Email` (as `#[rule(pins(email))]` would emit): a
     /// `corp_`-prefixed username requires the `corp.example` email domain. Evaluated only over
     /// valid values — invalid/unset involved fields are already flagged by tier 1.
@@ -168,17 +164,13 @@ impl ProfileDraft {
 }
 
 /// Tier-1 error for a field's current validity, if any. `Invalid` → its typed error mapped to
-/// `ErrorData`; `Unset` → `required` (every `Profile` field is required). The `V::Error:
-/// Into<ErrorData>` bound is what lets this be one generic helper instead of per-field code — the
-/// step-01 report notes this as a candidate for the `Value` trait itself.
-fn tier1_error<V>(field: &Field<V>) -> Option<ErrorData>
-where
-    V: Value,
-    V::Error: Into<ErrorData>,
-{
+/// `ErrorData` (by `Field::invalid_error`, which the `Value::Error: Into<ErrorData>` bound makes
+/// possible); `Unset` → `required`, because every `Profile` field is non-optional — a *field*-level
+/// judgement the value type cannot make (ARCHITECTURE §8, step-01 D3/Q3).
+fn tier1_error<V: Value>(field: &Field<V>) -> Option<ErrorData> {
     match field.validity() {
         Validity::Valid(_) => None,
-        Validity::Invalid { error, .. } => Some(error.clone().into()),
+        Validity::Invalid { .. } => field.invalid_error(),
         Validity::Unset => Some(ErrorData::new("required")),
     }
 }
@@ -189,6 +181,10 @@ impl Draft for ProfileDraft {
 
     fn status(&self) -> DraftStatus {
         self.status
+    }
+
+    fn base_version(&self) -> u64 {
+        self.base_version
     }
 
     fn dirty_fields(&self) -> Vec<ProfileField> {
@@ -210,16 +206,16 @@ impl Draft for ProfileDraft {
 
     fn conflicts(&self) -> Vec<ProfileField> {
         let mut out = Vec::new();
-        if matches!(self.username.sync(), SyncState::Conflicted { .. }) {
+        if self.username.is_conflicted() {
             out.push(ProfileField::Username);
         }
-        if matches!(self.name.sync(), SyncState::Conflicted { .. }) {
+        if self.name.is_conflicted() {
             out.push(ProfileField::Name);
         }
-        if matches!(self.email.sync(), SyncState::Conflicted { .. }) {
+        if self.email.is_conflicted() {
             out.push(ProfileField::Email);
         }
-        if matches!(self.availability.sync(), SyncState::Conflicted { .. }) {
+        if self.availability.is_conflicted() {
             out.push(ProfileField::Availability);
         }
         out
@@ -247,9 +243,13 @@ impl Draft for ProfileDraft {
             report.rule_errors.push(violation);
         }
 
-        // Async uniqueness: a pending OR failed check blocks (modelled as a rule pinned to
-        // Username). A never-run (Idle) or passed check does not block — see the step-01 report's
-        // friction note on whether commit should require a completed successful check.
+        // Async uniqueness, modelled as a rule pinned to Username. A pending or failed check blocks.
+        // A never-run check blocks *only while the field is dirty*: a clean field still holds the
+        // canonical value, which was verified when it was committed, so demanding a fresh check to
+        // submit an unrelated edit would be theatre. A surviving `Done(Ok)` was necessarily computed
+        // for the value now in the field (C13 resets the verdict on any value change), so "passed"
+        // can be trusted. Together these close step-01's F1 and F2 by construction rather than by
+        // shell convention (ARCHITECTURE §8; conformance C16).
         match self.username_check.state() {
             CheckState::Pending { .. } => report.rule_errors.push(RuleViolation {
                 rule: "username_unique",
@@ -261,42 +261,44 @@ impl Draft for ProfileDraft {
                 pins: vec![ProfileField::Username],
                 error: e.clone(),
             }),
+            CheckState::Idle if self.username.is_dirty() => {
+                report.rule_errors.push(RuleViolation {
+                    rule: "username_unique",
+                    pins: vec![ProfileField::Username],
+                    error: ErrorData::new("username_check_required"),
+                })
+            }
             CheckState::Idle | CheckState::Done { verdict: Ok(()) } => {}
         }
 
         report
     }
 
-    fn commit(self) -> Result<Profile, ValidationReport<ProfileField>> {
-        let mut report = self.validate();
-
-        // commit additionally forbids unresolved conflicts and orphaned status (invariant I7);
-        // these are not validation tiers, so they are injected as rule violations here.
-        for field in self.conflicts() {
-            report.rule_errors.push(RuleViolation {
-                rule: "unresolved_conflict",
-                pins: vec![field],
-                error: ErrorData::new("field_conflicted"),
-            });
-        }
+    fn commit(self) -> Result<Profile, (Self, CommitError<ProfileField>)> {
+        // The three gates of C07, each reported in its own shape. Before the freeze the last two
+        // were re-encoded as synthetic rule violations so they could fit a `ValidationReport`
+        // (step-01 F5); they are not validation tiers and no longer pretend to be.
         if matches!(self.status, DraftStatus::Orphaned) {
-            report.rule_errors.push(RuleViolation {
-                rule: "orphaned",
-                pins: Vec::new(),
-                error: ErrorData::new("draft_orphaned"),
-            });
+            return Err((self, CommitError::Orphaned));
         }
-
+        let conflicts = self.conflicts();
+        if !conflicts.is_empty() {
+            return Err((self, CommitError::Conflicted { fields: conflicts }));
+        }
+        let report = self.validate();
         if !report.is_ok() {
-            return Err(report);
+            return Err((self, CommitError::Validation(report)));
         }
 
-        // `report.is_ok()` guarantees every field is `Valid`; move the values out.
+        // `report.is_ok()` guarantees every field is `Valid`. The values are *cloned* rather than
+        // moved out with `into_valid()`: dismembering `self` before the last fallible step would
+        // leave nothing to hand back on the (unreachable) `_` arm, and `commit` promises the draft
+        // back on every failure. Four small clones is the price of that promise.
         match (
-            self.username.into_valid(),
-            self.name.into_valid(),
-            self.email.into_valid(),
-            self.availability.into_valid(),
+            self.username.value().cloned(),
+            self.name.value().cloned(),
+            self.email.value().cloned(),
+            self.availability.value().cloned(),
         ) {
             (Some(username), Some(name), Some(email), Some(availability)) => Ok(Profile {
                 username,
@@ -305,7 +307,10 @@ impl Draft for ProfileDraft {
                 availability,
             }),
             // Unreachable: an ok report implies all four are `Valid`.
-            _ => Err(report),
+            _ => {
+                let report = self.validate();
+                Err((self, CommitError::Validation(report)))
+            }
         }
     }
 }
@@ -313,14 +318,13 @@ impl Draft for ProfileDraft {
 impl StoreDraft for ProfileDraft {
     fn from_canonical(base: Option<&Profile>, base_version: u64) -> Self {
         match base {
+            // Every field clones, uniformly — which is only possible because value objects are not
+            // `Copy` (ARCHITECTURE §8, step-01 F4). This is the shape `#[bolted::entity]` emits.
             Some(p) => ProfileDraft {
                 username: Field::from_base(p.username.clone()),
                 name: Field::from_base(p.name.clone()),
                 email: Field::from_base(p.email.clone()),
-                // `DateRange` is `Copy`, so no clone (clippy::clone_on_copy). The uniform
-                // per-field `.clone()` a generator would emit collides with this lint for Copy
-                // value objects — see the step-01 report friction log.
-                availability: Field::from_base(p.availability),
+                availability: Field::from_base(p.availability.clone()),
                 username_check: SingleFlight::new(),
                 status: DraftStatus::Live,
                 base_version,
@@ -337,18 +341,23 @@ impl StoreDraft for ProfileDraft {
         }
     }
 
-    fn rebase(&mut self, entity: &Profile) {
+    fn rebase(&mut self, entity: &Profile, version: u64) {
         if matches!(self.status, DraftStatus::Orphaned) {
-            return;
+            return; // orphan is terminal, and the draft is based on no canonical at all
         }
         // Guarded: a rebase that adopts or converges the username moves its value and resets the
-        // check; one that conflicts (your value preserved) leaves the verdict standing (I13).
+        // check; one that conflicts (your value preserved) leaves the verdict standing (C13).
         self.with_username_guard(|s| {
             s.username.rebase(entity.username.clone());
             s.name.rebase(entity.name.clone());
             s.email.rebase(entity.email.clone());
-            s.availability.rebase(entity.availability); // Copy — see note in `from_canonical`
+            s.availability.rebase(entity.availability.clone());
         });
+        // The draft is now based on this canonical. Before the freeze `base_version` was written
+        // once at checkout and never again, so every draft snapshot carried a stamp that was stale
+        // the moment a rebase landed — and the version-guarded reconcile it was shipped for could
+        // never fire (step-05 structural finding; conformance C15).
+        self.base_version = version;
     }
 
     fn orphan(&mut self) {

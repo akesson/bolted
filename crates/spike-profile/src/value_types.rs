@@ -213,7 +213,11 @@ impl From<EmailError> for ErrorData {
 // DateRange — composite value object: Raw = (Date, Date), invariant start <= end.
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Deliberately **not** `Copy`, even though it easily could be: generated checkout/rebase code
+/// clones every field uniformly, and `clippy::clone_on_copy` rejects `.clone()` on a `Copy` field
+/// under `-D warnings`. Value objects are `Clone`-only so codegen stays uniform (ARCHITECTURE §8,
+/// step-01 friction F4). `Date` is a raw part, not a `Value`, and stays `Copy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateRange {
     start: Date,
     end: Date,

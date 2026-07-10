@@ -105,11 +105,19 @@ fn corporate_email_rule_blocks_and_passes() {
             .any(|v| v.rule == "corporate_email")
     );
 
-    // right domain -> no violation, commits
+    // right domain -> no violation. The username is a fresh one nobody has checked, so C16 still
+    // blocks the commit until the uniqueness check passes.
     d.try_set_email("x@corp.example".to_string())
         .expect("valid");
+    assert!(rule_present(&d.validate(), "username_unique"));
+    let token = d.begin_username_check();
+    assert!(d.complete_username_check(token, Ok(())));
     assert!(d.validate().is_ok());
     assert!(d.commit().is_ok());
+}
+
+fn rule_present(report: &ValidationReport<ProfileField>, rule: &str) -> bool {
+    report.rule_errors.iter().any(|v| v.rule == rule)
 }
 
 #[test]
@@ -151,11 +159,11 @@ fn pending_username_check_blocks_then_passes() {
 fn full_lifecycle_checkout_edit_conflict_resolve_submit() {
     let base = base_profile(); // username "alice"
     let mut store: ProfileStore = Store::new(Some(base.clone()));
-    let handle = store.checkout();
+    let mut handle = store.checkout();
 
     // edit username
     {
-        let mut d = handle.borrow_mut();
+        let mut d = handle.borrow_mut().expect("live");
         d.try_set_username("alice2".to_string()).expect("valid");
         assert!(d.dirty_fields().contains(&ProfileField::Username));
     }
@@ -165,17 +173,22 @@ fn full_lifecycle_checkout_edit_conflict_resolve_submit() {
     background.username = Username::try_new("admin".to_string()).expect("valid");
     store.apply_canonical(background);
     {
-        let d = handle.borrow();
+        let d = handle.borrow().expect("live");
         assert_eq!(d.conflicts(), vec![ProfileField::Username]);
     }
 
-    // resolve keep-mine, then submit
+    // resolve keep-mine, check the kept username, then submit
     {
-        let mut d = handle.borrow_mut();
+        let mut d = handle.borrow_mut().expect("live");
         d.resolve_keep_mine(ProfileField::Username);
         assert!(d.conflicts().is_empty());
+        // keep-mine leaves the value where it was, so the verdict (had there been one) would
+        // stand — but there never was one, and the field is dirty, so C16 demands a check.
+        let token = d.begin_username_check();
+        assert!(d.complete_username_check(token, Ok(())));
     }
-    store.submit(handle).expect("submit ok after resolve");
+    store.submit(&mut handle).expect("submit ok after resolve");
+    assert!(!handle.is_live()); // C17: a successful submit tombstones the handle
 
     // canonical now carries our value
     assert_eq!(
@@ -190,5 +203,5 @@ fn base_version_recorded_at_checkout() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
     store.apply_canonical(base_profile()); // version -> 1
     let handle = store.checkout();
-    assert_eq!(handle.borrow().base_version(), 1);
+    assert_eq!(handle.borrow().expect("live").base_version(), 1);
 }
