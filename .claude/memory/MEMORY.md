@@ -14,3 +14,4 @@
 - [BoltFFI's bindgen reads source text](boltffi-bindgen-reads-source-text.md) — a proc macro cannot emit an FFI surface, and three ways the toolchain hides a broken one
 - [A forbidding test can forbid nothing](a-forbidding-test-can-forbid-nothing.md) — a needle that can never match is green forever; write the positive control
 - [A drift check makes a mutation pass vacuous](a-drift-check-makes-a-mutation-pass-vacuous.md) — regenerate first, prove the output changed, exclude the drift test
+- [Device and UI tiers are proven on this machine](device-and-ui-tiers-are-proven-on-this-machine.md) — Pixel 8a authorized, Accessibility granted; if adb sees nothing, swap the cable
