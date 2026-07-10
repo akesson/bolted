@@ -256,6 +256,50 @@ pub fn c07_commit_is_the_parse_moment<F: ConformanceFeature>() {
     let mut orphaned = F::Draft::from_canonical(Some(&entity), 0);
     orphaned.orphan();
     assert!(matches!(orphaned.commit(), Err((_, CommitError::Orphaned))));
+
+    // --- and when more than one gate applies, the FIRST one refuses (C07, amended in step 09) ---
+    //
+    // Every assertion above builds a draft that fails exactly one gate, so none of them can see the
+    // order the gates run in. Both spikes have implemented `Orphaned > Conflicted > Validation`
+    // since step 01 and nothing has ever checked it; step 09 *generates* those three `if`s, where a
+    // reordering is one line. Found by mutating `commit_gates`, which passed the whole suite.
+
+    // orphaned AND conflicted -> Orphaned. A deleted entity has nothing to conflict with, and a
+    // "keep mine / take theirs" banner over a record that no longer exists is worse than useless.
+    let mut gone = F::Draft::from_canonical(Some(&entity), 0);
+    F::set_primary(&mut gone, F::PRIMARY_MINE).expect("valid");
+    gone.rebase(&F::with_primary(&entity, F::PRIMARY_THEIRS), 1);
+    gone.orphan();
+    assert_eq!(
+        gone.conflicts(),
+        vec![F::primary_id()],
+        "the conflict must survive the orphaning, or this proves nothing"
+    );
+    match gone.commit() {
+        Err((_, CommitError::Orphaned)) => {}
+        other => panic!(
+            "orphaned outranks conflicted, got {:?}",
+            other.err().map(|(_, e)| e)
+        ),
+    }
+
+    // conflicted AND invalid -> Conflicted. A contested field's value is not yet the user's, so
+    // reporting validation errors about it asks them to fix text they have not chosen.
+    let mut contested = F::Draft::from_canonical(Some(&entity), 0);
+    F::set_primary(&mut contested, F::PRIMARY_MINE).expect("valid");
+    contested.rebase(&F::with_primary(&entity, F::PRIMARY_THEIRS), 1);
+    assert!(F::set_secondary(&mut contested, F::SECONDARY_INVALID).is_err());
+    assert!(
+        !contested.validate().is_ok(),
+        "the invalid secondary must make validation fail, or this proves nothing"
+    );
+    match contested.commit() {
+        Err((_, CommitError::Conflicted { fields })) => assert_eq!(fields, vec![F::primary_id()]),
+        other => panic!(
+            "conflicted outranks validation, got {:?}",
+            other.err().map(|(_, e)| e)
+        ),
+    }
 }
 
 // =================================================================================================
