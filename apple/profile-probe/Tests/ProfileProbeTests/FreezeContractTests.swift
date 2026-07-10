@@ -239,11 +239,30 @@ final class FreezeContractTests: XCTestCase {
         let restored = empty.restore(stash: stash)
 
         XCTAssertEqual(restored.snapshot().status, .orphaned)
-        XCTAssertEqual(empty.liveDraftCount(), 1) // present, but not rebasing
+        XCTAssertEqual(empty.liveDraftCount(), 1) // present, but not rebasing — see below
         XCTAssertThrowsError(try restored.submit()) { error in
             guard case .orphaned? = error as? SubmitErrorFfi else {
                 return XCTFail("expected .orphaned, got \(error)")
             }
         }
+    }
+
+    /// FINDING (step-07 friction 4): `liveDraftCount()` does **not** mean the same thing on the two
+    /// sides of the boundary. `bolted_core::Store::live_draft_count` counts *drafts the store would
+    /// rebase*; this wrapper counts *un-submitted drafts*. They agree everywhere C18 looks, and
+    /// disagree on exactly the two drafts that are present-but-never-rebased: a restored orphan
+    /// (above) and a create-flow draft (here). The Rust suite asserts 0 for both
+    /// (`c21_restore_into_a_deleted_canonical_orphans_the_draft`,
+    /// `c21_a_restored_create_flow_draft_is_never_moved`).
+    ///
+    /// Same name, two semantics, across a boundary step 10 will *generate*. Pin it to a C-ID.
+    func testLiveDraftCountDisagreesWithTheCoreOnACreateFlowDraft() throws {
+        let empty = ProfileStoreFfi() // no canonical: every checkout is create-flow
+        let draft = empty.checkout()
+        XCTAssertFalse(draft.snapshot().username.dirty)
+        XCTAssertEqual(
+            empty.liveDraftCount(), 1,
+            "the wrapper counts un-submitted drafts; bolted_core::Store would say 0 here"
+        )
     }
 }

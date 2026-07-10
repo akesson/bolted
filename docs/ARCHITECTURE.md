@@ -356,9 +356,14 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   entirely. One type cannot serve both — parameterise the handle (`Rc` vs `Arc`) or ship two. Step 02's
   three constraints hold and are not up for debate: **`Send` state behind one lock**, **id-keyed
   handles, not `Rc` clones**, and **never emit or call out under the lock**.
-- **Draft stash/restore for process death** — *step 07.* Core-side drafts die with the Android
-  process. Needs a serializable projection of `{raw values, base, sync}` and a restore that
-  re-checks-out and replays. Undesigned; step 07 is where it gets exercised.
+- **Stash schema evolution** — *step 10 (`bolted-ffi`) and Phase 4 (`bolted-check`).* The stash is the
+  framework's first **untrusted input**: bytes the OS kept while the process was dead, possibly
+  written by an *older version of the app*. C01 says a value's raw form roundtrips — so an ancestor
+  that no longer parses means the constraints were tightened between releases. Step 07 degrades that
+  field to create-flow (no ancestor), which is safe but silent. Should the whole stash be refused?
+  Should `bolted-check`'s constraint-semver snapshots make a tightening a *build* error when a stash
+  format version does not also change? Introduced by D15, and it is the one question stash/restore
+  opened rather than closed.
 - **One-shot effects** (focus-first-invalid-field, toasts, **navigation**) — *its own session.*
   Likely `Option<(Request, Generation)>` state + ack, but navigation deserves the session.
 - **Process topology for OS-integration surfaces** (daemons, tray, file-manager extensions) — *its own

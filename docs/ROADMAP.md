@@ -20,8 +20,8 @@ work around them.
 | 04 | Rust web spike app | 1 — Spike | **done** — [plan](steps/step-04-rust-web-app.md) · [report](steps/step-04-report.md); zero-FFI path proven, no kill criteria hit, wasm baseline 304 KiB (85 KiB brotli) |
 | 05 | Android headless probe | 1 — Spike | **done** — [plan](steps/step-05-android-probe.md) · [report](steps/step-05-report.md); chattiness kill criterion clears (~80×), `close()` proven mandatory on ART |
 | 06 | Design freeze | 2 — Freeze | **done** — [plan](steps/step-06-design-freeze.md) · [report](steps/step-06-report.md); ARCHITECTURE **frozen (v1.0)**, [CONFORMANCE.md](CONFORMANCE.md) C01–C18 with a build-time drift check |
-| 07 | Kotlin/Compose spike app | 2 — Freeze | **ready** — the frozen contract, on a real device |
-| 08 | Extract bolted-core + conformance suite | 3 — Extraction | pending |
+| 07 | Kotlin/Compose spike app | 2 — Freeze | **done** — [plan](steps/step-07-kotlin-compose-app.md) · [report](steps/step-07-report.md); stash/restore lands (C20/C21), a **frozen-core defect** found and fixed (C19), Compose UI tests run **headless**. Kill criterion 4 (hardware chattiness) **unassessed** — no device |
+| 08 | Extract bolted-core + conformance suite | 3 — Extraction | **ready** |
 | 09 | bolted-macros | 3 — Extraction | pending |
 | 10 | bolted-ffi + regenerate Swift/Kotlin | 3 — Extraction | pending |
 | 11 | C# port + generator | 3 — Extraction | pending |
@@ -90,12 +90,19 @@ falsify the design cheaply — friction logs from these steps are the input to t
   step 02 shipped had never once fired on a draft stream. **Kill criteria: none hit.** Neither did
   D9 survive contact unchanged: implementing "focused **and dirty**" exposed a caret-eating
   regression, and the shipped predicate is "focused **and touched**" (report, deviation 1).
-- **Step 07 — Kotlin/Compose spike app.** The risks only a real Android app exercises:
-  process death mid-draft (**stash/restore — undesigned, §9, this step owns it**), configuration
-  change (draft handle scoping to a `ViewModel`, now that `close()` is mandatory), main-thread
-  snapshot delivery. Doubles as the hand-written "generated code" reference for Kotlin. **Also
-  re-measures the per-keystroke round-trip on physical hardware**: step 05's 12–13 µs is an emulator
-  lower bound (right VM, wrong CPU).
+- **Step 07 — Kotlin/Compose spike app.** **Done. Four of five kill criteria cleared.** Planning it
+  found a **verified defect in the frozen core**: `rebase` never compared `theirs` against `base`, so
+  a dirty field conflicted whenever the server moved *any other* field — against `theirs` that was its
+  own ancestor. C03's proptest never sampled `theirs == base`, and a conformance test had been
+  producing the spurious conflict since step 01 without asserting on it. Fixed as **D14/C19**, with a
+  regression test at every tier that should have caught it, each verified to fail with the fix
+  reverted. **Stash/restore** (§9's last undesigned Phase-2 mechanism) lands as **D15/C20/C21**:
+  `{base_version, per-field (raw, base)}` + `Store::adopt`, with `sync` and the async verdict
+  deliberately *not* stashed — C13 + C16 then make a restored draft safe with no new invariant.
+  **Android has a headless UI tier**: Compose UI tests drive a real render tree on the Gradle-Managed
+  Device, which is precisely what XCUITest cannot do. Config change and `onCleared()`→`close()` both
+  hold. *Kill criterion 4 (per-keystroke round-trip on physical hardware) is **unassessed**: no device
+  was attached. `mise run bench:android:device` is written and double-gated against emulators.*
 
 ## Phase 3 — Framework extraction
 
@@ -103,21 +110,32 @@ Extract from evidence, in dependency order; the hand-written spike code becomes 
 reference the generated code is diffed against.
 
 - **Step 08 — Extract `bolted-core`** generics + conformance suite as a reusable crate. Inherits from
-  the freeze: make the suite **generic over a feature** (it is `spike-profile`-shaped today); decide
-  the **store concurrency model** under step-02's three non-negotiable constraints (`Send` state
-  behind one lock, id-keyed handles not `Rc` clones, never emit under the lock); decide whether the
-  store holds drafts **weakly** now that a forgotten `close()` leaks a rebasing zombie.
+  the freeze: make the suite **generic over a feature** (21 IDs / 30 tests, `spike-profile`-shaped
+  today); decide the **store concurrency model** under step-02's three non-negotiable constraints
+  (`Send` state behind one lock, id-keyed handles not `Rc` clones, never emit under the lock) — the
+  FFI wrapper now carries a *third* hand-written copy of the store loop, and step 07's `restore`
+  doubled the surface that must agree with `Store` by discipline alone; decide whether the store holds
+  drafts **weakly** now that a forgotten `close()` leaks a rebasing zombie. `Store::adopt` and
+  `StoreDraft::is_based` (D15) must survive the extraction.
 - **Step 09 — `bolted-macros`** (`value`, `entity`, `rules`, `feature_model`); macro output
   must reproduce the hand-written spike code (golden tests). Inherits: **never emit `Copy`** on a
-  value object (D8); decide codegen dedup by raw type (§9).
+  value object (D8); `#[bolted::entity]` must emit `stash`/`from_stash`/`is_based`; **dedup by raw
+  type is per-shape, not per-crate** — step 07 settled §9's question by example (snapshot DTOs mention
+  `V` and cannot dedup; stash DTOs mention only `V::Raw` and collapse 3→1).
 - **Step 10 — `bolted-ffi`** (only crate importing boltffi) + regenerate the Swift and Kotlin
   spike apps from macros; per-language contract tests generated from the C-IDs. Inherits a
   requirements list the probes wrote: **use-after-close must raise a typed error** (silent UB today,
-  §9) and probably a `Cleaner` backstop; project `Send + Sync` Rust classes as `Sendable` Swift
-  classes; emit `fun interface` for single-method capability traits; a platform-stdlib
-  **name-collision policy** (`Date`, `URL`, `Data`, `Error`); no hyphens in crate names; expose the
-  split `begin`/`complete` so `Pending` is observable to a `snapshot()` caller. Also: **report the
-  `boltffi pack android` bug upstream** and delete the workaround in `mise run pack:android`.
+  §9 — and step 07 shows it distorting a ViewModel's shape) and probably a `Cleaner` backstop; emit
+  **`@Parcelize`/`Codable`** for DTOs (a shell that persists one hand-writes a codec today); emit the
+  **Compose parameter-passing rule** (a Compose shell must never read core state by calling a VM
+  method — strong skipping makes it invisible); pin **`liveDraftCount`'s semantics to a C-ID** (it
+  means "un-submitted" in the wrapper and "would be rebased" in the core); **verify l10n key coverage
+  per target**; a Kotlin ViewModel must `close()` in `onCleared()`; project `Send + Sync` Rust classes
+  as `Sendable` Swift classes; emit `fun interface` for single-method capability traits; a
+  platform-stdlib **name-collision policy** (`Date`, `URL`, `Data`, `Error`); no hyphens in crate
+  names; expose the split `begin`/`complete` so `Pending` is observable to a `snapshot()` caller. Also:
+  **report the `boltffi pack android` bug upstream** and delete the workaround in
+  `mise run pack:android`.
 - **Step 11 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 
