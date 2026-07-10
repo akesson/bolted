@@ -1,0 +1,13 @@
+[package]
+name = "gen-note"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bolted-core = { path = "../bolted-core" }
+bolted-macros = { path = "../bolted-macros" }
+
+[dev-dependencies]
+bolted-conformance = { path = "../bolted-conformance" }
+proptest = "1"

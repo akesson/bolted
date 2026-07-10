@@ -73,6 +73,42 @@ impl<T> Default for SingleFlight<T> {
     }
 }
 
+impl SingleFlight<Result<(), crate::ErrorData>> {
+    /// Fold this check's state into a tier-2 [`RuleViolation`], if it should block a commit.
+    ///
+    /// | state | `pinned_field_is_dirty` | outcome |
+    /// |---|---|---|
+    /// | `Pending` | either | blocks, with `pending_key` |
+    /// | `Done(Err(e))` | either | blocks, with the verdict `e` |
+    /// | `Idle` | **true** | blocks, with `required_key` — the check was never run (C16) |
+    /// | `Idle` | false | passes: a clean field holds the canonical value, verified when committed |
+    /// | `Done(Ok)` | either | passes — and C13 guarantees the verdict was computed for *this* value |
+    ///
+    /// This is C13 + C16's whole payload, and it is why `#[bolted::entity]` needs no `match` over
+    /// [`CheckState`]. The two error keys are the feature's, because they are l10n keys that shells
+    /// already ship; everything above them is the framework's.
+    pub fn violation<Id>(
+        &self,
+        rule: &'static str,
+        pins: Id,
+        pinned_field_is_dirty: bool,
+        pending_key: &'static str,
+        required_key: &'static str,
+    ) -> Option<crate::RuleViolation<Id>> {
+        let error = match &self.state {
+            CheckState::Pending { .. } => crate::ErrorData::new(pending_key),
+            CheckState::Done { verdict: Err(e) } => e.clone(),
+            CheckState::Idle if pinned_field_is_dirty => crate::ErrorData::new(required_key),
+            CheckState::Idle | CheckState::Done { verdict: Ok(()) } => return None,
+        };
+        Some(crate::RuleViolation {
+            rule,
+            pins: vec![pins],
+            error,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -65,6 +65,33 @@ pub trait Draft {
         Self: Sized;
 }
 
+/// C07's three gates, in order: orphaned, then conflicted, then invalid. `None` means `commit` may
+/// proceed to build the entity.
+///
+/// Every [`Draft::commit`] runs exactly these checks against exactly the trait's own accessors, so
+/// they belong here — written once, at rung 1 — rather than in each implementor. Both spikes
+/// hand-wrote them identically, and `#[bolted::entity]` calls this instead of emitting the same
+/// three `if`s per feature: a macro that decided *when a commit is refused* would be putting the
+/// design's most consequential judgement in its least verifiable code (ARCHITECTURE §5).
+///
+/// Order matters and is normative. An orphaned draft's conflicts are meaningless (the entity is
+/// gone), and a conflicted field's validation report would name errors the user cannot act on until
+/// the conflict is resolved.
+pub fn commit_gates<D: Draft>(draft: &D) -> Option<CommitError<D::FieldId>> {
+    if matches!(draft.status(), DraftStatus::Orphaned) {
+        return Some(CommitError::Orphaned);
+    }
+    let conflicts = draft.conflicts();
+    if !conflicts.is_empty() {
+        return Some(CommitError::Conflicted { fields: conflicts });
+    }
+    let report = draft.validate();
+    if !report.is_ok() {
+        return Some(CommitError::Validation(report));
+    }
+    None
+}
+
 /// A draft that can flatten itself to serializable data and come back (ARCHITECTURE §4, C20/C21).
 ///
 /// A **subtrait** rather than part of [`Draft`], for two reasons. `from_stash` needs `Sized`, which

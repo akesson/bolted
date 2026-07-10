@@ -1,0 +1,18 @@
+[package]
+name = "bolted-macros"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing"] }
+
+[dev-dependencies]
+# Golden tests format the emitted tokens and diff them against a checked-in file. `prettyplease`
+# keeps that inside `mise run check`: no `cargo-expand`, no `macrotest`, no second toolchain.
+prettyplease = "0.2"

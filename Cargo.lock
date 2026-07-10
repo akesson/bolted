@@ -147,6 +147,16 @@ name = "bolted-core"
 version = "0.0.0"
 
 [[package]]
+name = "bolted-macros"
+version = "0.0.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "boltffi"
 version = "0.27.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -613,6 +623,27 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gen-note"
+version = "0.0.0"
+dependencies = [
+ "bolted-conformance",
+ "bolted-core",
+ "bolted-macros",
+ "proptest",
+]
+
+[[package]]
+name = "gen-profile"
+version = "0.0.0"
+dependencies = [
+ "bolted-conformance",
+ "bolted-core",
+ "bolted-macros",
+ "proptest",
+ "spike-profile",
 ]
 
 [[package]]

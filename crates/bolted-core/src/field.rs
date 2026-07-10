@@ -152,6 +152,22 @@ impl<V: Value> Field<V> {
         }
     }
 
+    /// This field's tier-1 contribution to a [`crate::ValidationReport`], for a **required** field:
+    /// a rejected input becomes its typed error, and `Unset` becomes `required`.
+    ///
+    /// The `Unset` → `required` judgement is a *field*-level one that no value type can make (D13),
+    /// which is why it lives here and not in [`Self::invalid_error`]. Both spikes hand-wrote this
+    /// match as a free `tier1_error<V>` fn; `#[bolted::entity]` calls it instead, because a macro
+    /// that emitted a `match` over [`Validity`] would be putting behavior in the least verifiable
+    /// place on the ladder (ARCHITECTURE §5).
+    pub fn required_error(&self) -> Option<ErrorData> {
+        match &self.validity {
+            Validity::Valid(_) => None,
+            Validity::Invalid { .. } => self.invalid_error(),
+            Validity::Unset => Some(ErrorData::new("required")),
+        }
+    }
+
     /// VALUE-based dirtiness: `Valid(v)` ⇔ `v != base`; `Invalid` ⇔ always; `Unset` ⇔ `base` set.
     /// Editing a field back to its base value makes it clean again (revert-for-free).
     pub fn is_dirty(&self) -> bool {
