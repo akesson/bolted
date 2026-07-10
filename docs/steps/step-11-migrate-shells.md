@@ -160,9 +160,11 @@ Force `--rerun-tasks`: `test:android:app` can print `BUILD SUCCESSFUL` having ru
   run on the generated bindings, same device, once M4 is green — the comparison goes in the report.
   The verb refuses an emulator by design (step 07, KC4); if the device is unavailable at that point,
   the report says so rather than substituting an emulator figure.
-- **`mise run test:apple:ui` — never run in this project.** `ProfileForm.swift` is 300 lines and this
-  XCUITest suite is the only automated check on the form's behaviour. Migrating it with the suite never
-  once green leaves the UI tier without a safety net. Needs Xcode plus a logged-in GUI session holding
+- **`mise run test:apple:ui` — first run 2026-07-10, green: 9 tests, 0 failures** (ProfileUITests ×8
+  + SmokeUITest ×1, 66 s) on the hand-written bindings at `332fe58`. `ProfileForm.swift` is 300 lines
+  and this XCUITest suite is the only automated check on the form's behaviour; it now constitutes a
+  green baseline, so a red after M2 is attributable to the migration. What remains owed is the
+  re-run on generated bindings after M2. Needs Xcode plus a logged-in GUI session holding
   Accessibility permission.
 
 If the device or the GUI session is unavailable when the "after" measurements are due, the migration
@@ -190,5 +192,5 @@ unless KC1 promotes one.
 - [ ] A D23 positive control in each probe, **each verified to fail** with the refusal swallowed.
 - [ ] `bench:android:device` — the "after" run on generated bindings, compared in the report against
       `artifacts/step-11-bench-before.md`; or recorded as still owed with the reason.
-- [ ] `test:apple:ui` — run, or recorded as still owed with the reason.
+- [ ] `test:apple:ui` — re-run green on generated bindings, or recorded as still owed with the reason.
 - [ ] `docs/steps/step-11-report.md` written; ROADMAP updated; §9 untouched by this step.
