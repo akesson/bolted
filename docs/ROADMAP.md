@@ -24,10 +24,11 @@ work around them.
 | 08 | Extract bolted-core + conformance suite | 3 — Extraction | **done** — [plan](steps/step-08-extract-bolted-core.md) · [report](steps/step-08-report.md); store is id-keyed and **lock-free** (D16), the FFI's store loop is deleted, suite is generic and runs against **two** features |
 | 09 | bolted-macros | 3 — Extraction | **done** — [plan](steps/step-09-bolted-macros.md) · [report](steps/step-09-report.md); `value`/`entity`/`rules` ship, two **generated** features pass the suite unmodified, `feature_model` **cut** (D21) |
 | 10 | bolted-ffi + a generated FFI layer | 3 — Extraction | **done** — [plan](steps/step-10-bolted-ffi.md) · [report](steps/step-10-report.md); the FFI layer **generates** and runs from Swift (D22–D25). A macro could never have done it: bindgen reads source text. **Deliverable 10 (repoint the shells) deferred to 11** |
-| 11 | Migrate the shells; FFI hardening | 3 — Extraction | **ready** |
-| 12 | C# port + generator | 3 — Extraction | pending |
+| 11 | Migrate the shells onto the generated FFI | 3 — Extraction | **ready** — [plan](steps/step-11-migrate-shells.md) |
+| 12 | FFI hardening + per-language contract tests | 3 — Extraction | pending — needs a design pass on two §9 questions first |
+| 13 | C# port + generator | 3 — Extraction | pending |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
-| 13+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
+| 14+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
 
 ## Phase 1 — Design validation spike
 
@@ -167,31 +168,42 @@ reference the generated code is diffed against.
   drift check would catch every mutation vacuously; run honestly it found **six survivors**, all
   *projection* properties — `any_dirty` pinned false, conflicts reversed, `take_theirs` keeping mine, a
   `Pending` check rendering as `Unchecked`. Four new tests; now 14 caught, 0 survived.
-- **Step 11 — migrate the shells; FFI hardening.** *(Step 10's deliverable 10, deferred rather than
-  half-done: the four Swift and Kotlin shells still link the **hand-written** `spike-profile-ffi`.)*
-  First, the migration, whose exact work-list is measured in
+- **Step 11 — migrate the shells onto the generated FFI.** *(Step 10's deliverable 10, deferred rather
+  than half-done: the four Swift and Kotlin shells still link the **hand-written** `spike-profile-ffi`.)*
+  The work-list is measured, not guessed, in
   [`steps/artifacts/step-10-surface-delta.md`](steps/artifacts/step-10-surface-delta.md) — 62 declarations
   hand-written, 57 generated, **42 identical**; the rest are D24 renames, D23's added `try`, the checker
-  protocol's new shape, and one arity change. Then the hardening list the probes wrote: a
-  **`java.lang.ref.Cleaner` backstop** (§9 — D23 fixed the store-side hazard, the foreign-side
-  use-after-`close()` is BoltFFI's raw pointers and is filed upstream); **`@Parcelize`/`Codable`** for
-  DTOs; the **Compose parameter-passing rule** (a Compose shell must never read core state by calling a
-  VM method — strong skipping makes it invisible); **l10n key coverage per target**, now tractable
-  because `pending_key`/`required_key`/`failed_key` are all declared; a Kotlin ViewModel must `close()`
-  in `onCleared()`; `Send + Sync` Rust classes as `Sendable` Swift classes; `fun interface` for
-  single-method capability traits; a platform-stdlib **name-collision policy** (`Date`, `URL`, `Data`,
+  protocol's new shape, and one arity change. Blast radius: 25 source files, 5 build files. *Detailed step
+  doc exists.* **The gate is M0**: `boltffi pack android` has never been run on a generated crate, and
+  `pack:android` carries step 05's expansion-env workaround — precisely the environment step 10 found
+  triggers the whole-crate metadata blob. If a generated crate cannot pack for Android and the cause is
+  upstream, that is kill criterion 1: the Swift half ships alone and the upstream filing comes forward.
+  **The trap is D23**: a `try?` or a `runCatching {}` swallows `DraftClosedFfi` and reinstates the exact
+  silent no-op D23 abolishes, with every test still green. Each probe gets a positive control, verified to
+  fail with the refusal swallowed.
+
+  **Inherited cautions.** `mise run test:android:app` **can report BUILD SUCCESSFUL without running a
+  test** (Gradle up-to-date); force `--rerun-tasks` before quoting a number, and read counts out of the
+  JUnit XML — `test:android` and `test:android:hazard` write to the *same* file. And step 10's lesson,
+  which generalizes past codegen: **a test that forbids something can be forbidding nothing** —
+  `golden.rs`'s needles were written against `quote`'s token spacing and matched no line of a
+  `prettyplease`-formatted file, green and vacuous. Pin a forbidding test from both sides.
+- **Step 12 — FFI hardening + per-language contract tests.** Split out of step 11, which was three steps
+  in a trench coat. **Blocked on a design pass**: two of its items are ARCHITECTURE §9 OPEN questions —
+  the **`java.lang.ref.Cleaner` backstop** (D23 fixed the store-side hazard; the foreign-side
+  use-after-`close()` is BoltFFI's raw pointers) and **stash schema evolution**. Neither may be resolved
+  in an implementation session. The rest, all of them generator changes whose only test is a shell that
+  consumes generated bindings: **`@Parcelize`/`Codable`** for DTOs (which deletes `StashCodec.kt`, whose
+  length is the argument); the **Compose parameter-passing rule** (a Compose shell must never read core
+  state by calling a VM method — strong skipping makes it invisible); **l10n key coverage per target**,
+  now tractable because `pending_key`/`required_key`/`failed_key` are all declared; a Kotlin ViewModel
+  must `close()` in `onCleared()`; `Send + Sync` Rust classes as `Sendable` Swift classes; `fun interface`
+  for single-method capability traits; a platform-stdlib **name-collision policy** (`Date`, `URL`, `Data`,
   `Error`); **per-language contract tests generated from the C-IDs**, which need generated typed field
   accessors (step 08, friction 1). Also: **file the three upstream bugs** — `boltffi pack android`'s
   missing expansion env (delete the workaround in `mise run pack:android`), generated methods not
   consulting `__boltffi_closed`, and bindgen silently ignoring macro-generated items.
-
-  **Inherited cautions.** `boltffi pack android` on a *generated* crate has never been run. `mise run
-  test:android:app` **can report BUILD SUCCESSFUL without running a test** (Gradle up-to-date); force
-  `--rerun-tasks` before quoting a number. And step 10's own lesson, which generalizes past codegen: **a
-  test that forbids something can be forbidding nothing** — `golden.rs`'s needles were written against
-  `quote`'s token spacing and matched no line of a `prettyplease`-formatted file, green and vacuous.
-  Pin a forbidding test from both sides.
-- **Step 12 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
+- **Step 13 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)

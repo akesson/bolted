@@ -433,14 +433,14 @@ what, and why it was worth it.
 
 Each names the step that owns it. Nothing below blocks Phase 3.
 
-- **A `Cleaner` backstop for a forgotten `close()`** — *step 11.* The half of the use-after-close
+- **A `Cleaner` backstop for a forgotten `close()`** — *step 12.* The half of the use-after-close
   question D23 could not answer. D23 makes a **store-side** release (C17's submit) a typed
   `DraftClosed` on every mutating verb. It cannot touch the **foreign-side** release: BoltFFI handles
   are raw pointers, generated instance methods never consult the `__boltffi_closed` flag they carry,
   so on Kotlin a use-after-`close()` reads freed memory and, after allocator churn, **silently aliases
   another live draft** (step 05, H2 — no crash). Filed upstream. Meanwhile: should `<feature>-ffi`
   emit a `java.lang.ref.Cleaner` backstop, so a forgotten `close()` leaks until GC rather than forever?
-- **Stash schema evolution** — *step 11 and Phase 4 (`bolted-check`).* The stash is the
+- **Stash schema evolution** — *step 12 and Phase 4 (`bolted-check`).* The stash is the
   framework's first **untrusted input**: bytes the OS kept while the process was dead, possibly
   written by an *older version of the app*. C01 says a value's raw form roundtrips — so an ancestor
   that no longer parses means the constraints were tightened between releases. Step 07 degrades that
