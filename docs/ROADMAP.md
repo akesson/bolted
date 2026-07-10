@@ -26,7 +26,7 @@ work around them.
 | 10 | bolted-ffi + a generated FFI layer | 3 — Extraction | **done** — [plan](steps/step-10-bolted-ffi.md) · [report](steps/step-10-report.md); the FFI layer **generates** and runs from Swift (D22–D25). A macro could never have done it: bindgen reads source text. **Deliverable 10 (repoint the shells) deferred to 11** |
 | 11 | Migrate the shells onto the generated FFI | 3 — Extraction | **done** — [plan](steps/step-11-migrate-shells.md) · [report](steps/step-11-report.md); all four shells link `gen-profile-ffi`, `pack:*` repointed, spike kept as reference. D23 controls planted-and-watched on both platforms. Hardware "after": **0.0432 ms p50** per keystroke on the Pixel 8a (~23× under KC5); `test:apple:ui` 9/9 on generated |
 | 12 | FFI hardening | 3 — Extraction | **done** — [report](steps/step-12-report.md); D23 fix (3-layer planted-red), leak-freedom pinned (D26), **D27** envelope + **C23**, l10n coverage (Swift's first), name-collision tripwire. Codec deletion **converted** (needs step 13's foreign emitter); 5 upstream drafts. No kill criteria hit |
-| 13 | Per-language contract tests from the C-IDs | 3 — Extraction | pending — split out of 12; **must build the foreign-language emitter** (step 12 found `bolted-ffi-gen` emits only Rust, and BoltFFI's DTO wire ser/de is `internal`). Also owns the codec emitter M4 converted. Needs typed field accessors (step 08, friction 1) |
+| 13 | Per-language contract tests from the C-IDs | 3 — Extraction | **ready** — [plan](steps/step-13-foreign-emitter.md); **D28 (v1.6)**: foreign artifacts are committed generated source, byte-compared in `check`. Two artifacts on one pipeline: the Kotlin stash codec (closes step-12 deliverable 5) and the emitted contract suites, generic over a values-only fixture. M0 gates on the observability map |
 | 14 | C# port + generator | 3 — Extraction | pending |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
 | 15+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
@@ -203,13 +203,21 @@ reference the generated code is diffed against.
   6b Sendable) funnel to the same "`bolted-ffi-gen` emits only Rust" root. Five upstream drafts written
   (not filed). No `dist/` patched; no kill criteria hit. The Fable-plans/Opus-implements split earned
   its keep here — a planner's optimism about the seam is what the implementer caught.
-- **Step 13 — per-language contract tests from the C-IDs.** A new generator target: test code emitted
-  in Swift and Kotlin, plus the generated typed field accessors it needs (step 08, friction 1). Step
-  12 answered its foundational question — foreign-language emission is **entirely ours** (BoltFFI 0.27.3
-  has no passthrough, and its DTO wire ser/de is `internal`), so step 13 must **stand up the
-  foreign-language emitter** and resolve its infra (where generated Kotlin/Swift lives, how it builds,
-  how it drift-checks). It also inherits the **codec emitter** M4 converted (`step-12-m4-codec.md`) and
-  the `StashAcceptedFfi`/`StashRefusedFfi` surface D27 added. See `steps/step-12-report.md` handoff.
+- **Step 13 — per-language contract tests from the C-IDs.** *Detailed step doc exists* —
+  [step-13-foreign-emitter.md](steps/step-13-foreign-emitter.md), authored by the design pass that
+  added **D28 (v1.6)**: foreign-language artifacts are **committed generated source** — D22 one
+  language out — emitted by `bolted-ffi-gen` over the one parsed declaration (D25), living at source
+  paths the platform builds already compile, **byte-compared** by the drift check inside `mise run
+  check` (honest for foreign files precisely because no formatter owns them). The pipeline is spent
+  twice: the **Kotlin stash codec** (smallest artifact, hand-written golden reference, closes step-12
+  deliverable 5) and the **emitted contract suites** — the C-IDs projected through the public
+  generated surface in Kotlin and Swift, each generic over a hand-written fixture that carries
+  *example values only* (rule keys live in impl bodies; the declaration cannot supply them). The
+  foreign tier verifies **the boundary, not the algebra**: properties stay in Rust, the emitted tests
+  check that the semantics survive the seam. M0 is an **observability map** with teeth — every C-ID
+  classified emitted/exempt in CONFORMANCE.md, manifest-enforced, gated at a third. The step-08
+  typed-accessor need is mostly already met by D24's surface; M0 audits the residue. Inherits the
+  `StashAcceptedFfi`/`StashRefusedFfi` surface D27 added.
 - **Step 14 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 
