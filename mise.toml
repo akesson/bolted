@@ -33,38 +33,14 @@ echo
 echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
 """
 
-# --- Step 10: the GENERATED Apple bindings. `pack:apple`/`test:apple` still point at the
-# hand-written `spike-profile-ffi`, which stays the reference. Repointing the full Swift and Kotlin
-# shells is step 11; this verb proves the generated bindings compile, link and run. ---
-
-[tasks."pack:apple:gen"]
-description = "Pack the GENERATED FFI crate (gen-profile-ffi) for Apple."
-depends = ["setup:boltffi"]
-dir = "crates/gen-profile-ffi"
-run = """
-set -eu
-export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-if ! command -v boltffi >/dev/null 2>&1; then
-  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
-  exit 1
-fi
-if ! command -v xcodebuild >/dev/null 2>&1; then
-  echo "error: Xcode not found (VISION risk 5)." >&2
-  exit 1
-fi
-if command -v rustup >/dev/null 2>&1; then
-  rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin \
-    >/dev/null 2>&1 || true
-fi
-# `boltffi generate swift` writes Sources/*.swift while `pack apple` writes Sources/BoltFFI/*.swift.
-# Both in one dist/ makes SwiftPM fail with "multiple producers". Pack owns this directory.
-rm -rf dist/apple
-boltffi pack apple --release
-"""
+# --- Step 10 built the generator; step 11 repointed every shell (and `pack:apple`/`pack:android`
+# below) at the GENERATED `gen-profile-ffi`. The hand-written `spike-profile-ffi` stays in the
+# workspace as the reference — built and tested by `check`, packed by nothing. The two smoke suites
+# stay as the lowest tier against the same dist. ---
 
 [tasks."test:apple:gen"]
-description = "Run the smoke suite against the GENERATED Swift bindings (declaration -> Swift)."
-depends = ["pack:apple:gen"]
+description = "Run the smoke suite against the generated Swift bindings (declaration -> Swift)."
+depends = ["pack:apple"]
 run = """
 set -eu
 if ! command -v swift >/dev/null 2>&1; then
@@ -74,52 +50,9 @@ fi
 swift test --package-path apple/gen-profile-smoke
 """
 
-# --- Step 11 (M0): the GENERATED Android bindings. `boltffi pack android` had never been run on a
-# generated crate before this verb; it is the step's gate. Same shape as `pack:android`, same
-# 0.27.3 workaround block — the expansion environment is ALSO what triggers the whole-crate metadata
-# blob that `gen-profile-ffi`'s root re-exports exist to satisfy (see its lib.rs). ---
-
-[tasks."pack:android:gen"]
-description = "Build the arm64-v8a .so + Kotlin/JNI bindings for the GENERATED FFI crate (release)."
-depends = ["setup:boltffi"]
-dir = "crates/gen-profile-ffi"
-run = """
-set -eu
-export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-if ! command -v boltffi >/dev/null 2>&1; then
-  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
-  exit 1
-fi
-: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
-export ANDROID_HOME
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-if [ ! -d "$ANDROID_HOME" ]; then
-  echo "error: Android SDK not found at $ANDROID_HOME — set ANDROID_HOME (VISION risk 5)." >&2
-  exit 1
-fi
-ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
-if [ -z "$ndk" ]; then
-  echo "error: no Android NDK under $ANDROID_HOME/ndk — install one:" >&2
-  echo "  sdkmanager 'ndk;27.0.12077973'" >&2
-  exit 1
-fi
-export ANDROID_NDK_HOME="$ndk"
-if command -v rustup >/dev/null 2>&1; then
-  rustup target add aarch64-linux-android >/dev/null 2>&1 || true
-fi
-# BoltFFI 0.27.3 `pack android` symbol-name bug: same workaround as pack:android (see its comment).
-crate_dir="$PWD"
-export BOLTFFI_BINDING_EXPANSION=1
-export BOLTFFI_BINDING_EXPANSION_ROOT="$crate_dir"
-export BOLTFFI_BINDING_EXPANSION_SOURCE="$crate_dir/src/lib.rs"
-export BOLTFFI_BINDING_EXPANSION_SURFACE=native
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--cfg boltffi_binding_expansion"
-boltffi pack android --release
-"""
-
 [tasks."test:android:gen"]
-description = "Run the Kotlin smoke suite against the GENERATED bindings on the headless emulator."
-depends = ["pack:android:gen"]
+description = "Run the Kotlin smoke suite against the generated bindings on the headless emulator."
+depends = ["pack:android"]
 dir = "android/gen-profile-smoke"
 tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
 run = """
@@ -172,9 +105,11 @@ CARGO_HOME="$home" cargo install boltffi_cli --version "$want"
 """
 
 [tasks."pack:apple"]
-description = "Build + package the Apple XCFramework + SwiftPM bindings (release)."
+description = "Build + package the Apple XCFramework + SwiftPM bindings (release, gen-profile-ffi)."
 depends = ["setup:boltffi"]
-dir = "crates/spike-profile-ffi"
+# Step 11: repointed from the hand-written `spike-profile-ffi` (which stays in the workspace as the
+# reference, packed by nothing) to the generated crate. Every Swift consumer links this dist.
+dir = "crates/gen-profile-ffi"
 run = """
 set -eu
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
@@ -192,6 +127,9 @@ if command -v rustup >/dev/null 2>&1; then
   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin \
     >/dev/null 2>&1 || true
 fi
+# `boltffi generate swift` writes Sources/*.swift while `pack apple` writes Sources/BoltFFI/*.swift.
+# Both in one dist/ makes SwiftPM fail with "multiple producers". Pack owns this directory.
+rm -rf dist/apple
 boltffi pack apple --release
 """
 
@@ -293,9 +231,10 @@ wasm-pack test --headless --chrome --test web
 # (which stays Rust-only: no JDK, no Android SDK, no emulator). See docs/steps/step-05-android-probe.md. ---
 
 [tasks."pack:android"]
-description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release)."
+description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release, gen-profile-ffi)."
 depends = ["setup:boltffi"]
-dir = "crates/spike-profile-ffi"
+# Step 11: repointed from `spike-profile-ffi` to the generated crate (see pack:apple's note).
+dir = "crates/gen-profile-ffi"
 run = """
 set -eu
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
