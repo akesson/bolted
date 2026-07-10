@@ -581,11 +581,14 @@ impl ProfileDraftFfi {
     }
     /// Drive one single-flight check: begin (emit a `Pending` snapshot), call the foreign
     /// checker with **no lock held**, complete (emit the verdict). `Ok(false)` means no
-    /// checker is set.
+    /// checker is set on a *live* draft; a released draft refuses (D23), checker or not.
     ///
     /// The core discards a superseded token, so a verdict that lands after the value moved is
     /// dropped rather than applied (C13).
     pub fn run_username_check(&self) -> ::core::result::Result<bool, DraftClosedFfi> {
+        if lock(&self.core).store.draft_mut(self.id).is_none() {
+            return Err(DraftClosedFfi::DraftClosed);
+        }
         let Some(checker) = lock(&self.username_checker).take() else {
             return Ok(false);
         };

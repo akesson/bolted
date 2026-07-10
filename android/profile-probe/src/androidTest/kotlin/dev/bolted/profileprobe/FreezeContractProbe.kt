@@ -154,8 +154,9 @@ class FreezeContractProbe {
     @Test
     fun d23_aMutatorOnASubmittedDraftThrowsDraftClosed() {
         store.checkout().use { draft ->
-            // With NO checker set, `runUsernameCheck` short-circuits to `false` before it ever looks
-            // at the draft — the refusal below is only reachable with a checker installed.
+            // A checker is installed here so this test exercises the corpse-WITH-checker cell; the
+            // corpse-with-NO-checker cell is its own control below (before step 12 that cell answered
+            // `false` rather than refusing — the no-checker short-circuit ran ahead of the gate).
             draft.setUsernameChecker(uniqueChecker())
             draft.submit() // C17: the store releases the draft
             assertFalse(draft.isLive())
@@ -177,6 +178,27 @@ class FreezeContractProbe {
                 fail("expected DraftClosedFfi from runUsernameCheck with a checker installed")
             } catch (_: DraftClosedFfi) {
                 record("d23.check_refused", "typed")
+            }
+        }
+    }
+
+    /**
+     * The D23 no-checker control (step 11 friction 1, fixed step 12 M1). A released draft with **no
+     * checker installed** must still refuse `runUsernameCheck()` — before M1 it returned `false`,
+     * indistinguishable from "no checker on a live draft". Verified red against the unfixed
+     * generator (the liveness gate reverted, regenerated, watched fail, restored).
+     */
+    @Test
+    fun d23_runCheckRefusesAReleasedDraftWithNoCheckerInstalled() {
+        store.checkout().use { draft ->
+            draft.submit() // released, and NO checker was ever set
+            assertFalse(draft.isLive())
+
+            try {
+                draft.runUsernameCheck()
+                fail("expected DraftClosedFfi — a released draft refuses even with no checker (D23)")
+            } catch (_: DraftClosedFfi) {
+                record("d23.check_refused_no_checker", "typed")
             }
         }
     }

@@ -408,11 +408,18 @@ pub fn draft_class(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 
 
             /// Drive one single-flight check: begin (emit a `Pending` snapshot), call the foreign
             /// checker with **no lock held**, complete (emit the verdict). `Ok(false)` means no
-            /// checker is set.
+            /// checker is set on a *live* draft; a released draft refuses (D23), checker or not.
             ///
             /// The core discards a superseded token, so a verdict that lands after the value moved is
             /// dropped rather than applied (C13).
             pub fn #runner(&self) -> ::core::result::Result<bool, DraftClosedFfi> {
+                // D23: a released draft refuses unconditionally. This gate runs BEFORE the
+                // no-checker short-circuit, so a dead draft with no checker still refuses (typed)
+                // instead of answering `Ok(false)` -- which is reserved for a live draft with no
+                // checker. Its own lock scope: the checker outcall below must hold no lock.
+                if lock(&self.core).store.draft_mut(self.id).is_none() {
+                    return Err(DraftClosedFfi::DraftClosed);
+                }
                 // Take the checker OUT of its mutex for the whole operation, so the checker lock is
                 // never held across the outcall: a foreign checker may reentrantly touch this draft.
                 let Some(checker) = lock(&self.#slot).take() else {

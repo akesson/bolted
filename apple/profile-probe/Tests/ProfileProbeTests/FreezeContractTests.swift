@@ -170,8 +170,9 @@ final class FreezeContractTests: XCTestCase {
     func testD23MutatorOnASubmittedDraftThrowsDraftClosed() throws {
         let store = try seededStore()
         let draft = store.checkout()
-        // With NO checker set, `runUsernameCheck` short-circuits to `false` before it ever looks at
-        // the draft — the refusal below is only reachable with a checker installed.
+        // A checker is installed here so this test exercises the corpse-WITH-checker cell; the
+        // corpse-with-NO-checker cell is its own control below (before step 12 that cell answered
+        // `false` instead of refusing — the no-checker short-circuit ran ahead of the liveness gate).
         draft.setUsernameChecker(checker: StubChecker(.pass))
         try draft.submit() // C17: the store releases the draft
         XCTAssertFalse(draft.isLive())
@@ -184,6 +185,23 @@ final class FreezeContractTests: XCTestCase {
         }
         XCTAssertThrowsError(try draft.runUsernameCheck()) { error in
             XCTAssertEqual(error as? DraftClosedFfi, .draftClosed)
+        }
+    }
+
+    /// The D23 no-checker control (step 11 friction 1, fixed step 12 M1). A released draft with **no
+    /// checker installed** must still refuse `runUsernameCheck()` — before M1 it returned `false`,
+    /// indistinguishable from "no checker on a live draft". Verified red against the unfixed
+    /// generator (the liveness gate reverted, regenerated, watched fail, restored).
+    func testD23RunCheckRefusesAReleasedDraftWithNoCheckerInstalled() throws {
+        let store = try seededStore()
+        let draft = store.checkout()
+        try draft.submit() // released, and NO checker was ever set
+        XCTAssertFalse(draft.isLive())
+
+        XCTAssertThrowsError(try draft.runUsernameCheck()) { error in
+            XCTAssertEqual(
+                error as? DraftClosedFfi, .draftClosed,
+                "a released draft refuses even with no checker (D23), not `false`")
         }
     }
 

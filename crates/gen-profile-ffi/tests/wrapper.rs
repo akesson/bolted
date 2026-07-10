@@ -126,20 +126,42 @@ fn the_observers_of_a_submitted_draft_do_not_throw() {
 }
 
 /// `run_*_check` distinguishes "no checker installed" from "the draft is gone". `spike-profile-ffi`
-/// returned `false` for both.
+/// returned `false` for both, and step 11 caught the generator doing the same when *no checker*
+/// was installed on a corpse: the no-checker short-circuit ran ahead of the draft-liveness gate,
+/// so a released draft answered `Ok(false)` instead of refusing. D23 says a mutating verb refuses a
+/// released draft *unconditionally* — the three cells below pin that.
 #[test]
 fn running_a_check_without_a_checker_is_not_the_same_as_running_it_on_a_corpse() {
+    // Cell 1 — live draft, no checker: the one case that is `Ok(false)`.
     let store = seeded();
     let draft = store.checkout();
     assert_eq!(
         draft.run_username_check(),
         Ok(false),
-        "no checker installed"
+        "a live draft with no checker is the only `Ok(false)`"
     );
 
-    draft.set_username_checker(Scripted::new(CheckVerdictFfi::Pass).0);
-    draft.submit().expect("valid");
-    assert_eq!(draft.run_username_check(), Err(DraftClosedFfi::DraftClosed));
+    // Cell 2 — corpse WITH a checker installed: refuses (this path always worked; the runner
+    // restores the checker and returns `DraftClosed` when `draft_mut` misses).
+    let with_checker = store.checkout();
+    with_checker.set_username_checker(Scripted::new(CheckVerdictFfi::Pass).0);
+    with_checker.submit().expect("valid");
+    assert_eq!(
+        with_checker.run_username_check(),
+        Err(DraftClosedFfi::DraftClosed),
+        "a released draft with a checker refuses"
+    );
+
+    // Cell 3 — corpse with NO checker: the D23 no-checker control. Before M1 this returned
+    // `Ok(false)` (indistinguishable from "no checker on a live draft"); the draft-liveness gate
+    // now makes it refuse, checker or not.
+    let no_checker = store.checkout();
+    no_checker.submit().expect("valid");
+    assert_eq!(
+        no_checker.run_username_check(),
+        Err(DraftClosedFfi::DraftClosed),
+        "D23: a released draft refuses even with no checker installed"
+    );
 }
 
 // =================================================================================================
