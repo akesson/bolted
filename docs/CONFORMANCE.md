@@ -1,8 +1,9 @@
 # Bolted — Conformance suite
 
 **Status: frozen with ARCHITECTURE.md (step 06); C03 amended and C19 added in step 07; C12/C17/C18
-amended and C22 added in step 08; C07 amended in step 09; C23 added in step 12 (D27).** These are the
-design's falsifiable claims.
+amended and C22 added in step 08; C07 amended in step 09; C23 added in step 12 (D27); step 13 (D28)
+adds the per-language-tier accounting at the foot of this document.** These are the design's
+falsifiable claims.
 Each one is normative: an implementation of the Bolted contract that violates any of them is not a
 Bolted implementation, whatever else it does.
 
@@ -20,8 +21,8 @@ the mapping is verified by the build, not by review.
 |------|--------------------|
 | 06 | Named, documented, and running against `spike-profile`, the hand-written "as-if-generated" reference implementation. |
 | 08 | **Generic over a feature**, extracted into `bolted-conformance`, and run against **two** — `spike-profile` (rule + async check + composite value) and `spike-note` (neither). A suite with one implementor proves nothing about genericity. |
-| 09 (now) | Run against **four**: the two above, plus `gen-profile` and `gen-note`, which declare the same features through `bolted-macros`. A generated feature either satisfies the contract unmodified or the doctrine that macros only stamp names is wrong. |
-| 10 | Emitted as **per-language contract tests** (Swift, Kotlin, C#) from the same IDs, so a generated binding that breaks C09 fails its own build. |
+| 09 | Run against **four**: the two above, plus `gen-profile` and `gen-note`, which declare the same features through `bolted-macros`. A generated feature either satisfies the contract unmodified or the doctrine that macros only stamp names is wrong. |
+| 13 (now) | Emitted as **per-language contract tests** (Kotlin, Swift) from the same IDs, generic over a values-only fixture, so a generated binding that breaks an invariant fails its own build (D28). Not every ID crosses the boundary; the per-ID accounting is at the foot of this document. C# is step 14. |
 
 Wording convention: **must** is normative. "The field" means an editable `Field<V>` of a draft; "the
 draft" means a value implementing `Draft`; "theirs" is an incoming canonical value.
@@ -123,3 +124,67 @@ compared them. Step 07 finally proved the divergence with a Swift test whose nam
 `testLiveDraftCountDisagreesWithTheCoreOnACreateFlowDraft` — a test that could only *document* the
 bug, since with two hand-written stores there was no single answer to make right. D16 deleted one of
 them. Two questions now have two names, and a shell that wants the other one has to ask for it.
+
+## The per-language tier (step 13): what crosses the boundary
+
+Step 06 promised the C-IDs would be *emitted* as per-language contract tests. Step 13 does it (D28):
+`bolted-ffi-gen` emits a Kotlin and a Swift test per ID, generic over a hand-written, **values-only**
+fixture, run in the emulator/simulator tiers the shells already build. The foreign tier verifies **the
+boundary, not the algebra** — that the binding and wrapper *preserve* the core's semantics across the
+seam — so it is example-based on purpose: the properties stay in the Rust suite above, which already
+proves them against four features. A foreign test that fails names a binding or wrapper bug, never the
+core's.
+
+Not every invariant crosses. An ID is **emitted** when the *public generated surface* (the `#[export]`
+verbs and `#[data]` DTOs — nothing internal, kill criterion 2) can both **construct** its precondition
+and **observe** its outcome. It is **exempt** when the surface cannot, with the reason stated — and an
+ID that is observable but merely lacks a verb is *not* exempt: the generator gains the verb (it is our
+output) and the ID is emitted. This table is the emitter's own source of truth
+(`bolted_ffi_gen::foreign::BOUNDARY_MAP`); `bolted-ffi-gen`'s `tests/manifest.rs` ties it to this
+document in both directions, so the two cannot drift. The map is step 13 M0; **22 of 23 emitted, one
+exempt** — comfortably inside the "no more than a third exempt" gate.
+
+| ID | Boundary | Observed through — or exempt because |
+|----|----------|--------------------------------------|
+| C01 | emitted | `try_set_*` then `snapshot().<f>.validity == Valid{value}`; re-setting that `value` is idempotent — the canonical raw that crosses back re-parses to the same value. |
+| C02 | emitted | An entity-backed checkout leaves `<f>` untouched; `apply_canonical` moves it; `snapshot()`: `Valid{theirs}`, `InSync`, `dirty == false`. |
+| C03 | emitted | Edit `<f>`; `apply_canonical` moves it to a third value; `snapshot()` keeps your value, `sync == Conflicted{base, theirs}`, `conflicts` names it. |
+| C04 | emitted | Edit `<f>`, then `apply_canonical` to that same value; `snapshot()`: `InSync`, `dirty == false`. |
+| C05 | emitted | Edit `<f>`, then set it back to base; `snapshot().<f>.dirty == false`. |
+| C06 | emitted | `try_set_*` an invalid raw returns the typed error and records `Invalid{raw, error}`; `submit()` → `Validation` naming the field; `canonical()` is unchanged. |
+| C07 | emitted | `submit()` returns the typed `SubmitErrorFfi`; the precedence clause is composed at the boundary — `delete_canonical` over a conflict → `Orphaned` outranks `Conflicted`; a conflict plus an invalid field → `Conflicted` outranks `Validation`. (Needs `delete_canonical`.) |
+| C08 | emitted | Arrange the rule satisfied, `apply_canonical` moves an unpinned field; `validate().rule_errors` names the rule and `conflicts` is empty. (Richest fixture surface — the rule-flip is supplied as values; KC3 is the M2 watch.) |
+| C09 | emitted | `resolve_keep_mine` / `resolve_take_theirs`; value·dirty·sync from `snapshot()`, and the resolved `base` from `stash().<f>.base` (the `InSync` DTO carries no base). |
+| C10 | exempt | See below — the one exemption. |
+| C11 | emitted | `delete_canonical` under a live draft → `snapshot().status == Orphaned`, `submit()` → `Orphaned`, `is_live()` still true. (Needs `delete_canonical`.) |
+| C12 | emitted | Create-flow: checkout from an empty store, `apply_canonical` leaves it unset with `rebasing_draft_count == 0`, then fill + `submit`. Contrapositive: null one field's `base` in the `stash` DTO, `restore`, `rebasing_draft_count == 1`, and it orphans when the canonical is gone. |
+| C13 | emitted | `run_*_check` → `Passed`; a value-moving change (edit, rebase, take-theirs) → `snapshot().<check> == Unchecked`; a value-preserving one (edit-to-same, keep-mine, a preserved conflict) leaves it standing. |
+| C14 | emitted | Conflict `<f>`, then `try_set_*` theirs; `snapshot()`: `InSync`, `dirty == false`, `conflicts` empty. |
+| C15 | emitted | `apply_canonical` advances `snapshot().version`; after `delete_canonical` an orphan's stamp stops moving. (Orphan half needs `delete_canonical`.) |
+| C16 | emitted | A dirty, unchecked checked-field blocks `submit()` (`…_check_required`, pinned); a clean one does not. |
+| C17 | emitted | A refused `submit()` leaves `is_live()` true and the edit intact; a successful one tombstones it; a second is `AlreadySubmitted`. |
+| C18 | emitted | `close()` / `AutoCloseable` frees the draft, is idempotent, and stops rebase (`rebasing_draft_count`). The "a merely-forgotten handle leaks on ART" clause stays with the lifecycle probes — a non-goal to re-emit, since GC makes it non-deterministic to observe. |
+| C19 | emitted | `apply_canonical` on a *different* field leaves an edited `<f>` dirty · `InSync` · unconflicted; rebasing onto the same/ancestor canonical is idempotent. |
+| C20 | emitted | `stash()` carries each field's `raw` + `base` and structurally no `sync`/verdict; `restore` reproduces value, ancestor, validity (incl. `Invalid{raw}`), dirtiness; a restored checked field is `Unchecked`. |
+| C21 | emitted | `restore` conflicts exactly the fields whose canonical moved, keeps a pre-death resolution, orphans into a deleted canonical, and never moves a create-flow draft. |
+| C22 | emitted | `live_draft_count` vs `rebasing_draft_count` diverge on a create-flow draft and on an orphan; `close` removes from both. |
+| C23 | emitted | Set a field's `base` to an invalid raw in the `stash` DTO, `accept_stash` + `restore`: the field comes back dirty with its `base` dropped; on rebase it conflicts when the rescued value differs (C03), clean when it converges (C04). |
+
+**The one exemption. C10** (latest check wins) is the single ID the boundary cannot express. Its
+property — *a completion carrying a superseded token is discarded* — presupposes **two checks in
+flight at once**. The generated check driver (`run_username_check`) is atomic: within one FFI call it
+begins one token, calls the foreign checker with no lock held, and completes that same token, over a
+*single* `take`-n checker instance. A second token can therefore never exist to be superseded, and the
+"at most one in flight" guarantee is *enforced* by that shape rather than *observable* through it. The
+mechanism is driven directly in the Rust tier (`SingleFlight`, `begin_check` / `complete_check`).
+Emitting it would mean exposing raw single-flight tokens across the FFI — a change to the check-driving
+contract (D18), not an added accessor — so it stays exempt, and honestly so.
+
+**Accessor gaps the map found.** One real gap: the store cannot **delete** its canonical across the
+boundary — `apply_canonical` only *sets* one. `bolted_core::Store::delete_canonical` exists and the
+Rust suite drives C11/C15/C22 and C07's precedence through it; the FFI simply never projected it. Per
+the rule above, an observable ID that merely lacks a verb is not exempt: `delete_canonical` is added to
+the generated store (step 13, deliverable 8), and C11 (plus the strongest forms of C07, C15, C12) is
+emitted. One non-gap, recorded so it is not re-litigated: C09's resolved `base` is absent from the
+`snapshot()` `InSync` DTO but present in `stash()`, so the boundary reads it there rather than growing
+the snapshot — the smaller change.

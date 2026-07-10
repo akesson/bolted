@@ -27,6 +27,7 @@ use quote::quote;
 
 mod dto;
 mod field;
+pub mod foreign;
 mod wrapper;
 
 #[cfg(test)]
