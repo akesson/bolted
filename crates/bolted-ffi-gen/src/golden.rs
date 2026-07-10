@@ -330,3 +330,33 @@ fn the_generated_file_says_so_and_says_how_to_regenerate() {
 fn generation_is_deterministic() {
     assert_eq!(gnarly(), gnarly());
 }
+
+/// The name-collision refusal (step 12, deliverable 6c). A generated top-level type whose name is a
+/// per-language built-in is refused at generation time, naming the offended language — no silent
+/// rename. It is a **tripwire**: the generator suffixes every declaration-derived name today
+/// (`<Entity>Snapshot`, `<Value>ErrorFfi`), so no real declaration can produce a bare `Date`/`Error`;
+/// the check is exercised directly rather than through an input that cannot reach it. That `gnarly()`
+/// and `plain()` above call `generate()` — which now runs this check — is the proof the real emitted
+/// layer clears the deny-list.
+#[test]
+fn a_generated_type_named_like_a_platform_builtin_is_refused() {
+    let swift_clash: syn::File = syn::parse_str("pub struct Date { pub y: u16 }").expect("valid");
+    let err = crate::reject_reserved_type_names(&swift_clash).expect_err("`Date` must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Swift"),
+        "the refusal names the offended language: {msg}"
+    );
+    assert!(msg.contains("Date"), "and the colliding name: {msg}");
+
+    let kotlin_clash: syn::File = syn::parse_str("pub enum Exception { A }").expect("valid");
+    assert!(
+        crate::reject_reserved_type_names(&kotlin_clash).is_err(),
+        "`Exception` collides with a Kotlin built-in"
+    );
+
+    // Ordinary suffixed names — what the generator actually emits — pass.
+    let clean: syn::File =
+        syn::parse_str("pub struct ProfileSnapshot { pub v: u64 }").expect("valid");
+    assert!(crate::reject_reserved_type_names(&clean).is_ok());
+}

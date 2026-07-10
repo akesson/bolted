@@ -55,7 +55,68 @@ pub fn generate(source: &str, feature_crate: &str) -> syn::Result<String> {
     let feature = Feature::from_file(&file)?;
     let tokens = emit(&feature, feature_crate)?;
     let parsed: syn::File = syn::parse2(tokens)?;
+    reject_reserved_type_names(&parsed)?;
     Ok(format!("{BANNER}{}", prettyplease::unparse(&parsed)))
+}
+
+/// Type names a generated foreign type must not shadow, per language. Not exhaustive — the
+/// high-traffic Foundation/stdlib names whose collision is silent and confusing (`Date` meaning
+/// "our Date" in one file and `Foundation.Date` in the next). `Error` earns its place on both:
+/// Swift's `Error` protocol and Kotlin's `Error` class.
+const SWIFT_RESERVED: &[&str] = &[
+    "Date", "URL", "Data", "Error", "Result", "Task", "Array", "Set", "String", "Optional",
+];
+const KOTLIN_RESERVED: &[&str] = &[
+    "Error",
+    "Exception",
+    "Result",
+    "Unit",
+    "Nothing",
+    "Array",
+    "List",
+    "Map",
+    "Set",
+    "String",
+];
+
+/// Refuse — **loudly, at generation time** — a generated top-level type whose name lands on a
+/// per-language reserved list. No silent renaming: the declarer picks another name (D8's spirit,
+/// one layer out — a name the tool cannot honour is the declarer's to fix, not the tool's to mangle).
+///
+/// Scope, honestly: every *declaration-derived* name the generator emits is already suffixed
+/// (`<Entity>Snapshot`, `<Value>ErrorFfi`, `…StashFfi`), so a normal declaration is structurally out
+/// of collision range — this is a **tripwire for a future generator change** that emits a bare name,
+/// not a guard that fires on today's inputs. The per-feature collision surface that *is* live —
+/// hand-written custom composite types (`PlainDate`, `AvailabilityRaw`) — is not named by the
+/// generator, and reaching it needs a design decision (inspect `custom`'s exports, or bring
+/// composite naming into the generator). Recorded in the step-12 report; see `steps/artifacts`.
+pub fn reject_reserved_type_names(file: &syn::File) -> syn::Result<()> {
+    for item in &file.items {
+        let ident = match item {
+            syn::Item::Struct(s) => &s.ident,
+            syn::Item::Enum(e) => &e.ident,
+            _ => continue,
+        };
+        let name = ident.to_string();
+        let lang = if SWIFT_RESERVED.contains(&name.as_str()) {
+            Some("Swift")
+        } else if KOTLIN_RESERVED.contains(&name.as_str()) {
+            Some("Kotlin")
+        } else {
+            None
+        };
+        if let Some(lang) = lang {
+            return Err(syn::Error::new(
+                ident.span(),
+                format!(
+                    "the generated type `{name}` collides with a {lang} built-in of the same name. \
+                     A generated binding must not shadow it — rename the declaration that produces \
+                     `{name}` (the tool will not silently rename it for you)."
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn emit(feature: &Feature, feature_crate: &str) -> syn::Result<TokenStream2> {

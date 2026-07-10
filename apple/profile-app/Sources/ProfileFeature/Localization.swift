@@ -34,4 +34,9 @@ public enum Localization {
         }
         return text
     }
+
+    /// `true` if this key has a template — i.e. the app can say it, rather than showing the user the
+    /// raw identifier. The coverage test's query (the Kotlin shell has had this since step 07;
+    /// step 12 gave Apple the same, because step-06 friction 7 happened *here*).
+    public static func hasTemplate(_ key: String) -> Bool { templates[key] != nil }
 }
