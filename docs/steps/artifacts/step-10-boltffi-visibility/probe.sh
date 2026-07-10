@@ -180,6 +180,25 @@ printf '  KC2  a CheckId enum across #[data] (D18)                : %s\n' \
   "$(grep -q 'enum ProfileCheck' "$SWIFT" && grep -q 'func runCheck' "$SWIFT" && echo 'NOT HIT (param + return)' || echo 'HIT')"
 
 echo
-echo "## 4. the sting"
+echo "## 4. what \`generate\` sees is not what \`pack\` can build"
+echo "  \`boltffi pack\` compiles under BOLTFFI_BINDING_EXPANSION, where the first #[data]/#[export]"
+echo "  item becomes a whole-crate metadata blob that names exported types FROM THE CRATE ROOT."
+printf '  exported classes in a submodule, no re-export : '
+( cd "$WORK/probe" \
+  && BOLTFFI_BINDING_EXPANSION=1 BOLTFFI_BINDING_EXPANSION_ROOT="$PWD" \
+     BOLTFFI_BINDING_EXPANSION_SOURCE="$PWD/src/lib.rs" BOLTFFI_BINDING_EXPANSION_SURFACE=native \
+     RUSTFLAGS="--cfg boltffi_binding_expansion" cargo build -q 2>/dev/null \
+  && echo "builds" || echo "FAILS to build (E0425)" )
+printf "pub use generated::*;\n" >> "$WORK/probe/src/lib.rs"
+printf "  ...the same crate, plus a root re-export     : "
+( cd "$WORK/probe" \
+  && BOLTFFI_BINDING_EXPANSION=1 BOLTFFI_BINDING_EXPANSION_ROOT="$PWD" \
+     BOLTFFI_BINDING_EXPANSION_SOURCE="$PWD/src/lib.rs" BOLTFFI_BINDING_EXPANSION_SURFACE=native \
+     RUSTFLAGS="--cfg boltffi_binding_expansion" cargo build -q 2>/dev/null \
+  && echo "builds" || echo "FAILS" )
+
+echo
+echo "## 5. the sting"
 echo "  \`boltffi generate\` exits 0 and prints nothing for the two MISSING rows."
 echo "  A silently absent FFI surface is worse than a refusal to generate one."
+echo "  And a crate can be green on \`mise run check\` and on \`generate\`, and still not pack."

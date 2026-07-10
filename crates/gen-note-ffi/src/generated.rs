@@ -424,26 +424,26 @@ impl NoteDraftFfi {
     pub fn is_live(&self) -> bool {
         lock(&self.core).store.is_live(self.id)
     }
-    pub fn try_set_title(&self, value: String) -> ::core::result::Result<(), TitleErrorFfi> {
+    pub fn try_set_title(&self, raw: String) -> ::core::result::Result<(), TitleErrorFfi> {
         let (producer, snapshot, result) = {
             let mut g = lock(&self.core);
             let Some(draft) = g.store.draft_mut(self.id) else {
                 return Err(TitleErrorFfi::DraftClosed);
             };
-            let result = draft.try_set_title(value).map_err(TitleErrorFfi::from);
+            let result = draft.try_set_title(raw).map_err(TitleErrorFfi::from);
             let snapshot = build_draft_snapshot(draft);
             (self.producer.clone(), snapshot, result)
         };
         producer.push(snapshot);
         result
     }
-    pub fn try_set_body(&self, value: String) -> ::core::result::Result<(), BodyErrorFfi> {
+    pub fn try_set_body(&self, raw: String) -> ::core::result::Result<(), BodyErrorFfi> {
         let (producer, snapshot, result) = {
             let mut g = lock(&self.core);
             let Some(draft) = g.store.draft_mut(self.id) else {
                 return Err(BodyErrorFfi::DraftClosed);
             };
-            let result = draft.try_set_body(value).map_err(BodyErrorFfi::from);
+            let result = draft.try_set_body(raw).map_err(BodyErrorFfi::from);
             let snapshot = build_draft_snapshot(draft);
             (self.producer.clone(), snapshot, result)
         };

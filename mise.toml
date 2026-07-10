@@ -33,6 +33,47 @@ echo
 echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
 """
 
+# --- Step 10: the GENERATED Apple bindings. `pack:apple`/`test:apple` still point at the
+# hand-written `spike-profile-ffi`, which stays the reference. Repointing the full Swift and Kotlin
+# shells is step 11; this verb proves the generated bindings compile, link and run. ---
+
+[tasks."pack:apple:gen"]
+description = "Pack the GENERATED FFI crate (gen-profile-ffi) for Apple."
+depends = ["setup:boltffi"]
+dir = "crates/gen-profile-ffi"
+run = """
+set -eu
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+if ! command -v boltffi >/dev/null 2>&1; then
+  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
+  exit 1
+fi
+if ! command -v xcodebuild >/dev/null 2>&1; then
+  echo "error: Xcode not found (VISION risk 5)." >&2
+  exit 1
+fi
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin \
+    >/dev/null 2>&1 || true
+fi
+# `boltffi generate swift` writes Sources/*.swift while `pack apple` writes Sources/BoltFFI/*.swift.
+# Both in one dist/ makes SwiftPM fail with "multiple producers". Pack owns this directory.
+rm -rf dist/apple
+boltffi pack apple --release
+"""
+
+[tasks."test:apple:gen"]
+description = "Run the smoke suite against the GENERATED Swift bindings (declaration -> Swift)."
+depends = ["pack:apple:gen"]
+run = """
+set -eu
+if ! command -v swift >/dev/null 2>&1; then
+  echo "error: swift toolchain not found — needs Xcode (VISION risk 5)." >&2
+  exit 1
+fi
+swift test --package-path apple/gen-profile-smoke
+"""
+
 [tasks.test]
 run = "cargo test --workspace"
 

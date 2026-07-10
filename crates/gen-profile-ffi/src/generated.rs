@@ -507,41 +507,39 @@ impl ProfileDraftFfi {
     pub fn is_live(&self) -> bool {
         lock(&self.core).store.is_live(self.id)
     }
-    pub fn try_set_username(&self, value: String) -> ::core::result::Result<(), UsernameErrorFfi> {
+    pub fn try_set_username(&self, raw: String) -> ::core::result::Result<(), UsernameErrorFfi> {
         let (producer, snapshot, result) = {
             let mut g = lock(&self.core);
             let Some(draft) = g.store.draft_mut(self.id) else {
                 return Err(UsernameErrorFfi::DraftClosed);
             };
-            let result = draft
-                .try_set_username(value)
-                .map_err(UsernameErrorFfi::from);
+            let result = draft.try_set_username(raw).map_err(UsernameErrorFfi::from);
             let snapshot = build_draft_snapshot(draft);
             (self.producer.clone(), snapshot, result)
         };
         producer.push(snapshot);
         result
     }
-    pub fn try_set_name(&self, value: String) -> ::core::result::Result<(), PersonNameErrorFfi> {
+    pub fn try_set_name(&self, raw: String) -> ::core::result::Result<(), PersonNameErrorFfi> {
         let (producer, snapshot, result) = {
             let mut g = lock(&self.core);
             let Some(draft) = g.store.draft_mut(self.id) else {
                 return Err(PersonNameErrorFfi::DraftClosed);
             };
-            let result = draft.try_set_name(value).map_err(PersonNameErrorFfi::from);
+            let result = draft.try_set_name(raw).map_err(PersonNameErrorFfi::from);
             let snapshot = build_draft_snapshot(draft);
             (self.producer.clone(), snapshot, result)
         };
         producer.push(snapshot);
         result
     }
-    pub fn try_set_email(&self, value: String) -> ::core::result::Result<(), EmailErrorFfi> {
+    pub fn try_set_email(&self, raw: String) -> ::core::result::Result<(), EmailErrorFfi> {
         let (producer, snapshot, result) = {
             let mut g = lock(&self.core);
             let Some(draft) = g.store.draft_mut(self.id) else {
                 return Err(EmailErrorFfi::DraftClosed);
             };
-            let result = draft.try_set_email(value).map_err(EmailErrorFfi::from);
+            let result = draft.try_set_email(raw).map_err(EmailErrorFfi::from);
             let snapshot = build_draft_snapshot(draft);
             (self.producer.clone(), snapshot, result)
         };
@@ -550,7 +548,7 @@ impl ProfileDraftFfi {
     }
     pub fn try_set_availability(
         &self,
-        value: AvailabilityRaw,
+        raw: AvailabilityRaw,
     ) -> ::core::result::Result<(), AvailabilityErrorFfi> {
         let (producer, snapshot, result) = {
             let mut g = lock(&self.core);
@@ -558,7 +556,7 @@ impl ProfileDraftFfi {
                 return Err(crate::custom::availability_closed());
             };
             let result = draft
-                .try_set_availability(crate::custom::availability_raw(value))
+                .try_set_availability(crate::custom::availability_raw(raw))
                 .map_err(crate::custom::availability_error);
             let snapshot = build_draft_snapshot(draft);
             (self.producer.clone(), snapshot, result)

@@ -367,10 +367,12 @@ pub fn draft_class(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 
     let setters = fields.iter().map(|p| {
         let (name, wire, error, closed) = (p.setter(), p.wire_ty(), p.error_ty(), p.closed());
         let core_setter = p.setter();
-        let raw = p.to_core_raw(quote!(value));
+        // The parameter is `raw`, as the core spells it. Swift labels are part of the surface, and
+        // `trySetEmail(raw:)` is what four shells already call.
+        let raw = p.to_core_raw(quote!(raw));
         let map_err = p.error_from();
         quote! {
-            pub fn #name(&self, value: #wire) -> ::core::result::Result<(), #error> {
+            pub fn #name(&self, raw: #wire) -> ::core::result::Result<(), #error> {
                 let (producer, snapshot, result) = {
                     let mut g = lock(&self.core);
                     let Some(draft) = g.store.draft_mut(self.id) else {

@@ -13,6 +13,8 @@ crates/gen-profile-ffi/dist/
 crates/gen-note-ffi/dist/
 apple/profile-probe/.build/
 apple/profile-app/.build/
+# Step 10: the generated-bindings smoke package.
+apple/gen-profile-smoke/.build/
 
 # Step 03 XCUITest tier (mise run test:apple:ui): the .xcodeproj is generated from project.yml by
 # XcodeGen; only project.yml + UITests/ are committed. Build output stays local.
