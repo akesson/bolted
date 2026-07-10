@@ -41,3 +41,8 @@ crates/profile-web/dist/
 android/profile-probe/build/
 android/profile-probe/.gradle/
 android/profile-probe/local.properties
+
+# Step 07 — Compose spike app build artifacts
+android/profile-app/build/
+android/profile-app/.gradle/
+android/profile-app/local.properties

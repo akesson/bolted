@@ -246,6 +246,88 @@ fi
 gradle dev34DebugAndroidTest "$@"
 """
 
+# --- Step 07: the Kotlin/Compose spike app. Separate verbs from the probe, same headless GMD. ---
+
+[tasks."test:android:app"]
+description = "Run the Compose app's UI + VM + lifecycle tests on the headless emulator."
+depends = ["pack:android"]
+dir = "android/profile-app"
+tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
+run = """
+set -eu
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+if [ ! -d "$ANDROID_HOME" ]; then
+  echo "error: Android SDK not found at $ANDROID_HOME — set ANDROID_HOME (VISION risk 5)." >&2
+  exit 1
+fi
+if [ ! -d "$ANDROID_HOME/system-images/android-34/aosp_atd" ]; then
+  echo "error: missing the aosp_atd android-34 system image (the headless test device)." >&2
+  echo "  sdkmanager 'system-images;android-34;aosp_atd;arm64-v8a'" >&2
+  exit 1
+fi
+# Compose UI tests on a headless Gradle-Managed Device — step 07's kill criterion 1, and the thing
+# step-03's XCUITest tier structurally cannot do (it needs a GUI session + Accessibility permission).
+gradle dev34DebugAndroidTest "$@"
+"""
+
+[tasks."run:android"]
+description = "Install and launch the Compose spike app on a connected device/emulator (manual protocol)."
+depends = ["pack:android"]
+dir = "android/profile-app"
+tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
+run = """
+set -eu
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+adb="$ANDROID_HOME/platform-tools/adb"
+if [ "$("$adb" devices | tail -n +2 | grep -c 'device$' || true)" -eq 0 ]; then
+  echo "error: no device or emulator attached (see 'adb devices')." >&2
+  exit 1
+fi
+gradle installDebug
+"$adb" shell am start -n dev.bolted.profileapp/.MainActivity
+"""
+
+# The chattiness kill criterion, on the right CPU at last. Step 05 measured 12–13 µs per keystroke on
+# an arm64 emulator running on an arm64 host: the right VM, the wrong core. Those numbers are LOWER
+# BOUNDS. This verb refuses to run anywhere but physical silicon, so no emulator figure can ever be
+# relabelled as a hardware one. See docs/steps/step-07-kotlin-compose-app.md, kill criterion 4.
+[tasks."bench:android:device"]
+description = "Re-measure the per-keystroke round-trip on a PHYSICAL device (refuses an emulator)."
+depends = ["pack:android"]
+dir = "android/profile-app"
+tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
+run = """
+set -eu
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+adb="$ANDROID_HOME/platform-tools/adb"
+serials="$("$adb" devices | tail -n +2 | awk '$2=="device" {print $1}')"
+if [ -z "$serials" ]; then
+  echo "error: no device attached. Connect a phone with USB debugging enabled." >&2
+  echo "  The benchmark deliberately refuses to run on an emulator (step-07 kill criterion 4)." >&2
+  exit 1
+fi
+for s in $serials; do
+  case "$s" in emulator-*)
+    echo "error: '$s' is an emulator. Step 05 already measured that, and it is a lower bound." >&2
+    echo "  Detach it, or connect a physical device and re-run." >&2
+    exit 1 ;;
+  esac
+done
+# `PhysicalChattinessProbe` asserts on Build.FINGERPRINT too, so the guard survives someone calling
+# gradle directly. Belt and braces: a benchmark that lies about its hardware is worse than none.
+gradle connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=dev.bolted.profileapp.PhysicalChattinessProbe "$@"
+echo
+echo "Numbers are in logcat under the 'BoltedApp' tag, and in:"
+echo "  android/profile-app/build/reports/androidTests/connected/"
+"""
+
 [tasks."test:android:hazard"]
 description = "Run ONLY the @HazardProbe use-after-close suite (H2). May crash the test process."
 depends = ["pack:android"]

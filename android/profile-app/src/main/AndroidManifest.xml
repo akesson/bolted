@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:label="Bolted Profile"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!--
+          `configChanges` is deliberately NOT declared. A rotation therefore destroys and recreates
+          this Activity, which is exactly the case step 07 is here to exercise: the `ViewModel`
+          survives, and with it the core-side draft handle. Declaring `configChanges="orientation"`
+          would make the app pass the test by never taking it.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="Bolted Profile">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
