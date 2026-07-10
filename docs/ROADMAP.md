@@ -23,10 +23,11 @@ work around them.
 | 07 | Kotlin/Compose spike app | 2 — Freeze | **done** — [plan](steps/step-07-kotlin-compose-app.md) · [report](steps/step-07-report.md); stash/restore lands (C20/C21), a **frozen-core defect** found and fixed (C19), Compose UI tests run **headless**. Kill criterion 4 (hardware chattiness) **unassessed** — no device |
 | 08 | Extract bolted-core + conformance suite | 3 — Extraction | **done** — [plan](steps/step-08-extract-bolted-core.md) · [report](steps/step-08-report.md); store is id-keyed and **lock-free** (D16), the FFI's store loop is deleted, suite is generic and runs against **two** features |
 | 09 | bolted-macros | 3 — Extraction | **done** — [plan](steps/step-09-bolted-macros.md) · [report](steps/step-09-report.md); `value`/`entity`/`rules` ship, two **generated** features pass the suite unmodified, `feature_model` **cut** (D21) |
-| 10 | bolted-ffi + regenerate Swift/Kotlin | 3 — Extraction | **ready** |
-| 11 | C# port + generator | 3 — Extraction | pending |
+| 10 | bolted-ffi + a generated FFI layer | 3 — Extraction | **done** — [plan](steps/step-10-bolted-ffi.md) · [report](steps/step-10-report.md); the FFI layer **generates** and runs from Swift (D22–D25). A macro could never have done it: bindgen reads source text. **Deliverable 10 (repoint the shells) deferred to 11** |
+| 11 | Migrate the shells; FFI hardening | 3 — Extraction | **ready** |
+| 12 | C# port + generator | 3 — Extraction | pending |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
-| 12+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
+| 13+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
 
 ## Phase 1 — Design validation spike
 
@@ -138,41 +139,59 @@ reference the generated code is diffed against.
   no test changing. **D19** dissolves "codegen dedup by raw type" (generics already dedup on the axis
   that varies; the residue is FFI-side, step 10). **D20** scopes `#[bolted::value]` to newtypes.
   **D21 cuts `feature_model`** — it needs boltffi, and the `Feature` trait it would stamp *has never
-  been written, in any of five spikes*. The mutation pass (12 mutations, checked in at
+  been written, in any of five spikes*. (*Step 10 amends the first clause: a macro emitting `#[data]`
+  tokens links nothing, and `feature_model` was impossible for a better reason — bindgen cannot see
+  macro output at all.*) The mutation pass (12 mutations, checked in at
   `steps/artifacts/step-09-mutations.py`) found **C07 had no precedence clause**: `commit_gates`
   reordered to check conflicts before orphaned passed all 22 invariants on all four features, because
   every `c07` assertion built a draft failing exactly one gate. C07 amended; ARCHITECTURE is **v1.3**.
   Also caught, by reading the emitted code rather than the tests: a uniform guard was cloning a
   `Username` on every keystroke of the *name* box.
-- **Step 10 — `bolted-ffi`** (only crate importing boltffi) + regenerate the Swift and Kotlin
-  spike apps from macros; per-language contract tests generated from the C-IDs. Inherits a
-  requirements list the probes wrote: **use-after-close must raise a typed error** (silent UB today,
-  §9 — and step 07 shows it distorting a ViewModel's shape) and probably a `Cleaner` backstop — note
-  D16 hands the mechanism over, since a stale `DraftId` is simply *not live* and the remaining UB
-  belongs to BoltFFI's raw-pointer handles, not to the registry; emit **`@Parcelize`/`Codable`** for
-  DTOs (a shell that persists one hand-writes a codec today); emit the **Compose parameter-passing
-  rule** (a Compose shell must never read core state by calling a VM method — strong skipping makes it
-  invisible); **verify l10n key coverage per target**; a Kotlin ViewModel must `close()` in
-  `onCleared()`; project `Send + Sync` Rust classes as `Sendable` Swift classes; emit `fun interface`
-  for single-method capability traits; a platform-stdlib **name-collision policy** (`Date`, `URL`,
-  `Data`, `Error`); no hyphens in crate names; expose the split `begin`/`complete` so `Pending` is
-  observable to a `snapshot()` caller. Per-language contract tests will need **generated typed field
-  accessors**: `Draft` is id-keyed and cannot expose `Field<V>` heterogeneously, which is why
-  `ConformanceFeature` supplies them (step 08, friction 1). `liveDraftCount`'s semantics no longer need
-  pinning — C22 did it. Also: **report the `boltffi pack android` bug upstream** and delete the
-  workaround in `mise run pack:android`.
+- **Step 10 — `bolted-ffi` + a generated FFI layer.** **Done. No kill criteria hit.** A feature's FFI
+  layer now *generates* from its declaration: `gen-note-ffi` (479 lines from a 20-line declaration) and
+  `gen-profile-ffi` (631 generated + 138 hand-written, replacing 1 054), and `apple/gen-profile-smoke`
+  proves the whole chain — declaration → generated Rust → generated Swift → compiles → links → runs
+  (7 tests). **The headline is that `#[bolted::feature_model]` was never possible**: BoltFFI's bindgen
+  `read_to_string`s the crate's sources and parses them with `syn`, so macro output is silently omitted
+  from the bindings. D21 reached the right verdict from the wrong premise. Hence **D22** — the FFI layer
+  is *committed generated source*, drift-checked by `mise run check`, which buys it rustc, clippy and a
+  code-review diff, three rungs macro output never gets. **D23** gives a store-side-released draft a
+  typed `DraftClosed` on every mutating verb (observers stay total); **D24** collapses the field-state
+  families onto the *raw* type, closing §9's dedup residue; **D25** parses the declaration once, in the
+  new `bolted-decl`, because two parsers are two contracts and the drift check would compare a generator
+  against itself. §9's **`Pending` across FFI** is answered by measurement: it reaches a stream
+  subscriber, never a `snapshot()` caller, so no split `begin`/`complete` is needed. **KC2 dissolved** —
+  the generated FFI never crosses a `CheckId` (it monomorphizes `run_username_check()`), and *could not*,
+  since `ProfileCheck` is macro output. D18 stands as a Rust-side contract the generator consumes.
+  The mutation pass (`steps/artifacts/step-10-mutations.py`) had to **regenerate before testing**, or the
+  drift check would catch every mutation vacuously; run honestly it found **six survivors**, all
+  *projection* properties — `any_dirty` pinned false, conflicts reversed, `take_theirs` keeping mine, a
+  `Pending` check rendering as `Unchecked`. Four new tests; now 14 caught, 0 survived.
+- **Step 11 — migrate the shells; FFI hardening.** *(Step 10's deliverable 10, deferred rather than
+  half-done: the four Swift and Kotlin shells still link the **hand-written** `spike-profile-ffi`.)*
+  First, the migration, whose exact work-list is measured in
+  [`steps/artifacts/step-10-surface-delta.md`](steps/artifacts/step-10-surface-delta.md) — 62 declarations
+  hand-written, 57 generated, **42 identical**; the rest are D24 renames, D23's added `try`, the checker
+  protocol's new shape, and one arity change. Then the hardening list the probes wrote: a
+  **`java.lang.ref.Cleaner` backstop** (§9 — D23 fixed the store-side hazard, the foreign-side
+  use-after-`close()` is BoltFFI's raw pointers and is filed upstream); **`@Parcelize`/`Codable`** for
+  DTOs; the **Compose parameter-passing rule** (a Compose shell must never read core state by calling a
+  VM method — strong skipping makes it invisible); **l10n key coverage per target**, now tractable
+  because `pending_key`/`required_key`/`failed_key` are all declared; a Kotlin ViewModel must `close()`
+  in `onCleared()`; `Send + Sync` Rust classes as `Sendable` Swift classes; `fun interface` for
+  single-method capability traits; a platform-stdlib **name-collision policy** (`Date`, `URL`, `Data`,
+  `Error`); **per-language contract tests generated from the C-IDs**, which need generated typed field
+  accessors (step 08, friction 1). Also: **file the three upstream bugs** — `boltffi pack android`'s
+  missing expansion env (delete the workaround in `mise run pack:android`), generated methods not
+  consulting `__boltffi_closed`, and bindgen silently ignoring macro-generated items.
 
-  **Inherited from step 09**: the FFI now regenerates from `gen-profile`, not `spike-profile`, so the
-  shells lose the inherent `begin_username_check` family and gain `Checked` keyed by `ProfileCheck`
-  (D18) — **whether a `CheckId` enum actually crosses `#[data]` is unverified, and if it cannot, D18 is
-  wrong** (step 09's kill criterion 4 was assessed by inspection only). `try_set_availability` takes a
-  tuple now. §9's **FFI dedup of field-state families** lands here: `dto.rs` stamps three structurally
-  identical `…FieldState` families for the three `Raw = String` values, and D19 says that duplication is
-  *this* crate's to answer, not the macro's. Watch for the step-09 friction that generalizes: **a
-  generated binding can be behaviourally identical and quietly more expensive** — the guard bug was
-  invisible to 22 invariants. And `mise run test:android:app` **can report BUILD SUCCESSFUL without
-  running a test** (Gradle up-to-date); force `--rerun-tasks` before quoting a number in a report.
-- **Step 11 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
+  **Inherited cautions.** `boltffi pack android` on a *generated* crate has never been run. `mise run
+  test:android:app` **can report BUILD SUCCESSFUL without running a test** (Gradle up-to-date); force
+  `--rerun-tasks` before quoting a number. And step 10's own lesson, which generalizes past codegen: **a
+  test that forbids something can be forbidding nothing** — `golden.rs`'s needles were written against
+  `quote`'s token spacing and matched no line of a `prettyplease`-formatted file, green and vacuous.
+  Pin a forbidding test from both sides.
+- **Step 12 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)

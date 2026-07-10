@@ -228,7 +228,16 @@ the generator cannot disagree about what a declaration means.
    method is then typed as returning `Arc<EventSubscription<T>>` and fails with a `WireEncode` bound
    error pointing at the wrong attribute. Generated code must `use boltffi::*;` and write a bare
    `#[ffi_stream]`.
-5. **`gen-note` has no `custom` module, and that is why the escape hatch has a zero-composite path.**
+5. **Two Android verbs write to the same results XML.** `mise run test:android` (44 tests) and
+   `mise run test:android:hazard` (3) both land in
+   `profile-probe/build/outputs/androidTest-results/managedDevice/debug/dev34/TEST-dev34-_-.xml`, so
+   whichever ran last is the only one you can count. Step 09's friction 5 said *"`BUILD SUCCESSFUL` can
+   mean nothing ran — force `--rerun-tasks`"*; this is the same warning one level deeper, because the
+   forced rerun still leaves you reading one file that answers for two suites. Both numbers in the sweep
+   below were obtained by deleting the directory and running **one verb at a time**. Note also that the
+   path is `androidTest-results`, not `test-results` — deleting the latter silently clears nothing and
+   the next run is cheerfully "up-to-date".
+6. **`gen-note` has no `custom` module, and that is why the escape hatch has a zero-composite path.**
    `gen-note-ffi` was generated before `gen-profile-ffi`, on purpose. Had it been the other way round,
    `use crate::custom::*;` would plausibly have been emitted unconditionally and `gen-note` could not
    have existed.
@@ -299,12 +308,14 @@ mise run test:apple            39 probe + 14 VM   (hand-written; unchanged)
 mise run test:apple:gen        7/7        GENERATED bindings: compile, link, run
 mutation pass                  14 caught, 0 vacuous, 0 survived
 mise run test:web              8/8
-mise run test:android          44/44 on ART        (forced rerun)
-mise run test:android:app      35/35 headless      (forced rerun)
-mise run test:android:hazard   3/3                 (forced rerun)
+mise run test:android          44/44 on ART        (results dir deleted, verb run alone)
+mise run test:android:app      35/35 headless      (idem)
+mise run test:android:hazard   3/3                 (idem — the H-b hazard D23 cannot fix)
 mise run bench:android:device  NOT RUN — no device (the verb refused, as designed)
 mise run test:apple:ui         not run — still GUI-gated
 ```
+
+Every count above was read out of the JUnit XML, not off a `BUILD SUCCESSFUL` line (friction 5).
 
 Of the 319: `bolted-decl` 13, `bolted-macros` 17, `bolted-ffi-gen` 10, `gen_profile_ffi` 14,
 `gen_note_ffi` 1, `bolted-core` 11, `bolted-conformance` 3, `gen-note` 38, `gen-profile` 68,

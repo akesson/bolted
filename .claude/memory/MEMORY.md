@@ -11,3 +11,6 @@
 - [A suite with one implementor is shaped like it](a-suite-with-one-implementor-is-shaped-like-it.md) — write the opposite fixture, then mutate both
 - [A surviving mutation is two hypotheses](a-surviving-mutation-is-two-hypotheses.md) — the suite is blind, or the mutant was identical; rule out the second first
 - [Thin macros push behavior into the core](thin-macros-push-behavior-into-the-core.md) — the doctrine is a forcing function, and uniform codegen is not automatically cheap
+- [BoltFFI's bindgen reads source text](boltffi-bindgen-reads-source-text.md) — a proc macro cannot emit an FFI surface, and three ways the toolchain hides a broken one
+- [A forbidding test can forbid nothing](a-forbidding-test-can-forbid-nothing.md) — a needle that can never match is green forever; write the positive control
+- [A drift check makes a mutation pass vacuous](a-drift-check-makes-a-mutation-pass-vacuous.md) — regenerate first, prove the output changed, exclude the drift test

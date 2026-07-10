@@ -224,13 +224,21 @@ nothing.
 
 ## Exit checklist
 
-- [ ] `mise run check` green, including both drift tests.
-- [ ] `boltffi generate swift` on `gen-profile-ffi` produces the surface; on `gen-note-ffi` too.
-- [ ] Every step-09 golden snapshot unchanged (M1's proof).
-- [ ] `test:apple`, `test:android`, `test:android:app`, `test:android:hazard` green on **generated**
-      bindings.
-- [ ] Mutation pass: every mutation caught, and every survivor proved to differ from the original
-      before it is called a finding.
-- [ ] `docs/steps/step-10-report.md`; ARCHITECTURE §8 gains D22–D25 and §9 loses two questions;
-      ROADMAP updated and steps renumbered (11 = hardening, 12 = C#).
-- [ ] `bench:android:device` and `test:apple:ui` — state their status honestly. They are still owed.
+- [x] `mise run check` green, including both drift tests. **319 tests, 0 failures.**
+- [x] `boltffi generate swift` on `gen-profile-ffi` produces the surface; on `gen-note-ffi` too. And
+      `pack apple` builds both — which `generate` alone does not prove (headline 1).
+- [x] Every step-09 golden snapshot unchanged (M1's proof). Five, byte-identical, no `BLESS`.
+- [ ] ~~`test:apple`, `test:android`, `test:android:app`, `test:android:hazard` green on **generated**
+      bindings.~~ **NOT DONE.** They are green on the *hand-written* `spike-profile-ffi`, unchanged.
+      Deferred to step 11 rather than half-migrated; what replaces it is `apple/gen-profile-smoke`
+      (7/7 on generated bindings) plus `artifacts/step-10-surface-delta.md`, which measures exactly what
+      the migration changes. See the report's "What is not done".
+- [x] Mutation pass: every mutation caught, and every survivor proved to differ from the original
+      before it is called a finding. **14 caught, 0 vacuous, 0 survived** — after an honest first run
+      reported 6 survivors, all real.
+- [x] `docs/steps/step-10-report.md`; ARCHITECTURE §8 gains D22–D25 and §9 loses two questions
+      (use-after-close, split; and `Pending`, answered by measurement); ROADMAP updated and steps
+      renumbered (11 = migration + hardening, 12 = C#). ARCHITECTURE is **v1.4**.
+- [x] `bench:android:device` and `test:apple:ui` — stated honestly in the report: **still owed, still
+      not run.** No device attached (the verb refuses an emulator, as designed); `test:apple:ui` remains
+      GUI/Accessibility-gated, outstanding since step 06.

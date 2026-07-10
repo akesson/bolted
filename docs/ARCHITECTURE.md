@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.3, step 06; amended steps 07, 08 and 09).** Phase 1 validated this design against
+**Status: FROZEN (v1.4, step 06; amended steps 07, 08, 09 and 10).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -11,8 +11,12 @@ stash. **v1.2** carries step 08's, which §9 had scheduled for it: **D16** makes
 lock-free (C17/C18 amended, C22 added) and **D17** moves the resolvers onto `Draft` and adds
 `Stashable`. **v1.3** carries step 09's: **D18** gives the async check a contract (`Checked`), and C07
 is amended to state the precedence of its own refusals — a rule both spikes had implemented since step
-01 and no test had ever checked. A freeze is a commitment to a design, not a promise that the design
-was already correct — the record of what changed, and why, is the point.
+01 and no test had ever checked. **v1.4** carries step 10's four: **D22** makes the FFI layer generated
+source, committed and drift-checked; **D23** gives a released draft a typed refusal; **D24** shares one
+field-state family per raw type; **D25** makes the declaration parsed once. Step 10 also **corrects §5**:
+a proc macro can never emit an FFI surface, because BoltFFI's bindgen reads source text and never sees
+expanded Rust. A freeze is a commitment to a design, not a promise that the design was already correct —
+the record of what changed, and why, is the point.
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
@@ -223,9 +227,11 @@ surface must be monomorphic with concrete names. Therefore:
 - **Derive/attr macros** do only mechanical name-stamping, delegating immediately to the
   generics: `#[bolted::value]` (newtype + `Value` impl + constraint metadata),
   `#[bolted::entity]` (snapshot + draft struct of `Field<V>`s + `FieldId` enum + monomorphic
-  `try_set_name(...)` methods), `#[bolted::rules]`, `#[bolted::feature_model]` (composes down
-  onto BoltFFI's `#[data]`/`#[export]`). Thin macros are a verification-ladder requirement:
-  macro output is the least-verifiable code, so it must stay trivial.
+  `try_set_name(...)` methods), `#[bolted::rules]`. Thin macros are a verification-ladder
+  requirement: macro output is the least-verifiable code, so it must stay trivial.
+- **The FFI layer is generated *source*, not macro output** (D22), and it is the one thing a macro
+  *cannot* do: BoltFFI's bindgen reads the crate's source files with `syn` and never sees expanded
+  Rust, so a macro-emitted `#[data]` is silently omitted from the bindings. See §6.
 - **Traits** are the contracts: `Value` (Raw / Error / try_new / into_raw / constraints),
   `Draft` (FieldId / conflicts / validate / commit), `Feature` (State / Msg / Caps / update).
 
@@ -299,13 +305,24 @@ one of those shapes has moved the design's most consequential judgements to its 
 ```
 bolted-core         all traits + generic types; sans-io, and lock-free; NEVER depends on boltffi
 bolted-conformance  C01–C22, generic over a feature; the executable form of CONFORMANCE.md
+bolted-decl         the declaration model + its parser; read by BOTH emitters below (D25)
 bolted-macros       the derives (value, entity, rules); output = thin delegation to bolted-core
-bolted-ffi          the ONLY crate importing boltffi (the swappable seam)
+bolted-ffi-gen      declaration -> Rust source text for a feature's FFI layer (D22); no boltffi dep
+bolted-ffi          shared #[data] DTOs; hand-written; the ONLY crate importing boltffi
 bolted-check        build-time analyses (drift, coverage, constraint semver)
+
+<feature>-ffi        GENERATED, committed src/generated.rs + hand-written src/custom.rs; imports boltffi
 ```
 
-`#[bolted::feature_model]` is **not** in `bolted-macros` and cannot be: it composes onto BoltFFI's
-`#[data]`/`#[export]`, and the `Feature` trait it would stamp has never been written (§9, D21).
+`bolted-decl` exists because two emitters would otherwise be two contracts, and the drift check would
+be comparing a generator against itself (D25). `bolted-ffi-gen` is not a macro for the reason §5 gives:
+bindgen cannot see macro output. `<feature>-ffi/src/lib.rs` must `pub use generated::*;` — under
+`boltffi pack`'s expansion mode the whole-crate metadata blob resolves every exported type **from the
+crate root**, and `mise run check` cannot see that failure.
+
+`#[bolted::feature_model]` is **cut** (D21) and could never have existed: bindgen reads source text, so
+a macro's `#[data]` output is silently invisible. The `Feature` trait it would stamp has never been
+written (§9).
 
 **Sans-io / runtime-agnostic core**: effects are data driven by the platform layer; no tokio in
 `bolted-core`. This is what makes headless deterministic tests and wasm32 compatibility
@@ -335,6 +352,13 @@ structural rather than aspirational.
   `SavedStateHandle`; nothing else has to.
 - **Rust shells** (web, Linux-native): consume `bolted-core` + feature crates directly; zero
   FFI; the web target also enforces `wasm32-unknown-unknown` discipline on the whole core.
+- **BoltFFI's bindgen reads source text, not expanded Rust.** It `read_to_string`s the crate's files
+  and parses them with `syn`, walking `mod` declarations. A `#[data]` emitted by a proc macro, or
+  `include!`d from `OUT_DIR`, is **silently absent** from the generated bindings — `boltffi generate`
+  exits 0. Two further silences: `generate` will happily emit Swift for Rust that does not compile,
+  and a crate can pass `cargo build` *and* `generate` and still fail `pack` (see §5's root re-export).
+  Each is a missing rung on the ladder, and each is `bolted-check`'s brief. Measured in step 10:
+  `docs/steps/artifacts/step-10-boltffi-visibility/`.
 
 ## 7. Invariants — the conformance suite
 
@@ -399,20 +423,24 @@ what, and why it was worth it.
 | **D18** — the async check is a core subtrait, `Checked: Draft`, id-keyed by a concrete `CheckId` enum | Leave `begin`/`complete`/`state` as inherent methods the macro stamps per feature; or defer to step 10 | Step 09, answering §9. Four independent consumers — two shells, `spike-profile-ffi`, and step 08's `AsyncCheckFeature` — had each re-derived the same three methods, and the fixture carried a comment saying a later step should promote them. When that happens the contract is missing a name, not the consumers a convention. It is D17's argument one layer down, so it gets D17's answer: a `CheckId` enum is monomorphic and crosses FFI exactly as `FieldId` does; `check_pins` is what lets a generic state C13 ("verdicts are value-bound" — bound to *which* field?). Deferring would have step 10 design a core trait while writing codegen against it, with generated bindings as its only evidence. The fixture lost four members and not one test changed |
 | **D19** — "codegen dedup by raw type" is **dissolved**; the residue is reassigned to step 10 | Build a cross-field dedup pass into `#[bolted::entity]` | Step 09, answering §9. In Rust there is nothing to dedup: generics already key on the axis that varies. `FieldStash<R>` keys on the **raw**, so `ProfileStash` shares one `FieldStash<String>` across three fields with no analysis at all; `Field<V>` keys on the **value**, and `Field<Username>` must differ from `Field<PersonName>` because they parse differently. `#[bolted::entity]` never emits a field-state family, so no dedup pass could exist for it. The near-duplication the question was about is entirely in `spike-profile-ffi/src/dto.rs`, where `#[data]` forbids generics — a `bolted-ffi` question, with the cost already measured in that file. The alternative adds the first cross-field analysis to a macro whose doctrine is that it stays readable at a glance (§5) |
 | **D20** — `#[bolted::value]` is a **newtype** DSL that also derives the `ErrorData` bridge; composite values keep a hand-written `Value` impl | A full DSL including composites; or thin wiring over user-written `sanitize`/`validate` fns | Step 09. §5's sketch says "newtype", and `DateRange::try_new` is one `start <= end` comparison no DSL improves; a composite shape justified by exactly one example is a guess. The `From<Error> for ErrorData` block is the most repetitive thing in a hand-written value type and is pure name-stamping (variant → snake_case key, named fields → params) — generating it is most of why the macro pays for itself, so "thin wiring" leaves the boilerplate the doctrine exists to delete. `custom(..)` takes `key`/`variant` overrides so that a generated feature keeps the l10n keys its shells already ship; `len_chars` does not, and a uniform DSL therefore renames `spike-note`'s `blank` to `too_short` — a real migration cost, recorded rather than hidden |
-| **D21** — `#[bolted::feature_model]` is **cut**; `Feature` is not designed here | Design `State`/`Msg`/`Caps`/`update` now; or emit `#[boltffi::data]` as opaque tokens without linking boltffi | Step 09. `bolted-macros` may not import boltffi (§5 makes `bolted-ffi` the only crate that does, and that seam is the swappable one), and the `Feature` trait has never been written in any of five spikes — it is a sketch in §5 and nowhere else. Emitting boltffi tokens blind is possible and **untestable** inside `mise run check`: the only crate that could compile the output is `spike-profile-ffi`, step 10's rewrite target. Designing `Feature` from zero evidence is a design session, not an implementation step. That the Elm half of §1 has no code behind it after five spikes is itself a finding — §9 now says so |
+| **D21** — `#[bolted::feature_model]` is **cut**; `Feature` is not designed here | Design `State`/`Msg`/`Caps`/`update` now; or emit `#[boltffi::data]` as opaque tokens without linking boltffi | Step 09. `bolted-macros` may not import boltffi (§5 makes `bolted-ffi` the only crate that does, and that seam is the swappable one), and the `Feature` trait has never been written in any of five spikes — it is a sketch in §5 and nowhere else. Emitting boltffi tokens blind is possible and **untestable** inside `mise run check`: the only crate that could compile the output is `spike-profile-ffi`, step 10's rewrite target. Designing `Feature` from zero evidence is a design session, not an implementation step. That the Elm half of §1 has no code behind it after five spikes is itself a finding — §9 now says so. **Step 10 amends the reasoning, not the verdict: a macro emitting `#[data]` tokens imports nothing, so the boltffi-dependency argument was beside the point. `#[bolted::feature_model]` was never *possible* — bindgen reads source text and would silently ignore its output (§6).** The right conclusion was reached from the wrong premise |
+| **D22** — the FFI layer is **generated source**: `mise run gen:ffi` writes a committed `<feature>-ffi/src/generated.rs`, and `mise run check` regenerates and compares | A proc macro; a `build.rs` writing into `src/`; fix boltffi upstream first; or hand-write the FFI layer forever | Step 10. A macro **cannot work** (§6): bindgen never sees expanded Rust, and omits it silently. `build.rs` into `src/` makes `cargo build` mutate its own inputs and races `cargo fmt`. Waiting on upstream blocks Phase 3 on someone else's release. Committed source is not the consolation prize it looks like: §5 calls macro output the least-verifiable code on the ladder, and a formatted, reviewable, diffable file gets rustc, `clippy -D warnings` and a diff in code review — three rungs a macro's output gets none of. The price is a drift check, which is rung 3 and hermetic (source text in, source text out). It found a real bug immediately: `clippy::clone_on_copy` on a `Copy` wire type, invisible in an expansion |
+| **D23** — a mutating verb on a released draft returns a typed `DraftClosed`; observers stay total | Make the FFI draft an id the store resolves, so a stale handle simply finds nothing; or probe-and-defer | Step 10, answering §9. Two hazards look alike and are not. **(a)** C17's submit releases the draft store-side while the foreign object lives on — ours, and a silent `Ok(())` for `trySetUsername` after submit is the framework lying about a write. Mutators (`try_set_*`, `resolve_*`, `run_*_check`) now refuse; `snapshot`, `validate`, `stash`, `is_live` stay total because a shell must be able to *ask* whether a draft is alive without catching an exception. **(b)** a foreign object released by Kotlin's `close()` frees the Rust object; a later call is a dangling pointer, and the generated Kotlin holds a `__boltffi_closed` flag it never reads. **(b) is not fixable from our side** and is filed upstream |
+| **D24** — one field-state DTO family per **raw** type, hosted in `bolted-ffi` (`TextValidity`, `TextFieldSync`, `TextFieldState`); error types stay per **value** | One family per value type (what `spike-profile-ffi` hand-wrote) | Step 10, answering §9's dedup residue (D19). `#[data]` forbids generics, so the FFI must monomorphize what `Field<V>` keeps generic — but the axis it must key on is `V::Raw`, not `V`: a validity is `Valid(Raw)` or `Invalid { raw, error }`, and only the *error* differs per value. Three text fields collapse from nine types to three. Errors do not collapse: `UsernameError` and `EmailError` have different variants, and merging them would give Swift a `case tooShort` on an email. The measurement is in `step-10-surface-delta.md` — 11 declarations become 3, and every shell change is a rename |
+| **D25** — the declaration is parsed **once**, by `bolted-decl`; `bolted-macros` and `bolted-ffi-gen` are both emitters over it | Each emitter parses the source it needs | Step 10. Two parsers are two contracts, and they disagree in ways nothing catches: `len_chars(min = 0)` raises no `TooShort`, so an FFI generator that re-derived the variant list would emit a `UsernameErrorFfi::TooShort` its own `From` impl could never construct — and rustc would accept it. Worse, the drift check would then compare a generator against itself. The one shared `ValueDecl::error_variants` is the whole argument. Undeclared value types (composites, D20) are not guessed at: the generator emits `use crate::custom::*;` and names the types it needs, so a missing one is a **compile error** (rung 2), not a binding that quietly lost a field |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
 Each names the step that owns it. Nothing below blocks Phase 3.
 
-- **Use-after-close must become a typed error** — *step 10 (`bolted-ffi`), and arguably a BoltFFI
-  upstream fix.* BoltFFI handles are raw pointers and generated instance methods never consult the
-  `closed` flag, so on Kotlin a use-after-close returns stale data and, after allocator churn,
-  **silently aliases another live draft** (step 05, H2 — no crash). VISION's ladder forbids framework
-  mechanics that can only fail at runtime; a typed `DraftClosed` is the floor. Should `bolted-ffi`
-  also emit a `java.lang.ref.Cleaner` backstop so a forgotten `close()` leaks memory until GC rather
-  than forever?
-- **Stash schema evolution** — *step 10 (`bolted-ffi`) and Phase 4 (`bolted-check`).* The stash is the
+- **A `Cleaner` backstop for a forgotten `close()`** — *step 11.* The half of the use-after-close
+  question D23 could not answer. D23 makes a **store-side** release (C17's submit) a typed
+  `DraftClosed` on every mutating verb. It cannot touch the **foreign-side** release: BoltFFI handles
+  are raw pointers, generated instance methods never consult the `__boltffi_closed` flag they carry,
+  so on Kotlin a use-after-`close()` reads freed memory and, after allocator churn, **silently aliases
+  another live draft** (step 05, H2 — no crash). Filed upstream. Meanwhile: should `<feature>-ffi`
+  emit a `java.lang.ref.Cleaner` backstop, so a forgotten `close()` leaks until GC rather than forever?
+- **Stash schema evolution** — *step 11 and Phase 4 (`bolted-check`).* The stash is the
   framework's first **untrusted input**: bytes the OS kept while the process was dead, possibly
   written by an *older version of the app*. C01 says a value's raw form roundtrips — so an ancestor
   that no longer parses means the constraints were tightened between releases. Step 07 degrades that
@@ -425,26 +453,30 @@ Each names the step that owns it. Nothing below blocks Phase 3.
 - **Process topology for OS-integration surfaces** (daemons, tray, file-manager extensions) — *its own
   spike, after Phase 2.* Where the core runs (embedded vs daemon), how sandboxed extension processes
   reach it (the contract over IPC?), single-instance ownership. Nothing in Phases 1–3 depends on it.
-- **A real `Pending` across FFI** — *step 10.* With a synchronous checker, `begin` + `complete` are
-  atomic inside one call, so `Pending` is only ever seen on the stream, never by a `snapshot()` caller.
-  A spinner bound to a `snapshot()` read needs the split `begin`/`complete` exposed across the
-  boundary (which D10 says is the right shape anyway).
-- **FFI dedup of field-state families** — *step 10 (`bolted-ffi`).* What survives of "codegen dedup by
-  raw type" after D19 dissolved the Rust half. `#[data]` forbids generics, so `spike-profile-ffi`
-  stamps three structurally identical `…FieldState` families for `Username`/`PersonName`/`Email`
-  (`Raw = String`) and a fourth for `Availability`. Should `bolted-ffi` emit one `TextFieldState`
-  instead? The cost is already measured in `dto.rs`; the question is whether a shared DTO is worth the
-  loss of per-field naming in Swift and Kotlin.
 - **The `Feature` trait is unwritten** — *its own session, before Phase 4.* §1 describes an Elm core
-  and §5 sketches `Feature` (`State` / `Msg` / `Caps` / `update`), but five spikes have shipped without
-  one: every shell drives `Store` and `Draft` directly. `#[bolted::feature_model]` cannot exist until
-  this does (D21). Either the trait is real and the spikes have been quietly ignoring it, or §1's Elm
-  framing describes the *store* and the trait should be struck. This is the largest undischarged claim
-  in the architecture.
+  and §5 sketches `Feature` (`State` / `Msg` / `Caps` / `update`), but six spikes have shipped without
+  one: every shell drives `Store` and `Draft` directly. Either the trait is real and the spikes have
+  been quietly ignoring it, or §1's Elm framing describes the *store* and the trait should be struck.
+  (D21 cut `#[bolted::feature_model]`, and step 10 showed it could never have existed — so this
+  question no longer has a macro waiting on it, only §1's honesty.) This is the largest undischarged
+  claim in the architecture.
 - **Composite value objects in `#[bolted::value]`** — *whenever a second one exists.* D20 scopes the
   macro to newtypes, so `DateRange` (raw `(Date, Date)`, invariant across two parts) stays
   hand-written. A composite needs struct-shaped parts, a tuple raw, and a cross-field invariant — a
   second macro shape, currently justified by exactly one example. Do not design it from that one.
+  *(Its shadow is now recorded twice: step 09 at the core, step 10 at the FFI, where the setter takes
+  one `AvailabilityRaw` rather than two dates.)*
+
+**Closed since the freeze** — kept here so the answers are findable from the questions:
+*store concurrency* → D16 · *resolvers on the trait* → D17 · *the async check's contract* → D18 ·
+*codegen dedup by raw type* → D19 (Rust half dissolved) and **D24** (FFI half: one family per raw
+type) · *use-after-close* → **D23**, for the store-side half only; the foreign-side half is the
+`Cleaner` question above · *a real `Pending` across FFI* → **answered by measurement, not by design**:
+with a synchronous checker `begin`/`complete` are atomic inside one call, so a `Pending` never reaches
+a `snapshot()` caller — it reaches a **stream subscriber**, because the generated check driver pushes a
+snapshot between the two halves. `gen-profile-ffi`'s `a_check_in_flight_is_observably_pending` asserts
+the sequence `[Pending, Passed]` off the subscription. A spinner bound to the stream is real; one bound
+to `snapshot()` is not, and no split `begin`/`complete` across FFI is needed to make it so.
 
 ## 10. Prior art
 
