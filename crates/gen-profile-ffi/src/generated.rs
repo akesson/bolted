@@ -453,6 +453,19 @@ impl ProfileStoreFfi {
         flush(emits);
         Ok(())
     }
+    /// The canonical entity was deleted upstream. `Store::delete_canonical` orphans every
+    /// registered draft — orphan is terminal, so a later `apply_canonical` cannot resurrect it
+    /// and its `base_version` stops moving (C11, C15) — and reports which ids it orphaned; each
+    /// gets one snapshot showing the transition. There is no canonical left to snapshot, so the
+    /// store stream is silent here: a shell asks `canonical()` and gets `None`.
+    pub fn delete_canonical(&self) {
+        let emits = {
+            let mut g = lock(&self.core);
+            let orphaned = g.store.delete_canonical();
+            draft_emits(&g, &orphaned)
+        };
+        flush(emits);
+    }
     /// Check out a draft. Existing-canonical checkouts register for live rebase; create-flow
     /// checkouts do not (C12).
     pub fn checkout(&self) -> ProfileDraftFfi {
