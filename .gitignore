@@ -51,3 +51,8 @@ android/profile-probe/local.properties
 android/profile-app/build/
 android/profile-app/.gradle/
 android/profile-app/local.properties
+
+# Step 11 — generated-bindings Kotlin smoke module build artifacts
+android/gen-profile-smoke/build/
+android/gen-profile-smoke/.gradle/
+android/gen-profile-smoke/local.properties
