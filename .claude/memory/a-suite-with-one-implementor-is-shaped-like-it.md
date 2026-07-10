@@ -23,7 +23,13 @@ Two moves catch it, and only both together:
 The second step is what paid. Mutating `StoreDraft::is_based` to consult a *single* field passed all
 21 other invariants **on both features**, because every draft the suite built had an ancestor in all
 of its fields or in none. A draft misjudged create-flow is never rebased, never orphaned, and silently
-overwrites the server on submit — and step 09's macro will *generate* `is_based`.
+overwrites the server on submit. Step 09 duly *generated* `is_based`, and both C12's clause and a
+golden test now hold it to ORing over every field.
+
+The same disease recurred in step 09 at the *feature* level and was again found only by mutation: C07
+had no precedence clause, because every `c07_*` assertion built a draft that failed exactly one commit
+gate. Two steps, two invariants, both invisible to reading. Budget for the mutation pass every time.
+See [[a-surviving-mutation-is-two-hypotheses]] for the trap on the other side of it.
 
 **Why:** a suite's blind spots live in the states it never constructs, and a passing suite is silent
 about exactly those. The same disease as [[a-missing-prop-assume-asserts-the-bug]]: the generator

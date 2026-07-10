@@ -22,9 +22,10 @@ work around them.
 | 06 | Design freeze | 2 — Freeze | **done** — [plan](steps/step-06-design-freeze.md) · [report](steps/step-06-report.md); ARCHITECTURE **frozen (v1.0)**, [CONFORMANCE.md](CONFORMANCE.md) C01–C18 with a build-time drift check |
 | 07 | Kotlin/Compose spike app | 2 — Freeze | **done** — [plan](steps/step-07-kotlin-compose-app.md) · [report](steps/step-07-report.md); stash/restore lands (C20/C21), a **frozen-core defect** found and fixed (C19), Compose UI tests run **headless**. Kill criterion 4 (hardware chattiness) **unassessed** — no device |
 | 08 | Extract bolted-core + conformance suite | 3 — Extraction | **done** — [plan](steps/step-08-extract-bolted-core.md) · [report](steps/step-08-report.md); store is id-keyed and **lock-free** (D16), the FFI's store loop is deleted, suite is generic and runs against **two** features |
-| 09 | bolted-macros | 3 — Extraction | **ready** |
-| 10 | bolted-ffi + regenerate Swift/Kotlin | 3 — Extraction | pending |
+| 09 | bolted-macros | 3 — Extraction | **done** — [plan](steps/step-09-bolted-macros.md) · [report](steps/step-09-report.md); `value`/`entity`/`rules` ship, two **generated** features pass the suite unmodified, `feature_model` **cut** (D21) |
+| 10 | bolted-ffi + regenerate Swift/Kotlin | 3 — Extraction | **ready** |
 | 11 | C# port + generator | 3 — Extraction | pending |
+| — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
 | 12+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
 
 ## Phase 1 — Design validation spike
@@ -124,16 +125,25 @@ reference the generated code is diffed against.
   falsify "generic", and immediately did: a `StoreDraft::is_based` that consults a single field passed
   all 21 other invariants, on both features. **C12** gained a clause and a test. Also: the
   `liveDraftCount` divergence step 07 could only document is closed by construction (**C22**).
-- **Step 09 — `bolted-macros`** (`value`, `entity`, `rules`, `feature_model`); macro output
-  must reproduce the hand-written spike code (golden tests) **and pass `bolted-conformance` against a
-  generated fixture**. Inherits: **never emit `Copy`** on a value object (D8); `#[bolted::entity]` must
-  emit `stash`/`from_stash`/`is_based`, the two `Draft` resolvers, and `Stashable` (D17); **`is_based`
-  must OR over every field** — a single-field emission is invisible to 21 of 22 invariants and silently
-  overwrites the server (step 08, C12); the emitted **`dirty_fields()` order is declaration order** and
-  is observable; **dedup by raw type is per-shape, not per-crate** (step 07). Open first: **where does
-  the async check's surface live** — `begin`/`complete`/`state` are on no trait, and step 08's
-  `AsyncCheckFeature` had to declare its own (§9). A generated fixture is a **marker type** naming its
-  value, not an impl on the value (orphan rule).
+- **Step 09 — `bolted-macros`.** **Done. No kill criteria hit.** `value`, `entity` and `rules` ship;
+  `gen-note` (20 code lines, replacing 269) and `gen-profile` (135, replacing 574) each pass
+  `bolted-conformance` **unmodified** — the same 37 and 62 tests their hand-written originals score.
+  `gen-note` was written *first*, because a macro with one input is shaped like that input.
+  **Writing the macro is what made the core honest**: three judgements about to be emitted per feature
+  moved down to rung 1 — `Field::required_error` (D13's `Unset` → `required`), `commit_gates` (C07's
+  gates), `SingleFlight::violation` (C13 + C16) — and `golden.rs` now *fails the build* if emitted code
+  mentions `Validity::`, `CheckState::`, `CommitError::Conflicted/Orphaned` or `is_ok()`. **D8 moved
+  from rung 3 to rung 2**: the macro refuses a `Copy` value rather than leaving it to `bolted-check`.
+  **D18** gives the async check a contract (`Checked`), and `AsyncCheckFeature` shed four members with
+  no test changing. **D19** dissolves "codegen dedup by raw type" (generics already dedup on the axis
+  that varies; the residue is FFI-side, step 10). **D20** scopes `#[bolted::value]` to newtypes.
+  **D21 cuts `feature_model`** — it needs boltffi, and the `Feature` trait it would stamp *has never
+  been written, in any of five spikes*. The mutation pass (12 mutations, checked in at
+  `steps/artifacts/step-09-mutations.py`) found **C07 had no precedence clause**: `commit_gates`
+  reordered to check conflicts before orphaned passed all 22 invariants on all four features, because
+  every `c07` assertion built a draft failing exactly one gate. C07 amended; ARCHITECTURE is **v1.3**.
+  Also caught, by reading the emitted code rather than the tests: a uniform guard was cloning a
+  `Username` on every keystroke of the *name* box.
 - **Step 10 — `bolted-ffi`** (only crate importing boltffi) + regenerate the Swift and Kotlin
   spike apps from macros; per-language contract tests generated from the C-IDs. Inherits a
   requirements list the probes wrote: **use-after-close must raise a typed error** (silent UB today,
@@ -151,6 +161,17 @@ reference the generated code is diffed against.
   `ConformanceFeature` supplies them (step 08, friction 1). `liveDraftCount`'s semantics no longer need
   pinning — C22 did it. Also: **report the `boltffi pack android` bug upstream** and delete the
   workaround in `mise run pack:android`.
+
+  **Inherited from step 09**: the FFI now regenerates from `gen-profile`, not `spike-profile`, so the
+  shells lose the inherent `begin_username_check` family and gain `Checked` keyed by `ProfileCheck`
+  (D18) — **whether a `CheckId` enum actually crosses `#[data]` is unverified, and if it cannot, D18 is
+  wrong** (step 09's kill criterion 4 was assessed by inspection only). `try_set_availability` takes a
+  tuple now. §9's **FFI dedup of field-state families** lands here: `dto.rs` stamps three structurally
+  identical `…FieldState` families for the three `Raw = String` values, and D19 says that duplication is
+  *this* crate's to answer, not the macro's. Watch for the step-09 friction that generalizes: **a
+  generated binding can be behaviourally identical and quietly more expensive** — the guard bug was
+  invisible to 22 invariants. And `mise run test:android:app` **can report BUILD SUCCESSFUL without
+  running a test** (Gradle up-to-date); force `--rerun-tasks` before quoting a number in a report.
 - **Step 11 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 

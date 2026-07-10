@@ -9,3 +9,5 @@
 - [A missing prop_assume asserts the bug](a-missing-prop-assume-asserts-the-bug.md) — the generator never samples the counterexample your precondition forgot to exclude
 - [The core ships no lock](the-core-ships-no-lock.md) — id-keyed store, effects as data, and close(id) as the only release path
 - [A suite with one implementor is shaped like it](a-suite-with-one-implementor-is-shaped-like-it.md) — write the opposite fixture, then mutate both
+- [A surviving mutation is two hypotheses](a-surviving-mutation-is-two-hypotheses.md) — the suite is blind, or the mutant was identical; rule out the second first
+- [Thin macros push behavior into the core](thin-macros-push-behavior-into-the-core.md) — the doctrine is a forcing function, and uniform codegen is not automatically cheap
