@@ -164,11 +164,31 @@ impl<V: Value> Field<V> {
     }
 
     /// Rebase this field onto a new canonical value `theirs`:
+    /// - `theirs == base` → nobody else moved this field: keep yours, clear any conflict, `InSync`;
     /// - already `Conflicted` → update `theirs` only (the recorded ancestor, `base`, does not move);
     /// - not dirty → adopt theirs (value + base), `InSync`;
     /// - dirty and `value == theirs` → convergent: adopt as base, clean, `InSync`;
     /// - dirty otherwise → `Conflicted { theirs }`, your value preserved.
+    ///
+    /// The first arm is what makes this a **three-way** merge rather than a two-way one, and it is
+    /// load-bearing: the store rebases *every* field of a draft on *every* canonical change, so
+    /// without it a dirty `name` conflicted whenever the server touched `email` — against `theirs`
+    /// that was its own ancestor. It also clears a conflict when canonical moves back to the
+    /// ancestor (the other side stopped disagreeing).
+    ///
+    /// `rebase` is idempotent, before this arm and after it — the property is pinned by a test
+    /// because `Store::adopt` relies on it (a fresh checkout is rebased onto the canonical it was
+    /// just built from), not because the three-way fix introduced it.
+    ///
+    /// Conformance C19. It hid until step 07 because C03's property test drew `mine`, `base` and
+    /// `theirs` independently and only assumed `mine != base` and `theirs != mine`: two random
+    /// strings are essentially never equal, so `theirs == base` was never sampled.
     pub fn rebase(&mut self, theirs: V) {
+        if self.base.as_ref() == Some(&theirs) {
+            self.sync = SyncState::InSync;
+            return;
+        }
+
         if self.is_conflicted() {
             self.sync = SyncState::Conflicted { theirs };
             return;
@@ -275,6 +295,56 @@ mod tests {
         assert!(matches!(f.sync(), SyncState::InSync));
         assert!(!f.is_dirty());
         assert_eq!(f.base(), Some(&Toy(3)));
+    }
+
+    /// C19, first half. The store rebases every field on every canonical change, so a field whose
+    /// own canonical value never moved is rebased onto its own ancestor. That is not a conflict —
+    /// nobody else touched it.
+    #[test]
+    fn rebase_onto_the_ancestor_does_not_conflict_a_dirty_field() {
+        let mut f = Field::from_base(Toy(1));
+        f.try_set(2).expect("valid");
+        f.rebase(Toy(1)); // theirs == base: canonical never moved
+        assert!(!f.is_conflicted());
+        assert!(f.is_dirty()); // my edit survives, untouched
+        assert_eq!(f.value(), Some(&Toy(2)));
+        assert_eq!(f.base(), Some(&Toy(1)));
+    }
+
+    /// C19, second half. Canonical moved away and then back to the ancestor: the other side stopped
+    /// disagreeing, so the conflict is over. Mine is still mine, and still dirty.
+    #[test]
+    fn canonical_returning_to_the_ancestor_clears_the_conflict() {
+        let mut f = Field::from_base(Toy(1));
+        f.try_set(2).expect("valid");
+        f.rebase(Toy(3));
+        assert!(f.is_conflicted());
+
+        f.rebase(Toy(1)); // theirs == base again
+        assert!(!f.is_conflicted());
+        assert_eq!(f.value(), Some(&Toy(2)));
+        assert!(f.is_dirty());
+    }
+
+    /// C19, third claim. Not a regression test — `rebase` was idempotent before the three-way fix
+    /// too. It is pinned because `Store::adopt` leans on it: `checkout()` builds a draft from
+    /// canonical and then immediately rebases it onto that same canonical.
+    #[test]
+    fn rebase_is_idempotent() {
+        for mine in [1, 2] {
+            // clean (mine == base) and dirty (mine != base)
+            let mut a = Field::from_base(Toy(1));
+            a.try_set(mine).expect("valid");
+            let mut b = a.clone();
+
+            a.rebase(Toy(3));
+            b.rebase(Toy(3));
+            b.rebase(Toy(3));
+            assert_eq!(
+                a, b,
+                "second rebase onto the same canonical moved the field"
+            );
+        }
     }
 
     /// An edit that does not land on `theirs` leaves the conflict standing (C03).

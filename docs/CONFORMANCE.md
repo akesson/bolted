@@ -1,8 +1,8 @@
 # Bolted — Conformance suite
 
-**Status: frozen with ARCHITECTURE.md (step 06).** These are the design's falsifiable claims. Each
-one is normative: an implementation of the Bolted contract that violates any of them is not a Bolted
-implementation, whatever else it does.
+**Status: frozen with ARCHITECTURE.md (step 06); C03 amended and C19 added in step 07.** These are the
+design's falsifiable claims. Each one is normative: an implementation of the Bolted contract that
+violates any of them is not a Bolted implementation, whatever else it does.
 
 Every `CNN` below has at least one `cNN_*` test in
 [`crates/spike-profile/tests/conformance.rs`](../crates/spike-profile/tests/conformance.rs), and a
@@ -27,7 +27,7 @@ draft" means a value implementing `Draft`; "theirs" is an incoming canonical val
 |----|-----------|
 | C01 | **Roundtrip.** `Value::try_new(v.into_raw()) == Ok(v)` for every valid `v`. Holding a `Value` is proof of validity, and the raw form loses none of it. |
 | C02 | **A clean field follows canonical.** A non-dirty field must adopt `theirs` on rebase and stay `InSync`. |
-| C03 | **A dirty field is never silently overwritten.** Rebase over a dirty field whose value differs from `theirs` must preserve your value, enter `Conflicted { theirs }`, and leave the recorded ancestor (`base`) where it was. |
+| C03 | **A dirty field is never silently overwritten.** Rebase over a dirty field **whose canonical value moved** and whose value differs from `theirs` must preserve your value, enter `Conflicted { theirs }`, and leave the recorded ancestor (`base`) where it was. |
 | C04 | **Convergent rebase is clean.** If a dirty field's value already equals `theirs`, rebase must adopt it as the base and land clean and `InSync` — two edits that agree are not a conflict. |
 | C05 | **Revert-for-free.** Setting a field back to its base value must clear dirty. Dirtiness is a pure function of the data, never of touch history. |
 | C06 | **No stale-value submit.** A failed `try_set` must be recorded as `Invalid { raw, error }` and must block submit. The previous valid value must never be silently committed in its place. |
@@ -43,8 +43,9 @@ draft" means a value implementing `Draft`; "theirs" is an incoming canonical val
 | C16 | **An unrun check blocks a dirty field.** If an async check is pinned to a field, the field is dirty, and the check has not run, `commit` must refuse. If the field is clean it must not — a clean field holds the canonical value, which was verified when it was committed. |
 | C17 | **Submit tombstones the handle.** A successful submit consumes the draft: the handle reports `!is_live()`, yields no draft, and a second submit is `AlreadySubmitted`. A **refused** submit must leave the handle live and the draft intact. |
 | C18 | **Release is explicit and idempotent.** `close()` frees the draft, may be called any number of times, and stops the store rebasing it. Dropping the handle must do the same. |
+| C19 | **Rebase is a three-way merge, and idempotent.** A field whose incoming canonical value equals its recorded ancestor must not be conflicted by a rebase, whatever its dirty state — nobody else moved it. A canonical that moves *back* to the ancestor must clear an existing conflict. Rebasing twice onto the same canonical must equal rebasing once. |
 
-## Notes on three of them
+## Notes on four of them
 
 **C13 + C16 together** are what make client-side async validation trustworthy. C13 guarantees a
 surviving `Done(Ok)` was computed for the value now in the field; C16 guarantees the value in a dirty
@@ -63,3 +64,17 @@ theirs" banner whose two buttons do visibly the same thing, while the dirty mark
 state the running web shell (step 04) found actively confusing. C04 already makes the identical
 judgement when the canonical change arrives second; leaving the edit-arrives-second case unresolved
 made the conflict model depend on event order.
+
+**C19 was added in step 07, and C03 was amended to make room for it.** A store rebases *every* field
+of a draft on *every* canonical change, so a field the server never touched is routinely rebased onto
+its own ancestor. `Field::rebase` compared `mine` against `theirs` but never `theirs` against `base`,
+so a dirty `name` entered `Conflicted { theirs }` whenever the server moved `email` — offering a
+"take theirs" button holding the user's own ancestor, and refusing `commit` with `Conflicted`. C14's
+disease, a different vector.
+
+It survived the freeze because **C03's property test never sampled it**: it drew `base`, `mine` and
+`theirs` independently and assumed only `mine != base` and `theirs != mine`, and two random strings
+are essentially never equal. `c08_rebase_reruns_tier2_rule` had been producing a spurious conflict on
+`email` since it was written, and passed, because it only asserted on the rule. The lesson is about
+property tests, not about rebase: **an `assume` set that is missing a precondition does not weaken the
+property — it silently asserts the bug.**

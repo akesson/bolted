@@ -167,6 +167,30 @@ fn live_rebase_dirty_field_conflicts_and_preserves_mine() {
     assert_eq!(c.conflicts(), vec![Name]);
 }
 
+/// C19, where a user would actually meet it: I am editing one field, the server changes a
+/// *different* one. The store rebases the whole draft, so my field is rebased onto its own
+/// ancestor — and until step 07 that raised a conflict banner offering a "take theirs" button
+/// holding my own base value, and refused submit.
+///
+/// This tier should have caught it: `echo_rule_focused_buffer_is_never_rewritten_from_core` has
+/// been dirtying `username` and then calling `sim_set_name` since step 04. It only ever asserted
+/// on the buffers.
+#[test]
+fn live_rebase_leaves_a_dirty_field_alone_when_its_own_canonical_did_not_move() {
+    let mut c = controller();
+    c.edit_name("My Name".to_string());
+    c.sim_set_email("team@corp.example"); // the server touches email, and only email
+
+    assert_eq!(c.conflicts(), vec![], "`name`'s canonical never moved");
+    assert!(c.conflict(Name).is_none());
+    assert!(c.is_dirty(Name));
+    assert_eq!(c.name_buf(), "My Name");
+    assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
+
+    // ...and the draft still submits, because there is nothing to resolve.
+    assert_eq!(c.conflicts(), vec![]);
+}
+
 #[test]
 fn live_rebase_convergent_edit_lands_clean() {
     let mut c = controller();

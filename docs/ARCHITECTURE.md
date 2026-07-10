@@ -1,9 +1,14 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.0, step 06).** Phase 1 validated this design against four independent shells —
-pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their friction logs. Every
-question that Phase 1 could answer is answered, in §8, with the alternative it beat. What remains
-**OPEN** in §9 is genuinely undecided and each item names the step that owns it.
+**Status: FROZEN (v1.1, step 06; amended step 07).** Phase 1 validated this design against four
+independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
+friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
+beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
+
+**v1.1** carries step 07's two amendments, both owner-approved before implementation: **D14** fixes a
+verified defect in `rebase` (C03 amended, C19 added), and **D15** adds `Store::adopt` and the draft
+stash. A freeze is a commitment to a design, not a promise that the design was already correct — the
+record of what changed, and why, is the point.
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
@@ -126,10 +131,13 @@ Drafts live **core-side**; shells hold handles (FFI class objects / plain Rust r
 Rust shells). Rationale: validation and derived values (`computed_total()`) run in Rust during
 editing; a detached value-copy would fork logic.
 
-**Live rebase.** A draft stays subscribed to canonical changes on its base entity. On change,
-per field: not dirty → silently adopt theirs, update base, stay `InSync`; dirty → enter
-`Conflicted { base, theirs }` (yours preserved); dirty but yours == theirs → adopt, clean
-(convergent edit). Rebase re-runs validation and derived values. Resolution is framework API:
+**Live rebase.** A draft stays subscribed to canonical changes on its base entity. On change, every
+field of the draft is rebased — so the *first* question each field asks is whether its own canonical
+value moved at all. Per field: `theirs == base` → nobody else touched it, keep yours, clear any
+conflict, `InSync` (C19); not dirty → silently adopt theirs, update base, stay `InSync`; dirty but
+yours == theirs → adopt, clean (convergent edit); dirty otherwise → `Conflicted { theirs }` (yours
+preserved). Rebase is therefore idempotent. Rebase re-runs validation and derived values. Resolution
+is framework API:
 `resolve_keep_mine()` (rebase base to theirs, keep your value, stay dirty) /
 `resolve_take_theirs()` (adopt, clean). `{base, yours, theirs}` is exposed so an app *can*
 build its own merge UI; **field-level keep/take is the framework's ceiling — no text/CRDT
@@ -260,18 +268,19 @@ structural rather than aspirational.
 
 ## 7. Invariants — the conformance suite
 
-The design's falsifiable claims, C01–C18, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
-and exist as named tests (`c01_*` … `c18_*`) in `crates/spike-profile/tests/conformance.rs`. A drift
+The design's falsifiable claims, C01–C19, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
+and exist as named tests (`c01_*` … `c19_*`) in `crates/spike-profile/tests/conformance.rs`. A drift
 test parses the document and fails the build if an ID has no test or a test has no ID — the mapping is
 verified by the build, not by review (VISION rung 3).
 
 In one line each: **C01** value roundtrip · **C02** a clean field follows canonical · **C03** a dirty
-field is never silently overwritten · **C04** convergent rebase is clean · **C05** revert-for-free ·
-**C06** no stale-value submit · **C07** commit is the parse moment, each refusal typed · **C08** rebase
-re-runs tier 2 · **C09** resolution semantics · **C10** latest check wins · **C11** deletion orphans ·
-**C12** create-flow never rebases · **C13** verdicts are value-bound · **C14** auto-converge on edit ·
-**C15** the base version tracks the rebase · **C16** an unrun check blocks a dirty field · **C17**
-submit tombstones the handle · **C18** release is explicit and idempotent.
+field whose canonical moved is never silently overwritten · **C04** convergent rebase is clean ·
+**C05** revert-for-free · **C06** no stale-value submit · **C07** commit is the parse moment, each
+refusal typed · **C08** rebase re-runs tier 2 · **C09** resolution semantics · **C10** latest check
+wins · **C11** deletion orphans · **C12** create-flow never rebases · **C13** verdicts are value-bound ·
+**C14** auto-converge on edit · **C15** the base version tracks the rebase · **C16** an unrun check
+blocks a dirty field · **C17** submit tombstones the handle · **C18** release is explicit and
+idempotent · **C19** rebase is a three-way merge, and idempotent.
 
 Step 08 makes the suite generic over a feature; step 10 emits it as per-language contract tests.
 
@@ -305,6 +314,7 @@ what, and why it was worth it.
 | **D12** — keep the `Draft` / `StoreDraft` split | Promote `from_canonical`/`rebase`/`orphan` into `Draft` | `Draft` is the FFI surface and shells never call the plumbing. Four shells, zero friction (step-01 Q1) |
 | **D13** — `Constraint::Required` stays in the same enum, prepended at the field layer | A separate field-metadata channel | A value type cannot know whether its field is `Option<_>`, but shells want one uniform list to derive affordances from. Three shells did exactly that with no constraint literal leaking (step-01 Q3) |
 | Failed submit returns the draft (D4/D5) | Submit consumes the handle on every outcome | Losing the user's edits on a rejected submit is data loss (step-01 F3) |
+| **D14 (C19)** — `rebase` compares `theirs` against `base` first: an unmoved canonical never conflicts | Guard in the generated `Draft::rebase`, skipping fields whose canonical equals their base | Post-freeze amendment (step 07). The store rebases every field on every canonical change, so a dirty `name` conflicted whenever the server moved `email` — offering "take theirs" over the user's own ancestor. Putting the guard in the core fixes it once, makes `rebase` idempotent, and makes `checkout() == adopt(from_canonical(..))`; putting it in generated code means every generator must re-derive it, and none of them would clear a conflict when canonical moves *back* to the ancestor |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 

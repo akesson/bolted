@@ -159,6 +159,25 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(vm.conflict(.name)?.theirs, "Their Name")
     }
 
+    /// C19. Editing one field while the server changes a *different* one must not conflict mine.
+    /// The store rebases the whole draft, so `name` is rebased onto its own ancestor; until step 07
+    /// that raised a banner whose "Take theirs" button held the user's own base value.
+    func testC19ADirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() async throws {
+        let vm = try makeVM()
+        vm.focus(.name)
+        vm.nameText = "My Name"
+        vm.editName()
+        vm.blur(.name)
+
+        vm.applyServerChange(.email("team@corp.example")) // the server touches email, only email
+        await eventually { vm.snapshot.email.validity == .valid(value: "team@corp.example") }
+
+        XCTAssertFalse(vm.snapshot.conflicts.contains(.name))
+        XCTAssertNil(vm.conflict(.name))
+        XCTAssertTrue(vm.isDirty(.name)) // my edit survives, untouched
+        XCTAssertEqual(vm.nameText, "My Name")
+    }
+
     // ---- conflict resolution -----------------------------------------------------------------
 
     /// take-theirs refreshes the buffer to theirs and (on username) resets the check; keep-mine

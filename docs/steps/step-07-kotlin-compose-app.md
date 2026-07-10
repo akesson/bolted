@@ -89,8 +89,13 @@ It handles both halves of the real three-way rule:
 | moved, `mine == theirs` | dirty | converge, clean (C04) |
 | moved, `mine != theirs` | dirty | conflict (C03) |
 
-It also makes `rebase` **idempotent**, and makes `checkout()` exactly `adopt(from_canonical(..))` —
-which M2 depends on.
+It also makes `checkout()` exactly `adopt(from_canonical(..))`, which M2 depends on.
+
+> **Correction, made during M1.** This plan originally claimed the fix "makes `rebase` idempotent".
+> It does not: `rebase` was already idempotent, and `field::tests::rebase_is_idempotent` passes with
+> the fix reverted. Idempotence is still worth pinning — `Store::adopt` leans on it — but C19 states
+> it as a property, not as a consequence of D14. Every other new test *does* fail without the fix;
+> that was verified by reverting it.
 
 **Frozen-artefact amendments:** C03's statement gains its missing precondition; its proptest gains
 `prop_assume!(theirs != base)`; a new **C19** pins both halves of the early-out; ARCHITECTURE §5's

@@ -101,14 +101,20 @@ proptest! {
         prop_assert!(!f.is_dirty());
     }
 
-    // C03 — a dirty field is never silently overwritten by rebase (yours preserved, Conflicted),
-    // and the recorded ancestor does not move.
+    // C03 — a dirty field whose canonical MOVED is never silently overwritten by rebase (yours
+    // preserved, Conflicted), and the recorded ancestor does not move.
+    //
+    // `theirs != base` is the precondition this property was missing until step 07. Without it the
+    // statement is false — an unmoved canonical must not conflict anything (C19) — but proptest
+    // draws the three strings independently and never samples `theirs == base`, so the suite
+    // asserted the bug instead of catching it.
     #[test]
     fn c03_dirty_preserved_on_conflict(
         base in "[a-z]{3,20}", mine in "[a-z]{3,20}", theirs in "[a-z]{3,20}"
     ) {
         prop_assume!(mine != base);
         prop_assume!(theirs != mine);
+        prop_assume!(theirs != base);
         let basev = Username::try_new(base).expect("valid");
         let minev = Username::try_new(mine).expect("valid");
         let theirsv = Username::try_new(theirs).expect("valid");
@@ -267,6 +273,11 @@ fn c08_rebase_reruns_tier2_rule() {
         .find(|v| v.rule == "corporate_email")
         .expect("present");
     assert_eq!(v.pins, vec![ProfileField::Email]); // pinned to Email
+
+    // And `email` — dirty, but its canonical value never moved — is NOT conflicted. Until step 07
+    // it was: this very test drove `email.rebase("alice@corp.example")` against its own ancestor
+    // and got `Conflicted { theirs: "alice@corp.example" }`. The suite never looked (C19).
+    assert_eq!(d.conflicts(), vec![]);
 }
 
 // C09 — resolve_keep_mine: value=yours, base=theirs, dirty, InSync. resolve_take_theirs:
@@ -587,6 +598,61 @@ fn c18_close_frees_the_draft_and_is_idempotent() {
     assert_eq!(store.live_draft_count(), 1);
     drop(dropped);
     assert_eq!(store.live_draft_count(), 0);
+}
+
+// C19 — rebase is a THREE-way merge. The store rebases every field of a draft on every canonical
+// change, so a field whose own canonical value never moved is routinely rebased onto its own
+// ancestor. That must not conflict it.
+#[test]
+fn c19_a_field_whose_canonical_did_not_move_is_not_conflicted() {
+    let mut store: ProfileStore = Store::new(Some(base_profile()));
+    let handle = store.checkout();
+
+    // I edit `name`.
+    handle
+        .borrow_mut()
+        .expect("live")
+        .try_set_name("My Name".to_string())
+        .expect("valid");
+
+    // The server changes only `username`. Nothing else moved.
+    store.apply_canonical(with_username("bravo"));
+
+    let d = handle.borrow().expect("live");
+    assert_eq!(
+        d.conflicts(),
+        vec![],
+        "the server never touched `name`; conflicting it offers a `take theirs` button whose \
+         value is the user's own ancestor"
+    );
+    assert!(d.name.is_dirty()); // my edit survives untouched
+    assert_eq!(d.name.value().map(|v| v.as_str()), Some("My Name"));
+    assert_eq!(d.username.value().map(|v| v.as_str()), Some("bravo")); // clean -> adopted (C02)
+}
+
+// C19, second half: canonical moving BACK to the ancestor clears an existing conflict — the other
+// side stopped disagreeing. And a repeated rebase onto the same canonical changes nothing.
+#[test]
+fn c19_canonical_returning_to_the_ancestor_clears_the_conflict_and_rebase_is_idempotent() {
+    let base = base_profile();
+    let mut d = ProfileDraft::from_canonical(Some(&base), 0);
+    d.try_set_username("mine1".to_string()).expect("valid");
+
+    d.rebase(&with_username("their1"), 1);
+    assert_eq!(d.conflicts(), vec![ProfileField::Username]);
+
+    // idempotent: rebasing onto the same canonical again is a no-op
+    let theirs_before = d.username.theirs().cloned();
+    d.rebase(&with_username("their1"), 2);
+    assert_eq!(d.conflicts(), vec![ProfileField::Username]);
+    assert_eq!(d.username.theirs().cloned(), theirs_before);
+
+    // the server reverts to the ancestor: no one else is changing this field any more
+    d.rebase(&base, 3);
+    assert!(d.conflicts().is_empty());
+    assert_eq!(d.username.value().map(|v| v.as_str()), Some("mine1"));
+    assert!(d.username.is_dirty());
+    assert_eq!(d.username.base().map(|v| v.as_str()), Some("alice"));
 }
 
 // --------------------------------------------------------------------------------------------

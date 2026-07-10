@@ -142,6 +142,30 @@ class FreezeContractProbe {
         }
     }
 
+    /**
+     * C19: rebase is a three-way merge. The store rebases every field of a draft on every canonical
+     * change, so a field the server never touched is rebased onto its own ancestor. That must not
+     * conflict it — the "take theirs" button would hold the user's own base value, and `submit`
+     * would be refused with nothing to resolve.
+     *
+     * Found while planning step 07; it had been latent in every shell since step 01.
+     */
+    @Test
+    fun c19_aDirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() {
+        store.checkout().use { draft ->
+            draft.trySetName("My Name")
+            store.applyCanonical(SEED.copy(email = "team@corp.example")) // email, and only email
+
+            val snap = draft.snapshot()
+            assertTrue("`name`'s canonical never moved", snap.conflicts.isEmpty())
+            assertTrue(snap.name.sync is PersonNameFieldSync.InSync)
+            assertTrue("my edit survives", snap.name.dirty)
+            val validity = snap.name.validity
+            assertTrue(validity is PersonNameValidity.Valid && validity.value == "My Name")
+            record("c19.spurious_conflict", "absent")
+        }
+    }
+
     private fun canonicalUsername(): String {
         val validity = store.canonical()?.username?.validity
         return (validity as? com.example.spike_profile_ffi.UsernameValidity.Valid)?.value
