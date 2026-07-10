@@ -10,14 +10,12 @@
 
 use crate::l10n;
 use bolted_core::{
-    CheckState, CheckToken, Constraint, Draft, DraftStatus, ErrorData, Field, SubmitError,
+    CheckState, CheckToken, Constraint, Draft, DraftId, DraftStatus, ErrorData, Field, SubmitError,
     ValidationReport, Validity, Value,
 };
 use spike_profile::{
-    Date, DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, ProfileHandle,
-    ProfileStore, Username,
+    Date, DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, ProfileStore, Username,
 };
-use std::cell::Ref;
 
 /// The demo profile the store is seeded with — same values as the Swift app (`ProfileApp.swift`),
 /// so the two shells run the identical manual protocol. Simulator *data*, not constraints.
@@ -91,7 +89,9 @@ pub fn is_required(field: ProfileField) -> bool {
 /// is written into them only on blur or an external move (rebase adopt / resolution / submit).
 pub struct ProfileController {
     store: ProfileStore,
-    handle: ProfileHandle,
+    /// The draft, named. Since D16 a handle is a `Copy` id into the store, so this shell no longer
+    /// juggles a `!Clone` owning handle — and, correspondingly, must `close()` what it abandons.
+    draft_id: DraftId,
     seed: Profile,
     focused: Option<ProfileField>,
     /// Has the user typed into the focused field since the core last wrote its buffer?
@@ -122,10 +122,10 @@ impl ProfileController {
     pub fn new() -> Option<Self> {
         let seed = seed_profile()?;
         let mut store = ProfileStore::new(Some(seed.clone()));
-        let handle = store.checkout();
+        let draft_id = store.checkout();
         let mut c = ProfileController {
             store,
-            handle,
+            draft_id,
             seed,
             focused: None,
             focused_touched: false,
@@ -146,33 +146,34 @@ impl ProfileController {
 
     /// Shared access to the live core draft, for assertions and power-reads. This IS the
     /// "read the contract directly" claim: no snapshot copy exists anywhere in this shell.
-    /// `None` once the handle is a tombstone (submitted or closed).
-    pub fn draft(&self) -> Option<Ref<'_, ProfileDraft>> {
-        self.handle.borrow()
+    /// `None` once the draft is gone (submitted or closed). A plain `&ProfileDraft` since D16 —
+    /// the `Ref<'_, _>` this used to return was the store's `RefCell` leaking into the shell.
+    pub fn draft(&self) -> Option<&ProfileDraft> {
+        self.store.draft(self.draft_id)
     }
 
-    /// Read the draft, or fall back. The handle's tombstone state (C17) meets the shell here, and
-    /// exactly here: every other read goes through this one function.
+    /// Read the draft, or fall back. A released draft (C17/C18) meets the shell here, and exactly
+    /// here: every other read goes through this one function.
     fn with_draft<R: Default>(&self, f: impl FnOnce(&ProfileDraft) -> R) -> R {
-        match self.handle.borrow() {
-            Some(d) => f(&d),
+        match self.store.draft(self.draft_id) {
+            Some(d) => f(d),
             None => R::default(),
         }
     }
 
-    /// Mutate the draft, if there is one and it is still editable. A tombstoned handle and an
-    /// orphaned draft are both inert — the shell never has to ask which.
-    fn edit<R: Default>(&self, f: impl FnOnce(&mut ProfileDraft) -> R) -> R {
-        match self.handle.borrow_mut() {
-            Some(mut d) if d.status() == DraftStatus::Live => f(&mut d),
+    /// Mutate the draft, if there is one and it is still editable. A released draft and an orphaned
+    /// one are both inert — the shell never has to ask which.
+    fn edit<R: Default>(&mut self, f: impl FnOnce(&mut ProfileDraft) -> R) -> R {
+        match self.store.draft_mut(self.draft_id) {
+            Some(d) if d.status() == DraftStatus::Live => f(d),
             _ => R::default(),
         }
     }
 
     /// Is there a draft, and is it still attached to a canonical entity?
     pub fn is_live(&self) -> bool {
-        self.handle
-            .borrow()
+        self.store
+            .draft(self.draft_id)
             .is_some_and(|d| d.status() == DraftStatus::Live)
     }
 
@@ -207,7 +208,7 @@ impl ProfileController {
     /// The inline error for a field: its tier-1 `Invalid` error, plus (for username) a failed
     /// uniqueness verdict. The full report (required, rules) surfaces on submit.
     pub fn inline_error(&self, field: ProfileField) -> Option<String> {
-        let d = self.handle.borrow()?;
+        let d = self.store.draft(self.draft_id)?;
         let validity_error: Option<ErrorData> = match field {
             ProfileField::Username => d.username.invalid_error(),
             ProfileField::Name => d.name.invalid_error(),
@@ -228,7 +229,7 @@ impl ProfileController {
     /// Conflict banner data, if the field is conflicted. Built from `Field` data alone — the §4
     /// claim on trial. The ancestor comes from `Field::base()` now that the core stores it once.
     pub fn conflict(&self, field: ProfileField) -> Option<ConflictInfo> {
-        let d = self.handle.borrow()?;
+        let d = self.store.draft(self.draft_id)?;
         match field {
             ProfileField::Username => conflict_info(&d.username, |v| v.as_str().to_string()),
             ProfileField::Name => conflict_info(&d.name, |v| v.as_str().to_string()),
@@ -243,7 +244,7 @@ impl ProfileController {
 
     /// The async check's core-owned sub-state (cloned): drives the spinner and the C13 asserts.
     pub fn username_check(&self) -> CheckState<Result<(), ErrorData>> {
-        match self.handle.borrow() {
+        match self.store.draft(self.draft_id) {
             Some(d) => d.username_check_state().clone(),
             None => CheckState::Idle,
         }
@@ -363,13 +364,13 @@ impl ProfileController {
             return None;
         }
         let name = {
-            let d = self.handle.borrow()?;
+            let d = self.store.draft(self.draft_id)?;
             if !d.username.is_dirty() {
                 return None;
             }
             d.username.value()?.as_str().to_string()
         };
-        let token = self.handle.borrow_mut()?.begin_username_check();
+        let token = self.store.draft_mut(self.draft_id)?.begin_username_check();
         self.check_run_count += 1;
         Some((token, name))
     }
@@ -396,18 +397,19 @@ impl ProfileController {
 
     // ---- submit --------------------------------------------------------------------------------
 
-    /// `Store::submit` borrows the handle and leaves a tombstone behind on success (C17), so a
-    /// handle living in a struct field submits with no ceremony at all. Before the freeze this
-    /// function had to vacate the slot with a throwaway `checkout()` — a real allocation, and a
-    /// real registration in the store's rebase list — because `submit` consumed a `!Clone` handle
-    /// that could not be moved out from behind `&mut self` (step-04 friction 1).
+    /// `Store::submit` takes the draft's id and releases it on success (C17), so a controller that
+    /// stores an id submits with no ceremony at all. Before the freeze this function had to vacate
+    /// the slot with a throwaway `checkout()` — a real allocation, and a real registration in the
+    /// store's rebase list — because `submit` consumed a `!Clone` handle that could not be moved out
+    /// from behind `&mut self` (step-04 friction 1).
     ///
-    /// On success a fresh `checkout()` starts the next edit session on the new canonical. On
-    /// refusal the draft is still there and still live: the user's edits survive (F3).
+    /// On success a fresh `checkout()` starts the next edit session on the new canonical; the old id
+    /// is already released, so nothing leaks. On refusal the draft is still there, still live, still
+    /// under the same id: the user's edits survive (F3).
     pub fn submit(&mut self) {
-        match self.store.submit(&mut self.handle) {
-            Ok(()) => {
-                self.handle = self.store.checkout();
+        match self.store.submit(self.draft_id) {
+            Ok(_rebased) => {
+                self.draft_id = self.store.checkout();
                 self.last_submit = Some(SubmitOutcome::Success);
                 self.focused = None;
                 self.refresh_buffers(None);
@@ -485,7 +487,7 @@ impl ProfileController {
     /// `force` names a field whose value moved from outside a keystroke (a resolution): refresh it
     /// regardless, and the control is no longer holding anything of the user's.
     fn refresh_buffers(&mut self, force: Option<ProfileField>) {
-        let Some((username, name, email, dates)) = self.handle.borrow().map(|d| {
+        let Some((username, name, email, dates)) = self.store.draft(self.draft_id).map(|d| {
             (
                 display(&d.username, |v| v.as_str().to_string()),
                 display(&d.name, |v| v.as_str().to_string()),

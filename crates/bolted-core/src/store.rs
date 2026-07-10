@@ -1,21 +1,50 @@
-//! Prototype store: canonical state + live drafts, single-threaded.
+//! The store: canonical state + the drafts checked out against it.
 //!
-//! This is deliberately throwaway plumbing — the real concurrency model is a step-08 decision
-//! (ARCHITECTURE §9). What matters here is that canonical changes are *pushed* into live drafts so
-//! the field/draft rebase semantics get exercised end to end. Interior mutability models the shared
-//! reality: the core owns the draft, a shell holds a handle to the same draft, and canonical changes
-//! mutate it underneath.
+//! **The core ships no lock** (ARCHITECTURE §8, D16). [`Store`] is a plain owned struct with no
+//! interior mutability, so it is `Send` whenever its draft and entity are, and the *shell* chooses
+//! the sharing discipline: a Rust shell holds it by value and needs none; the FFI wrapper holds it
+//! behind the one `Mutex` step 02 said it must.
+//!
+//! That is what makes the third store loop unnecessary. Phase 1 wrote this logic three times — an
+//! `Rc<RefCell>` version here, an `Arc<Mutex>` version in `spike-profile-ffi`, and step 07's
+//! `restore` in both — and the copies had already drifted (see [`Store::draft_count`]).
+//!
+//! Two consequences follow from owning the drafts outright:
+//!
+//! - **A handle is a [`DraftId`]**, not an owning smart pointer. Ids are issued monotonically and
+//!   never reused, so a stale id is permanently dead rather than dangerously recycled.
+//! - **[`Store::close`] is the only release path, on every platform.** There is no owner to drop.
+//!   Step 05 proved Kotlin already worked this way and that pretending otherwise was the lie; the
+//!   reference implementation now stops being forgiving in the one way the GC platforms are not.
+//!
+//! Mutations return their fan-out **as data** (`Vec<DraftId>`) rather than calling out to a
+//! subscriber. That is the sans-io principle applied to the store, and it is what lets a shell obey
+//! "never emit or call out under the lock" without the core knowing that locks or streams exist.
 
-use crate::draft::{CommitError, Draft};
+use crate::draft::{CommitError, Draft, Stashable};
 use crate::report::ValidationReport;
-use std::cell::{Ref, RefCell, RefMut};
-use std::rc::{Rc, Weak};
+use std::collections::BTreeMap;
+
+/// A draft's identity within one [`Store`]. `Copy`, monotonically issued, **never reused**.
+///
+/// The inner `u64` cannot be constructed from outside: a foreign shell may pass an id back
+/// (BoltFFI marshals it as a `u64`) but cannot forge one that was never issued. Unknown ids are
+/// simply not live, which is what makes a post-submit call a typed refusal instead of a hazard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DraftId(u64);
+
+impl DraftId {
+    /// The wire form, for shells that must marshal an id across a language boundary.
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
 
 /// Store-facing capabilities a draft must provide so the [`Store`] can drive live rebase.
 ///
-/// Deliberately SEPARATE from [`Draft`] (the design's public/FFI contract): these three methods are
+/// Deliberately SEPARATE from [`Draft`] (the design's public/FFI contract): these methods are
 /// plumbing the store needs and no shell ever calls. Four shells later, the split has cost nothing
-/// and keeps the FFI surface minimal — ARCHITECTURE §8 froze it (step-01 Q1).
+/// and keeps the FFI surface minimal — ARCHITECTURE §8 froze it as D12 (step-01 Q1).
 pub trait StoreDraft: Draft {
     /// Build a fresh draft: a checkout of `base` (existing entity), or a create-flow draft (`None`).
     fn from_canonical(base: Option<&Self::Entity>, base_version: u64) -> Self;
@@ -38,10 +67,10 @@ pub trait StoreDraft: Draft {
 /// device the UI has already surfaced conflicts, so it is never a surprise.
 ///
 /// The first three arms are [`CommitError`]'s, verbatim. `AlreadySubmitted` is the one failure a
-/// *handle* can have that a draft cannot: the handle outlives the draft it pointed at. Step 02 found
-/// the FFI wrapper had to invent exactly this variant because the foreign handle outlives the core
-/// draft; step 05 found Kotlin's handle outlives it even harder (the GC never frees it). The core
-/// API now says so too.
+/// *handle* can have that a draft cannot: the id outlives the draft it named. Step 02 found the FFI
+/// wrapper had to invent exactly this variant because the foreign handle outlives the core draft;
+/// step 05 found Kotlin's handle outlives it even harder (the GC never frees it). The core API says
+/// so too. A `close`d id refuses the same way: from the outside, "gone" is one fact.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SubmitError<FieldId> {
     Validation(ValidationReport<FieldId>),
@@ -60,50 +89,25 @@ impl<FieldId> From<CommitError<FieldId>> for SubmitError<FieldId> {
     }
 }
 
-/// A handle to a core-side draft: the sole owner of the draft, and a lifecycle object in its own
-/// right. The store keeps only a [`Weak`] to the same cell, so it can rebase the draft without
-/// keeping it alive.
+/// One checked-out draft and whether canonical changes move it.
 ///
-/// The draft slot empties in exactly three ways — a successful [`Store::submit`], [`Self::close`],
-/// or dropping the handle. Afterwards the handle is an inert **tombstone**: `is_live()` is false,
-/// every borrow yields `None`, and a second submit is [`SubmitError::AlreadySubmitted`]. This is not
-/// an invention: it is what BoltFFI already forces on every foreign shell (step 02's post-submit
-/// tombstone, step 05's `AutoCloseable`), made honest in the core.
-///
-/// Not `Clone` — single ownership is what lets `submit` move the draft out to commit it.
-pub struct DraftHandle<D: Draft> {
-    inner: Rc<RefCell<Option<D>>>,
+/// `rebases` is set once, by [`Store::adopt`], from `is_based()` × the presence of canonical. It is
+/// cleared when the draft orphans, because an orphan is based on no canonical at all (C11/C15).
+struct Entry<D> {
+    draft: D,
+    rebases: bool,
 }
 
-impl<D: Draft> DraftHandle<D> {
-    /// Is the draft still there? False after submit / `close` (ARCHITECTURE §4).
-    pub fn is_live(&self) -> bool {
-        self.inner.borrow().is_some()
-    }
-
-    /// Shared access to the draft (snapshot, dirty/conflict queries). `None` on a tombstone.
-    pub fn borrow(&self) -> Option<Ref<'_, D>> {
-        Ref::filter_map(self.inner.borrow(), |slot| slot.as_ref()).ok()
-    }
-
-    /// Mutable access to the draft (setters, resolve, async-check drive). `None` on a tombstone.
-    pub fn borrow_mut(&self) -> Option<RefMut<'_, D>> {
-        RefMut::filter_map(self.inner.borrow_mut(), |slot| slot.as_mut()).ok()
-    }
-
-    /// Discard the draft. Idempotent. Dropping the handle does the same thing — in Rust `close()`
-    /// is a convenience, not a requirement. It exists so that the contract reads identically in a
-    /// GC language, where step 05 proved it is the *only* way a draft is ever freed.
-    pub fn close(&mut self) {
-        *self.inner.borrow_mut() = None;
-    }
-}
-
-/// Prototype store over a single canonical entity and its live drafts.
+/// Canonical state and the drafts checked out against it.
+///
+/// `BTreeMap` rather than `HashMap`: the fan-out order of a rebase is then deterministic, which
+/// costs nothing at these sizes and makes the returned `Vec<DraftId>` reproducible for tests and
+/// for a future replay log.
 pub struct Store<D: StoreDraft> {
     canonical: Option<D::Entity>,
     version: u64,
-    live: Vec<Weak<RefCell<Option<D>>>>,
+    drafts: BTreeMap<DraftId, Entry<D>>,
+    next_id: u64,
 }
 
 impl<D: StoreDraft> Store<D> {
@@ -111,7 +115,8 @@ impl<D: StoreDraft> Store<D> {
         Store {
             canonical,
             version: 0,
-            live: Vec::new(),
+            drafts: BTreeMap::new(),
+            next_id: 0,
         }
     }
 
@@ -123,19 +128,47 @@ impl<D: StoreDraft> Store<D> {
         self.version
     }
 
-    /// How many drafts the store would rebase on the next canonical change. Falls when a handle is
-    /// closed, submitted or dropped (C18) — the same registry semantics the FFI wrapper exposes as
-    /// `liveDraftCount()`.
-    pub fn live_draft_count(&self) -> usize {
-        self.live
-            .iter()
-            .filter(|w| w.upgrade().is_some_and(|rc| rc.borrow().is_some()))
-            .count()
+    // ---- the two draft counts (conformance C22) --------------------------------------------
+
+    /// How many drafts exist: checked out, restored, not yet submitted or closed.
+    ///
+    /// **This is not [`Self::rebasing_draft_count`]**, and conflating the two is a real bug with a
+    /// real history. Until step 08 the core exposed one `live_draft_count()` meaning *"would be
+    /// rebased"* while the FFI wrapper exposed one of the same name meaning *"exists"*; they
+    /// disagreed by 1 on every create-flow draft, and step 07 shipped a test to document it because
+    /// nothing at the time could fix it. Two questions, two names (C22).
+    pub fn draft_count(&self) -> usize {
+        self.drafts.len()
     }
 
-    /// Check out a draft. Existing-entity checkouts register for live rebase; create-flow drafts
-    /// (no canonical) are NOT registered — they never rebase (conformance C12).
-    pub fn checkout(&mut self) -> DraftHandle<D> {
+    /// How many drafts the next canonical change would rebase. A create-flow draft is not one of
+    /// them (C12), and neither is an orphan (C11).
+    pub fn rebasing_draft_count(&self) -> usize {
+        self.drafts.values().filter(|e| e.rebases).count()
+    }
+
+    // ---- draft access ------------------------------------------------------------------------
+
+    /// Is `id` still a draft? False once it has been submitted (C17) or closed (C18), and false for
+    /// an id this store never issued.
+    pub fn is_live(&self, id: DraftId) -> bool {
+        self.drafts.contains_key(&id)
+    }
+
+    /// Shared access to a draft (snapshot, dirty/conflict queries). `None` once it is gone.
+    pub fn draft(&self, id: DraftId) -> Option<&D> {
+        self.drafts.get(&id).map(|e| &e.draft)
+    }
+
+    /// Mutable access to a draft (setters, resolve, async-check drive). `None` once it is gone.
+    pub fn draft_mut(&mut self, id: DraftId) -> Option<&mut D> {
+        self.drafts.get_mut(&id).map(|e| &mut e.draft)
+    }
+
+    // ---- lifecycle ---------------------------------------------------------------------------
+
+    /// Check out a draft over the current canonical, or a create-flow draft if there is none.
+    pub fn checkout(&mut self) -> DraftId {
         self.adopt(D::from_canonical(self.canonical.as_ref(), self.version))
     }
 
@@ -155,76 +188,104 @@ impl<D: StoreDraft> Store<D> {
     /// The rebase is what makes restore correct rather than merely convenient: a field whose
     /// canonical moved while the process was dead comes back **conflicted**, not silently dirty over
     /// a base it never saw (conformance C21).
-    pub fn adopt(&mut self, mut draft: D) -> DraftHandle<D> {
-        let based = draft.is_based();
-        match (based, &self.canonical) {
-            (true, Some(entity)) => draft.rebase(entity, self.version),
-            (true, None) => draft.orphan(),
-            (false, _) => {}
-        }
-        let rc = Rc::new(RefCell::new(Some(draft)));
-        if based && self.canonical.is_some() {
-            self.live.push(Rc::downgrade(&rc));
-        }
-        DraftHandle { inner: rc }
+    pub fn adopt(&mut self, mut draft: D) -> DraftId {
+        let rebases = match (draft.is_based(), &self.canonical) {
+            (true, Some(entity)) => {
+                draft.rebase(entity, self.version);
+                true
+            }
+            (true, None) => {
+                draft.orphan();
+                false
+            }
+            (false, _) => false,
+        };
+        let id = DraftId(self.next_id);
+        self.next_id += 1;
+        self.drafts.insert(id, Entry { draft, rebases });
+        id
     }
 
-    /// A new canonical version arrived: bump version, rebase every live draft onto it, then adopt
-    /// it. Tombstoned slots are skipped; their handles are pruned once dropped.
-    pub fn apply_canonical(&mut self, entity: D::Entity) {
+    /// Release a draft. Idempotent, and closing an id the store never issued is a no-op (C18).
+    ///
+    /// **There is no other release path.** The id is not an owner, so nothing reaps a draft when a
+    /// shell forgets it: the store keeps rebasing an edit session no one can see. Kotlin has always
+    /// been this way (step 05, H1); since D16 every platform is, and the contract reads the same
+    /// everywhere.
+    pub fn close(&mut self, id: DraftId) {
+        self.drafts.remove(&id);
+    }
+
+    // ---- canonical changes (effects returned as data) ------------------------------------------
+
+    /// A new canonical version arrived: bump the version, rebase every registered draft onto it,
+    /// adopt it. Returns the ids it moved, in id order, so a shell can emit one snapshot per
+    /// affected draft **after** dropping whatever lock it holds.
+    pub fn apply_canonical(&mut self, entity: D::Entity) -> Vec<DraftId> {
         self.version += 1;
         let version = self.version;
-        for weak in &self.live {
-            if let Some(rc) = weak.upgrade() {
-                let mut slot = rc.borrow_mut();
-                if let Some(draft) = slot.as_mut() {
-                    draft.rebase(&entity, version);
-                }
+        let mut rebased = Vec::new();
+        for (id, entry) in self.drafts.iter_mut() {
+            if entry.rebases {
+                entry.draft.rebase(&entity, version);
+                rebased.push(*id);
             }
         }
         self.canonical = Some(entity);
-        self.prune();
+        rebased
     }
 
-    /// Canonical was deleted: orphan every live draft.
-    pub fn delete_canonical(&mut self) {
+    /// Canonical was deleted: orphan every registered draft. Returns the ids it orphaned.
+    ///
+    /// An orphan stops rebasing, so a later `apply_canonical` that recreates the entity does not
+    /// resurrect it — orphan is terminal, and its `base_version` stops moving (C11, C15).
+    pub fn delete_canonical(&mut self) -> Vec<DraftId> {
         self.version += 1;
-        for weak in &self.live {
-            if let Some(rc) = weak.upgrade() {
-                let mut slot = rc.borrow_mut();
-                if let Some(draft) = slot.as_mut() {
-                    draft.orphan();
-                }
+        let mut orphaned = Vec::new();
+        for (id, entry) in self.drafts.iter_mut() {
+            if entry.rebases {
+                entry.draft.orphan();
+                entry.rebases = false;
+                orphaned.push(*id);
             }
         }
         self.canonical = None;
-        self.prune();
+        orphaned
     }
 
     /// Submit a draft transactionally. On success the committed entity becomes the new canonical,
-    /// every other live draft rebases onto it, and `handle` becomes a tombstone. On refusal the
-    /// draft goes straight back into the handle: the user's edit session survives (C17, F3).
+    /// every *other* registered draft rebases onto it (their ids are returned), and `id` is released
+    /// — a second submit is `AlreadySubmitted` (C17). On refusal the draft goes straight back under
+    /// the same id: the user's edit session survives (F3).
     ///
-    /// There are no pre-checks here. `commit` owns the gates and now reports them typed, so the
-    /// store simply asks and reacts — which is why this function has no unreachable branch to
-    /// apologise for (step-03 friction 1).
-    pub fn submit(&mut self, handle: &mut DraftHandle<D>) -> Result<(), SubmitError<D::FieldId>> {
-        let Some(draft) = handle.inner.borrow_mut().take() else {
+    /// There are no pre-checks here. `commit` owns the gates and reports them typed, so the store
+    /// simply asks and reacts — which is why this function has no unreachable branch to apologise
+    /// for (step-03 friction 1). Taking the draft *out* of the map is also what lets `commit`
+    /// consume it by value while the store keeps its id.
+    pub fn submit(&mut self, id: DraftId) -> Result<Vec<DraftId>, SubmitError<D::FieldId>> {
+        let Some(entry) = self.drafts.remove(&id) else {
             return Err(SubmitError::AlreadySubmitted);
         };
-        match draft.commit() {
-            Ok(entity) => {
-                self.apply_canonical(entity);
-                Ok(())
-            }
+        match entry.draft.commit() {
+            Ok(entity) => Ok(self.apply_canonical(entity)),
             Err((draft, error)) => {
-                *handle.inner.borrow_mut() = Some(draft);
+                self.drafts.insert(
+                    id,
+                    Entry {
+                        draft,
+                        rebases: entry.rebases,
+                    },
+                );
                 Err(error.into())
             }
         }
     }
+}
 
-    fn prune(&mut self) {
-        self.live.retain(|w| w.strong_count() > 0);
+impl<D: StoreDraft + Stashable> Store<D> {
+    /// Restore a draft the shell stashed before its process was killed, and rebase it onto whatever
+    /// canonical says *now* (C21). Exactly `adopt(D::from_stash(..))`, named for the shell.
+    pub fn restore(&mut self, stash: &D::Stash) -> DraftId {
+        self.adopt(D::from_stash(stash))
     }
 }

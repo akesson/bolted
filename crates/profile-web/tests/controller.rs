@@ -12,16 +12,15 @@ use profile_web::controller::{
 };
 use spike_profile::ProfileDraft;
 use spike_profile::ProfileField::{Availability, Email, Name, Username};
-use std::cell::Ref;
 
 fn controller() -> ProfileController {
     ProfileController::new().expect("the seed profile validates")
 }
 
-/// `ProfileController::draft()` yields `None` once the handle is a tombstone (C17). This shell
+/// `ProfileController::draft()` yields `None` once the draft has been released (C17/C18). This shell
 /// never observes that state — a successful submit checks out a fresh draft in the same call — so
 /// the tests read through here rather than threading an `Option` into every assertion.
-fn draft(c: &ProfileController) -> Ref<'_, ProfileDraft> {
+fn draft(c: &ProfileController) -> &ProfileDraft {
     c.draft().expect("this shell always holds a live draft")
 }
 

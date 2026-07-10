@@ -159,11 +159,11 @@ fn pending_username_check_blocks_then_passes() {
 fn full_lifecycle_checkout_edit_conflict_resolve_submit() {
     let base = base_profile(); // username "alice"
     let mut store: ProfileStore = Store::new(Some(base.clone()));
-    let mut handle = store.checkout();
+    let id = store.checkout();
 
     // edit username
     {
-        let mut d = handle.borrow_mut().expect("live");
+        let d = store.draft_mut(id).expect("live");
         d.try_set_username("alice2".to_string()).expect("valid");
         assert!(d.dirty_fields().contains(&ProfileField::Username));
     }
@@ -171,15 +171,15 @@ fn full_lifecycle_checkout_edit_conflict_resolve_submit() {
     // background canonical change to a different username -> conflict on that field only
     let mut background = base.clone();
     background.username = Username::try_new("admin".to_string()).expect("valid");
-    store.apply_canonical(background);
+    assert_eq!(store.apply_canonical(background), vec![id]);
     {
-        let d = handle.borrow().expect("live");
+        let d = store.draft(id).expect("live");
         assert_eq!(d.conflicts(), vec![ProfileField::Username]);
     }
 
     // resolve keep-mine, check the kept username, then submit
     {
-        let mut d = handle.borrow_mut().expect("live");
+        let d = store.draft_mut(id).expect("live");
         d.resolve_keep_mine(ProfileField::Username);
         assert!(d.conflicts().is_empty());
         // keep-mine leaves the value where it was, so the verdict (had there been one) would
@@ -187,8 +187,8 @@ fn full_lifecycle_checkout_edit_conflict_resolve_submit() {
         let token = d.begin_username_check();
         assert!(d.complete_username_check(token, Ok(())));
     }
-    store.submit(&mut handle).expect("submit ok after resolve");
-    assert!(!handle.is_live()); // C17: a successful submit tombstones the handle
+    store.submit(id).expect("submit ok after resolve");
+    assert!(!store.is_live(id)); // C17: a successful submit releases the draft
 
     // canonical now carries our value
     assert_eq!(
@@ -202,6 +202,6 @@ fn full_lifecycle_checkout_edit_conflict_resolve_submit() {
 fn base_version_recorded_at_checkout() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
     store.apply_canonical(base_profile()); // version -> 1
-    let handle = store.checkout();
-    assert_eq!(handle.borrow().expect("live").base_version(), 1);
+    let id = store.checkout();
+    assert_eq!(store.draft(id).expect("live").base_version(), 1);
 }

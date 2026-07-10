@@ -45,14 +45,45 @@ pub trait Draft {
     /// Tiers 1 + 2, in full.
     fn validate(&self) -> ValidationReport<Self::FieldId>;
 
+    /// Keep your value, accept theirs as the new ancestor: the field stays dirty and returns to
+    /// `InSync` (C09). A no-op on a field that is not conflicted.
+    fn resolve_keep_mine(&mut self, field: Self::FieldId);
+
+    /// Adopt their value and their ancestor: the field lands clean and `InSync` (C09).
+    fn resolve_take_theirs(&mut self, field: Self::FieldId);
+
     /// The parse-don't-validate moment: a draft goes in, an always-valid entity comes out, or the
     /// draft comes *back* with a typed reason. `Ok` ⇔ every field `Valid`, none `Conflicted`, no
     /// rule violations, status `Live`.
     ///
     /// The draft is returned on failure because a refused commit must never destroy an edit session
-    /// (step-01 friction F3). It is what lets `Store::submit` put the draft back into its handle
+    /// (step-01 friction F3). It is what lets `Store::submit` put the draft back under its id
     /// without a pre-check pass that duplicates these very gates.
     fn commit(self) -> Result<Self::Entity, (Self, CommitError<Self::FieldId>)>
+    where
+        Self: Sized;
+}
+
+/// A draft that can flatten itself to serializable data and come back (ARCHITECTURE §4, C20/C21).
+///
+/// A **subtrait** rather than part of [`Draft`], for two reasons. `from_stash` needs `Sized`, which
+/// `Draft` deliberately does not require. And nothing in the contract compels a feature to have a
+/// stash: only a shell whose process can be killed mid-edit needs one, and on that platform it is
+/// the shell that decides when to call it.
+///
+/// Both halves are shell-facing — Android calls `stash()` from `SavedStateHandle` and hands the
+/// result back to [`crate::Store::restore`] — which is why they live here and not on
+/// [`crate::StoreDraft`].
+pub trait Stashable: Draft {
+    /// Raw, serializable data: per field, the last input attempt and the ancestor it was made over.
+    /// Never the sync state, and never an async verdict — see [`crate::FieldStash`] and C20.
+    type Stash: Clone + PartialEq + std::fmt::Debug;
+
+    fn stash(&self) -> Self::Stash;
+
+    /// Rebuild a draft. **Not yet reconciled with canonical** — hand it to [`crate::Store::restore`],
+    /// which rebases it onto whatever the server says now.
+    fn from_stash(stash: &Self::Stash) -> Self
     where
         Self: Sized;
 }

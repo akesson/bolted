@@ -7,9 +7,9 @@ use crate::value_types::{
     UsernameError,
 };
 use bolted_core::{
-    CheckState, CheckToken, CommitError, Constraint, Draft, DraftHandle, DraftStatus, ErrorData,
-    Field, FieldStash, RuleViolation, SingleFlight, Store, StoreDraft, ValidationReport, Validity,
-    Value,
+    CheckState, CheckToken, CommitError, Constraint, Draft, DraftStatus, ErrorData, Field,
+    FieldStash, RuleViolation, SingleFlight, Stashable, Store, StoreDraft, ValidationReport,
+    Validity, Value,
 };
 
 /// The always-valid entity (canonical state). `#[bolted::entity]` would generate this alongside
@@ -49,9 +49,20 @@ impl ProfileField {
     }
 }
 
-/// Convenience aliases for the prototype store specialised to this feature.
+/// The store specialised to this feature. A handle is a `bolted_core::DraftId` — there is no
+/// per-feature handle type any more (ARCHITECTURE §8, D16).
 pub type ProfileStore = Store<ProfileDraft>;
-pub type ProfileHandle = DraftHandle<ProfileDraft>;
+
+/// Kill criterion 1 of step 08, proved at rung 1 rather than asserted in a report: the store is
+/// `Send`, so the FFI wrapper can put it behind the one `Mutex` step 02 demanded. Nothing enforces
+/// this but the compiler, and nothing needs to — a `Value` impl that reached for an `Rc` would fail
+/// the build right here.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<ProfileDraft>();
+    assert_send::<Profile>();
+    assert_send::<ProfileStore>();
+};
 
 /// The serializable projection of a [`ProfileDraft`] — everything an edit session needs to survive
 /// process death, and nothing that would be a lie on the other side of it (`sync`, and the async
@@ -109,44 +120,6 @@ impl ProfileDraft {
         self.username_check.state()
     }
 
-    // --- stash / restore: surviving process death (ARCHITECTURE §4, conformance C20/C21) ---
-
-    /// Flatten this draft to serializable data. Per-field `{raw, base}`, plus status and the version
-    /// it was based on. A macro emits this per field, mechanically.
-    pub fn stash(&self) -> ProfileStash {
-        ProfileStash {
-            username: self.username.stash(),
-            name: self.name.stash(),
-            email: self.email.stash(),
-            availability: self.availability.stash(),
-            base_version: self.base_version,
-            orphaned: matches!(self.status, DraftStatus::Orphaned),
-        }
-    }
-
-    /// Rebuild a draft from its stash. **Not yet reconciled with canonical** — hand it to
-    /// [`Store::adopt`], which rebases it onto whatever the server says now.
-    ///
-    /// The async uniqueness verdict deliberately does not survive. It endorses a *value* against a
-    /// server state that may have moved while the process was dead, so it restores as `Idle` — and
-    /// C16 then refuses to submit a dirty username without a fresh check. Stash/restore needs no
-    /// invariant of its own here: C13 and C16 already make the restored draft safe.
-    pub fn from_stash(stash: &ProfileStash) -> Self {
-        ProfileDraft {
-            username: Field::from_stash(&stash.username),
-            name: Field::from_stash(&stash.name),
-            email: Field::from_stash(&stash.email),
-            availability: Field::from_stash(&stash.availability),
-            username_check: SingleFlight::new(),
-            status: if stash.orphaned {
-                DraftStatus::Orphaned
-            } else {
-                DraftStatus::Live
-            },
-            base_version: stash.base_version,
-        }
-    }
-
     // --- monomorphic setters (one per field; `try_set_availability` takes the grouped raw) ---
 
     pub fn try_set_username(&mut self, raw: String) -> Result<(), UsernameError> {
@@ -177,26 +150,6 @@ impl ProfileDraft {
         verdict: Result<(), ErrorData>,
     ) -> bool {
         self.username_check.complete(token, verdict)
-    }
-
-    // --- conflict resolution, dispatched per field id ---
-
-    pub fn resolve_keep_mine(&mut self, field: ProfileField) {
-        self.with_username_guard(|s| match field {
-            ProfileField::Username => s.username.resolve_keep_mine(),
-            ProfileField::Name => s.name.resolve_keep_mine(),
-            ProfileField::Email => s.email.resolve_keep_mine(),
-            ProfileField::Availability => s.availability.resolve_keep_mine(),
-        })
-    }
-
-    pub fn resolve_take_theirs(&mut self, field: ProfileField) {
-        self.with_username_guard(|s| match field {
-            ProfileField::Username => s.username.resolve_take_theirs(),
-            ProfileField::Name => s.name.resolve_take_theirs(),
-            ProfileField::Email => s.email.resolve_take_theirs(),
-            ProfileField::Availability => s.availability.resolve_take_theirs(),
-        })
     }
 
     /// Tier-2 rule `corporate_email`, pinned to `Email` (as `#[rule(pins(email))]` would emit): a
@@ -334,6 +287,27 @@ impl Draft for ProfileDraft {
         report
     }
 
+    // Conflict resolution, dispatched per field id. Trait methods since step 08: every shell calls
+    // them across the FFI, so `Draft` is where they belong (D12's own principle), and a conformance
+    // suite generic over `Draft` cannot reach an inherent method (D17).
+    fn resolve_keep_mine(&mut self, field: ProfileField) {
+        self.with_username_guard(|s| match field {
+            ProfileField::Username => s.username.resolve_keep_mine(),
+            ProfileField::Name => s.name.resolve_keep_mine(),
+            ProfileField::Email => s.email.resolve_keep_mine(),
+            ProfileField::Availability => s.availability.resolve_keep_mine(),
+        })
+    }
+
+    fn resolve_take_theirs(&mut self, field: ProfileField) {
+        self.with_username_guard(|s| match field {
+            ProfileField::Username => s.username.resolve_take_theirs(),
+            ProfileField::Name => s.name.resolve_take_theirs(),
+            ProfileField::Email => s.email.resolve_take_theirs(),
+            ProfileField::Availability => s.availability.resolve_take_theirs(),
+        })
+    }
+
     fn commit(self) -> Result<Profile, (Self, CommitError<ProfileField>)> {
         // The three gates of C07, each reported in its own shape. Before the freeze the last two
         // were re-encoded as synthetic rule violations so they could fit a `ValidationReport`
@@ -433,5 +407,42 @@ impl StoreDraft for ProfileDraft {
             || self.name.base().is_some()
             || self.email.base().is_some()
             || self.availability.base().is_some()
+    }
+}
+
+impl Stashable for ProfileDraft {
+    type Stash = ProfileStash;
+
+    /// Flatten this draft to serializable data. Per-field `{raw, base}`, plus status and the version
+    /// it was based on. A macro emits this per field, mechanically.
+    fn stash(&self) -> ProfileStash {
+        ProfileStash {
+            username: self.username.stash(),
+            name: self.name.stash(),
+            email: self.email.stash(),
+            availability: self.availability.stash(),
+            base_version: self.base_version,
+            orphaned: matches!(self.status, DraftStatus::Orphaned),
+        }
+    }
+
+    /// The async uniqueness verdict deliberately does not survive. It endorses a *value* against a
+    /// server state that may have moved while the process was dead, so it restores as `Idle` — and
+    /// C16 then refuses to submit a dirty username without a fresh check. Stash/restore needs no
+    /// invariant of its own here: C13 and C16 already make the restored draft safe.
+    fn from_stash(stash: &ProfileStash) -> Self {
+        ProfileDraft {
+            username: Field::from_stash(&stash.username),
+            name: Field::from_stash(&stash.name),
+            email: Field::from_stash(&stash.email),
+            availability: Field::from_stash(&stash.availability),
+            username_check: SingleFlight::new(),
+            status: if stash.orphaned {
+                DraftStatus::Orphaned
+            } else {
+                DraftStatus::Live
+            },
+            base_version: stash.base_version,
+        }
     }
 }

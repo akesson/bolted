@@ -41,13 +41,14 @@ draft" means a value implementing `Draft`; "theirs" is an incoming canonical val
 | C14 | **Auto-converge on edit.** Editing a conflicted field to a value equal to `theirs` must resolve the conflict: base adopted, clean, `InSync`. This is C04 with the two events in the other order, and it must reach the same state. |
 | C15 | **The base version tracks the rebase.** After a canonical change rebases a draft, the draft's `base_version` must equal the store's version. An orphaned draft is based on no canonical and its stamp must stop moving. |
 | C16 | **An unrun check blocks a dirty field.** If an async check is pinned to a field, the field is dirty, and the check has not run, `commit` must refuse. If the field is clean it must not — a clean field holds the canonical value, which was verified when it was committed. |
-| C17 | **Submit tombstones the handle.** A successful submit consumes the draft: the handle reports `!is_live()`, yields no draft, and a second submit is `AlreadySubmitted`. A **refused** submit must leave the handle live and the draft intact. |
-| C18 | **Release is explicit and idempotent.** `close()` frees the draft, may be called any number of times, and stops the store rebasing it. Dropping the handle must do the same. |
+| C17 | **Submit releases the draft.** A successful submit consumes the draft: the id reports `!is_live()`, yields no draft, and a second submit is `AlreadySubmitted`. A **refused** submit must leave the draft live and intact, under the same id. |
+| C18 | **Release is explicit, idempotent, and the only path.** `close(id)` frees the draft, may be called any number of times — including on an id that is already gone — and stops the store rebasing it. Nothing else releases a draft: a handle that is merely forgotten leaves an edit session the store goes on rebasing, on **every** platform. |
 | C19 | **Rebase is a three-way merge, and idempotent.** A field whose incoming canonical value equals its recorded ancestor must not be conflicted by a rebase, whatever its dirty state — nobody else moved it. A canonical that moves *back* to the ancestor must clear an existing conflict. Rebasing twice onto the same canonical must equal rebasing once. |
 | C20 | **A draft stashes to raw data and restores from it.** The stash carries each field's last input attempt and its ancestor, both raw; restoring reproduces every field's value, ancestor, validity — including `Invalid { raw }` — and dirtiness. It must **not** carry `sync`: a conflict names a canonical value the server may no longer hold, so it re-derives on the next rebase. It must **not** carry an async verdict: a verdict endorses a value against a server state that may have moved, so a restored checked field is unchecked, and C16 demands a fresh check while it is dirty. |
 | C21 | **Restore is a rebase.** Adopting a restored draft must conflict exactly those fields whose canonical moved while it was away, and leave the others dirty and `InSync` (C19). A resolution taken before the restore must survive it, because its effect lives in the ancestor. Adopting an entity-backed draft into a store with no canonical must orphan it (C11). A create-flow draft must never be moved (C12). |
+| C22 | **"A draft exists" and "a draft rebases" are different questions.** The store must answer both, separately. A create-flow draft (C12) and an orphan (C11) exist but do not rebase; `close` removes a draft from both counts. No single count may stand for the pair. |
 
-## Notes on four of them
+## Notes on five of them
 
 **C13 + C16 together** are what make client-side async validation trustworthy. C13 guarantees a
 surviving `Done(Ok)` was computed for the value now in the field; C16 guarantees the value in a dirty
@@ -55,11 +56,16 @@ field has a verdict at all. Neither alone is enough: without C13 a stale pass en
 never saw; without C16 the shell can simply never ask. Both were confirmed as *default* code paths on
 two independent shells before they were promoted to invariants (step-01 F1/F2, step-03, step-04).
 
-**C17 and C18** exist because handle lifetime is the one place the platforms genuinely disagree.
+**C17 and C18** exist because handle lifetime is the one place the platforms genuinely disagreed.
 Apple's ARC runs Rust `Drop` when the last Swift reference dies; Android's ART never does, so a
-dropped Kotlin handle leaks the Rust draft and the store rebases a zombie forever (step 05, H1). The
-contract therefore names an explicit release. In Rust, `close()` is a convenience that `Drop` already
-performs; in Kotlin and C# it is the *only* release path.
+dropped Kotlin handle leaks the Rust draft and the store rebases a zombie forever (step 05, H1).
+
+**C18 was amended in step 08** and now says `close` is the *only* release path. Under D16 the store
+owns its drafts and a handle is a `DraftId` — `Copy`, and not an owner. There is nothing to drop.
+Rust used to be forgiving here in exactly the way the GC platforms are not, which meant a lifecycle
+bug written against the reference implementation could only surface for the first time on Android.
+A shell may still wrap the id in a native RAII type (`ProfileDraftFfi`'s `Drop`, reached from ARC's
+`deinit`); that is the shell calling `close`, not the framework doing it for free.
 
 **C14 is not cosmetic.** Without it, a conflicted field edited to `theirs` shows a "keep mine / take
 theirs" banner whose two buttons do visibly the same thing, while the dirty marker stays lit — a
@@ -80,3 +86,12 @@ are essentially never equal. `c08_rebase_reruns_tier2_rule` had been producing a
 `email` since it was written, and passed, because it only asserted on the rule. The lesson is about
 property tests, not about rebase: **an `assume` set that is missing a precondition does not weaken the
 property — it silently asserts the bug.**
+
+**C22 was added in step 08, and it is a bug given a name.** Phase 1 wrote the store loop twice, and
+each copy grew a `live_draft_count()`: the core's meant *"how many drafts would a canonical change
+rebase"*, the FFI wrapper's meant *"how many drafts exist"*. They disagreed by one on every
+create-flow draft, and nothing could notice, because the two counts lived in two crates and no test
+compared them. Step 07 finally proved the divergence with a Swift test whose name was
+`testLiveDraftCountDisagreesWithTheCoreOnACreateFlowDraft` — a test that could only *document* the
+bug, since with two hand-written stores there was no single answer to make right. D16 deleted one of
+them. Two questions now have two names, and a shell that wants the other one has to ask for it.

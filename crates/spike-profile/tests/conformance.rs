@@ -172,14 +172,14 @@ proptest! {
 #[test]
 fn c06_failed_set_blocks_submit() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let mut handle = store.checkout();
+    let id = store.checkout();
     {
-        let mut d = handle.borrow_mut().expect("live");
+        let d = store.draft_mut(id).expect("live");
         // last valid value is "alice"; now enter invalid text
         assert!(d.try_set_username("ab".to_string()).is_err()); // too short
         assert!(matches!(d.username.validity(), Validity::Invalid { .. }));
     }
-    match store.submit(&mut handle) {
+    match store.submit(id) {
         Err(SubmitError::Validation(report)) => {
             assert!(
                 report
@@ -196,7 +196,7 @@ fn c06_failed_set_blocks_submit() {
         Some("alice")
     );
     // and the refusal did not destroy the edit session
-    assert!(handle.is_live());
+    assert!(store.is_live(id));
 }
 
 // C07 — commit succeeds iff all fields Valid, none Conflicted, no rule violations, status Live;
@@ -333,27 +333,28 @@ fn c10_stale_async_ignored() {
 #[test]
 fn c11_delete_orphans_and_submit_is_typed() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let mut handle = store.checkout();
-    store.delete_canonical();
+    let id = store.checkout();
+    assert_eq!(store.delete_canonical(), vec![id]); // the effect, returned as data
     assert_eq!(
-        handle.borrow().expect("live").status(),
+        store.draft(id).expect("live").status(),
         DraftStatus::Orphaned
     );
-    assert_eq!(store.submit(&mut handle), Err(SubmitError::Orphaned));
+    assert_eq!(store.submit(id), Err(SubmitError::Orphaned));
     assert!(store.canonical().is_none());
-    assert!(handle.is_live()); // the refusal handed the draft back
+    assert!(store.is_live(id)); // the refusal handed the draft back
 }
 
 // C12 — create-flow drafts (no base) never rebase and commit normally.
 #[test]
 fn c12_create_flow_never_rebases_and_commits() {
     let mut store: ProfileStore = Store::new(None);
-    let mut handle = store.checkout(); // create-flow, not registered for rebase
+    let id = store.checkout(); // create-flow, not registered for rebase
 
-    // someone else creates canonical; the create draft must NOT rebase
-    store.apply_canonical(base_profile());
+    // someone else creates canonical; the create draft must NOT rebase — and `apply_canonical`
+    // says so in its return value, which is the only thing an FFI shell would emit a snapshot for.
+    assert_eq!(store.apply_canonical(base_profile()), vec![]);
     {
-        let d = handle.borrow().expect("live");
+        let d = store.draft(id).expect("live");
         assert!(matches!(d.username.validity(), Validity::Unset));
         assert!(matches!(d.name.validity(), Validity::Unset));
         assert!(matches!(d.email.validity(), Validity::Unset));
@@ -363,16 +364,16 @@ fn c12_create_flow_never_rebases_and_commits() {
 
     // fill and commit normally
     {
-        let mut d = handle.borrow_mut().expect("live");
+        let d = store.draft_mut(id).expect("live");
         d.try_set_username("carol".to_string()).expect("valid");
         d.try_set_name("Carol".to_string()).expect("valid");
         d.try_set_email("carol@corp.example".to_string())
             .expect("valid");
         d.try_set_availability(Date::new(2026, 5, 1), Date::new(2026, 5, 2))
             .expect("valid");
-        pass_check(&mut d);
+        pass_check(d);
     }
-    store.submit(&mut handle).expect("create-flow submit ok");
+    store.submit(id).expect("create-flow submit ok");
     assert_eq!(
         store.canonical().map(|p| p.username.as_str()),
         Some("carol")
@@ -468,22 +469,22 @@ fn c14_editing_to_theirs_auto_converges() {
 #[test]
 fn c15_rebase_advances_base_version() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let handle = store.checkout();
+    let id = store.checkout();
     assert_eq!(store.version(), 0);
-    assert_eq!(handle.borrow().expect("live").base_version(), 0);
+    assert_eq!(store.draft(id).expect("live").base_version(), 0);
 
     store.apply_canonical(with_username("bravo"));
     assert_eq!(store.version(), 1);
-    assert_eq!(handle.borrow().expect("live").base_version(), 1);
+    assert_eq!(store.draft(id).expect("live").base_version(), 1);
 
     store.apply_canonical(with_username("charlie"));
     assert_eq!(store.version(), 2);
-    assert_eq!(handle.borrow().expect("live").base_version(), 2);
+    assert_eq!(store.draft(id).expect("live").base_version(), 2);
 
     // an orphaned draft is based on no canonical at all: its stamp stops moving
     store.delete_canonical();
     assert_eq!(store.version(), 3);
-    assert_eq!(handle.borrow().expect("live").base_version(), 2);
+    assert_eq!(store.draft(id).expect("live").base_version(), 2);
 }
 
 // C16 — an unrun async check blocks commit only while its pinned field is dirty. A clean field
@@ -538,66 +539,107 @@ fn c16_unrun_check_blocks_only_a_dirty_field() {
     assert!(reverted.validate().is_ok());
 }
 
-// C17 — a successful submit leaves the handle an inert tombstone. A refused submit does not.
+// C17 — a successful submit releases the draft: the id stops being live. A refused submit does not.
 #[test]
-fn c17_submit_tombstones_the_handle() {
+fn c17_submit_releases_the_draft() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let mut handle = store.checkout();
-    assert!(handle.is_live());
-    assert_eq!(store.live_draft_count(), 1);
+    let id = store.checkout();
+    assert!(store.is_live(id));
+    assert_eq!(store.draft_count(), 1);
 
-    store.submit(&mut handle).expect("a clean draft commits");
+    store.submit(id).expect("a clean draft commits");
 
-    assert!(!handle.is_live());
-    assert!(handle.borrow().is_none());
-    assert!(handle.borrow_mut().is_none());
-    assert_eq!(store.live_draft_count(), 0);
-    assert_eq!(
-        store.submit(&mut handle),
-        Err(SubmitError::AlreadySubmitted)
-    );
+    assert!(!store.is_live(id));
+    assert!(store.draft(id).is_none());
+    assert!(store.draft_mut(id).is_none());
+    assert_eq!(store.draft_count(), 0);
+    assert_eq!(store.submit(id), Err(SubmitError::AlreadySubmitted));
 
-    // by contrast, a REFUSED submit hands the draft straight back (F3): the edit session survives
-    let mut h2 = store.checkout();
-    h2.borrow_mut()
+    // by contrast, a REFUSED submit hands the draft straight back (F3): the edit session survives,
+    // under the same id — a shell holding it does not have to re-checkout.
+    let id2 = store.checkout();
+    store
+        .draft_mut(id2)
         .expect("live")
         .try_set_name("  ".to_string())
         .expect_err("blank name is invalid");
-    assert!(matches!(
-        store.submit(&mut h2),
-        Err(SubmitError::Validation(_))
-    ));
-    assert!(h2.is_live());
-    assert!(h2.borrow().is_some());
+    assert!(matches!(store.submit(id2), Err(SubmitError::Validation(_))));
+    assert!(store.is_live(id2));
+    assert!(store.draft(id2).is_some());
 }
 
-// C18 — close() frees the draft, is idempotent, and the store stops rebasing it. Dropping the
-// handle does the same. On Apple this is what ARC's deinit gives for free; on Android's ART the
-// GC never does it, which is why the contract has to say so (step 05, H1).
+// C18 — close() frees the draft, is idempotent, and the store stops rebasing it. Since step 08 it is
+// also the ONLY release path: a `DraftId` is not an owner, so dropping it releases nothing. Android's
+// ART never freed a draft either (step 05, H1); the contract now reads the same on every platform
+// instead of being forgiving in Rust alone.
 #[test]
 fn c18_close_frees_the_draft_and_is_idempotent() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let mut handle = store.checkout();
-    assert_eq!(store.live_draft_count(), 1);
+    let id = store.checkout();
+    assert_eq!(store.draft_count(), 1);
 
-    handle.close();
-    assert!(!handle.is_live());
-    assert!(handle.borrow().is_none());
-    assert_eq!(store.live_draft_count(), 0);
+    store.close(id);
+    assert!(!store.is_live(id));
+    assert!(store.draft(id).is_none());
+    assert_eq!(store.draft_count(), 0);
+    assert_eq!(store.rebasing_draft_count(), 0);
 
-    handle.close();
-    handle.close();
-    assert_eq!(store.live_draft_count(), 0);
+    // idempotent — and closing an id that is already gone is not an error
+    store.close(id);
+    store.close(id);
+    assert_eq!(store.draft_count(), 0);
 
     // a closed draft is not rebased, and a canonical change over it is harmless
-    store.apply_canonical(with_username("bravo"));
-    assert_eq!(store.live_draft_count(), 0);
+    assert_eq!(store.apply_canonical(with_username("bravo")), vec![]);
+    assert_eq!(store.draft_count(), 0);
 
-    // dropping a live handle frees its draft too — close() is a convenience in Rust, not a duty
-    let dropped = store.checkout();
-    assert_eq!(store.live_draft_count(), 1);
-    drop(dropped);
-    assert_eq!(store.live_draft_count(), 0);
+    // The other half of the contract, and the price of D16: nothing else releases a draft. An id is
+    // `Copy`; forgetting it leaks an edit session the store keeps rebasing forever. This assertion
+    // *is* the leak, stated on purpose — it is what a Kotlin `onCleared()` exists to prevent, and
+    // why `bolted-ffi` still owes a `Cleaner` backstop (ARCHITECTURE §9).
+    //
+    // (Writing `drop(forgotten)` here earns `dropping_copy_types`: "calls to std::mem::drop with a
+    // value that implements Copy does nothing". The lint is the proof. Scope exit says it quietly.)
+    {
+        let _forgotten = store.checkout();
+    }
+    assert_eq!(store.draft_count(), 1, "an id is not an owner");
+    assert_eq!(
+        store.rebasing_draft_count(),
+        1,
+        "and the store goes on rebasing a draft nobody can reach"
+    );
+}
+
+// C22 — the store answers two different questions about drafts, and they have different answers.
+// Until step 08 there was one `live_draft_count()` on each side of the FFI: it meant "would be
+// rebased" in the core and "exists" in the wrapper. They disagreed by one on every create-flow
+// draft, for five steps. Step 07 shipped a Swift test to *document* the divergence, because with two
+// hand-written store loops nothing could fix it. Deleting one of them did.
+#[test]
+fn c22_draft_count_and_rebasing_draft_count_are_different_questions() {
+    // a create-flow draft exists, and is not rebased (C12)
+    let mut store: ProfileStore = Store::new(None);
+    let create = store.checkout();
+    assert_eq!(store.draft_count(), 1);
+    assert_eq!(store.rebasing_draft_count(), 0);
+
+    // an entity-backed checkout is both
+    store.apply_canonical(base_profile());
+    let edit = store.checkout();
+    assert_eq!(store.draft_count(), 2);
+    assert_eq!(store.rebasing_draft_count(), 1);
+
+    // an orphan exists, and is not rebased (C11)
+    assert_eq!(store.delete_canonical(), vec![edit]);
+    assert_eq!(store.draft_count(), 2);
+    assert_eq!(store.rebasing_draft_count(), 0);
+
+    // close removes it from both
+    store.close(create);
+    store.close(edit);
+    assert_eq!(store.draft_count(), 0);
+    assert_eq!(store.rebasing_draft_count(), 0);
 }
 
 // C19 — rebase is a THREE-way merge. The store rebases every field of a draft on every canonical
@@ -606,11 +648,11 @@ fn c18_close_frees_the_draft_and_is_idempotent() {
 #[test]
 fn c19_a_field_whose_canonical_did_not_move_is_not_conflicted() {
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let handle = store.checkout();
+    let id = store.checkout();
 
     // I edit `name`.
-    handle
-        .borrow_mut()
+    store
+        .draft_mut(id)
         .expect("live")
         .try_set_name("My Name".to_string())
         .expect("valid");
@@ -618,7 +660,7 @@ fn c19_a_field_whose_canonical_did_not_move_is_not_conflicted() {
     // The server changes only `username`. Nothing else moved.
     store.apply_canonical(with_username("bravo"));
 
-    let d = handle.borrow().expect("live");
+    let d = store.draft(id).expect("live");
     assert_eq!(
         d.conflicts(),
         vec![],
@@ -753,23 +795,23 @@ fn c20_sync_is_not_stashed_and_re_derives_against_fresh_canonical() {
 fn c21_restore_conflicts_only_the_fields_whose_canonical_moved() {
     // Before the death: two dirty fields on a store at the base profile.
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let handle = store.checkout();
+    let id = store.checkout();
     let stash = {
-        let mut d = handle.borrow_mut().expect("live");
+        let d = store.draft_mut(id).expect("live");
         d.try_set_name("My Name".to_string()).expect("valid");
         d.try_set_email("mine@other.com".to_string())
             .expect("valid");
         d.stash()
     };
-    drop(handle); // the process dies; the core-side draft dies with it
+    drop(store); // the process dies; the core-side draft dies with it
 
     // After: a fresh store, seeded from the server — which moved `email` and nothing else.
     let mut server = base_profile();
     server.email = Email::try_new("server@corp.example".to_string()).expect("valid");
     let mut store: ProfileStore = Store::new(Some(server));
 
-    let handle = store.adopt(ProfileDraft::from_stash(&stash));
-    let d = handle.borrow().expect("live");
+    let id = store.restore(&stash);
+    let d = store.draft(id).expect("live");
 
     assert_eq!(
         d.conflicts(),
@@ -788,8 +830,9 @@ fn c21_restore_conflicts_only_the_fields_whose_canonical_moved() {
     assert_eq!(d.name.value().map(|v| v.as_str()), Some("My Name"));
 
     // and the draft is registered for live rebase again, stamped with the new store version
-    assert_eq!(store.live_draft_count(), 1);
-    assert_eq!(d.base_version(), store.version());
+    let base_version = d.base_version();
+    assert_eq!(store.rebasing_draft_count(), 1);
+    assert_eq!(base_version, store.version());
 }
 
 // C21 — a prior `resolve_keep_mine` survives, because its effect lives in the *ancestor* and the
@@ -815,8 +858,8 @@ fn c21_a_resolved_conflict_stays_resolved_across_restore() {
     server.name = PersonName::try_new("Their Name".to_string()).expect("valid");
     let mut store: ProfileStore = Store::new(Some(server));
 
-    let handle = store.adopt(ProfileDraft::from_stash(&d.stash()));
-    let d = handle.borrow().expect("live");
+    let id = store.restore(&d.stash());
+    let d = store.draft(id).expect("live");
     assert!(
         d.conflicts().is_empty(),
         "the user already resolved this; C19's early-out is what keeps it resolved"
@@ -834,16 +877,15 @@ fn c21_restore_into_a_deleted_canonical_orphans_the_draft() {
     d.try_set_name("My Name".to_string()).expect("valid");
 
     let mut store: ProfileStore = Store::new(None); // the server 404s
-    let handle = store.adopt(ProfileDraft::from_stash(&d.stash()));
+    let id = store.restore(&d.stash());
 
-    let d = handle.borrow().expect("live");
+    let d = store.draft(id).expect("live");
     assert_eq!(d.status(), DraftStatus::Orphaned);
-    assert_eq!(store.live_draft_count(), 0); // an orphan is not registered for rebase
     assert_eq!(d.base_version(), 3); // an orphan's stamp stops moving (C15)
-    drop(d);
 
-    let mut handle = handle;
-    assert_eq!(store.submit(&mut handle), Err(SubmitError::Orphaned));
+    assert_eq!(store.rebasing_draft_count(), 0); // an orphan is not registered for rebase
+    assert_eq!(store.draft_count(), 1); // ...but it very much exists (C22)
+    assert_eq!(store.submit(id), Err(SubmitError::Orphaned));
 }
 
 // C21 — a create-flow draft has no ancestor, so it is never moved by canonical, restored or not
@@ -855,19 +897,22 @@ fn c21_a_restored_create_flow_draft_is_never_moved() {
 
     // someone else created the entity while we were dead
     let mut store: ProfileStore = Store::new(Some(base_profile()));
-    let handle = store.adopt(ProfileDraft::from_stash(&d.stash()));
+    let id = store.restore(&d.stash());
 
-    let d = handle.borrow().expect("live");
+    let d = store.draft(id).expect("live");
     assert_eq!(d.username.value().map(|v| v.as_str()), Some("newbie"));
     assert!(d.username.base().is_none());
     assert!(d.conflicts().is_empty());
     assert_eq!(d.status(), DraftStatus::Live);
-    assert_eq!(store.live_draft_count(), 0, "create-flow never registers");
+    assert_eq!(
+        store.rebasing_draft_count(),
+        0,
+        "create-flow never registers"
+    );
 
     // ...and a canonical change still does not move it
-    drop(d);
-    store.apply_canonical(with_username("bravo"));
-    let d = handle.borrow().expect("live");
+    assert_eq!(store.apply_canonical(with_username("bravo")), vec![]);
+    let d = store.draft(id).expect("live");
     assert_eq!(d.username.value().map(|v| v.as_str()), Some("newbie"));
 }
 

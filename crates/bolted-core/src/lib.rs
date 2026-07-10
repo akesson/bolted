@@ -14,9 +14,9 @@ pub mod store;
 pub mod value;
 
 pub use constraint::Constraint;
-pub use draft::{CommitError, Draft, DraftStatus};
+pub use draft::{CommitError, Draft, DraftStatus, Stashable};
 pub use field::{Field, FieldStash, SyncState, Validity};
 pub use report::{ErrorData, RuleViolation, ValidationReport};
 pub use single_flight::{CheckState, CheckToken, SingleFlight};
-pub use store::{DraftHandle, Store, StoreDraft, SubmitError};
+pub use store::{DraftId, Store, StoreDraft, SubmitError};
 pub use value::Value;
