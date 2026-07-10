@@ -25,8 +25,8 @@ work around them.
 | 09 | bolted-macros | 3 — Extraction | **done** — [plan](steps/step-09-bolted-macros.md) · [report](steps/step-09-report.md); `value`/`entity`/`rules` ship, two **generated** features pass the suite unmodified, `feature_model` **cut** (D21) |
 | 10 | bolted-ffi + a generated FFI layer | 3 — Extraction | **done** — [plan](steps/step-10-bolted-ffi.md) · [report](steps/step-10-report.md); the FFI layer **generates** and runs from Swift (D22–D25). A macro could never have done it: bindgen reads source text. **Deliverable 10 (repoint the shells) deferred to 11** |
 | 11 | Migrate the shells onto the generated FFI | 3 — Extraction | **done** — [plan](steps/step-11-migrate-shells.md) · [report](steps/step-11-report.md); all four shells link `gen-profile-ffi`, `pack:*` repointed, spike kept as reference. D23 controls planted-and-watched on both platforms. Hardware "after": **0.0432 ms p50** per keystroke on the Pixel 8a (~23× under KC5); `test:apple:ui` 9/9 on generated |
-| 12 | FFI hardening | 3 — Extraction | **ready** — [plan](steps/step-12-ffi-hardening.md); design pass done: **D26** (no `Cleaner`; leak-freedom as a contract test) and **D27** (versioned stash envelope), ARCHITECTURE **v1.5**. Contract-test generation split to step 13 |
-| 13 | Per-language contract tests from the C-IDs | 3 — Extraction | pending — split out of 12; needs generated typed field accessors (step 08, friction 1) and step 12's answer on emitting foreign-language source |
+| 12 | FFI hardening | 3 — Extraction | **done** — [report](steps/step-12-report.md); D23 fix (3-layer planted-red), leak-freedom pinned (D26), **D27** envelope + **C23**, l10n coverage (Swift's first), name-collision tripwire. Codec deletion **converted** (needs step 13's foreign emitter); 5 upstream drafts. No kill criteria hit |
+| 13 | Per-language contract tests from the C-IDs | 3 — Extraction | pending — split out of 12; **must build the foreign-language emitter** (step 12 found `bolted-ffi-gen` emits only Rust, and BoltFFI's DTO wire ser/de is `internal`). Also owns the codec emitter M4 converted. Needs typed field accessors (step 08, friction 1) |
 | 14 | C# port + generator | 3 — Extraction | pending |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
 | 15+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
@@ -189,25 +189,27 @@ reference the generated code is diffed against.
   which generalizes past codegen: **a test that forbids something can be forbidding nothing** —
   `golden.rs`'s needles were written against `quote`'s token spacing and matched no line of a
   `prettyplease`-formatted file, green and vacuous. Pin a forbidding test from both sides.
-- **Step 12 — FFI hardening.** Split out of step 11, then split again: the old sketch bundled the
-  hardening with the contract-test generator, which is its own step (13). The design pass is **done**
-  (ARCHITECTURE **v1.5**): **D26** declines the `Cleaner` backstop — leak-freedom becomes a
-  per-language contract test over C22's live-draft count, `close()` in `onCleared()` a tested rule,
-  and the use-after-`close()` UB stays an upstream filing; **D27** makes the stash a versioned,
-  parse-don't-validate envelope — the schema version moves from `StashCodec.kt`'s hand-written gate
-  into the generated stash DTO before that file is deleted, wholesale refusal is typed and happens
-  only at the parse gate, per-field degradation stands, and constraint tightening becomes a Phase-4
-  `bolted-check` build error. The step also fixes a **D23 conformance bug step 11's controls found**
-  (the generated check driver consults the checker slot before the draft, so a dead draft with no
-  checker answers `Ok(false)` instead of refusing), deletes the hand-written codec on whichever
-  branch M0's passthrough probe picks, lands the ergonomics batch (checker lambda helper, `Sendable`
-  extensions, a name-collision *refusal*, declaration-driven l10n key coverage on **both** shells),
-  encodes the Compose parameter-passing rule, and drafts — not files — the three upstream bugs.
-  *Detailed step doc exists.*
+- **Step 12 — FFI hardening. Done** ([report](steps/step-12-report.md); ARCHITECTURE **v1.5**). The
+  **D23 bug step 11's controls found** is fixed (the check driver resolves draft liveness before the
+  no-checker short-circuit) and watched red on three layers. **D26** leak-freedom is a per-language
+  contract test that bites (removing `onCleared()`'s `close()` fails it). **D27** shipped as a
+  versioned, parse-don't-validate envelope: the schema version rides the generated DTO, `accept_stash`
+  is a typed gate returning a `StashAcceptedFfi` token, `restore` takes only the token — a shape forced
+  by BoltFFI being unable to return a class handle from a throwing method, and *stronger* for it.
+  **C23** pins the degradation claim. Swift got its **first l10n coverage test** (drive-the-core, not a
+  declared-key list — rule keys live in impl bodies, so a declared list cannot be complete). Four
+  places the doc mispriced the FFI seam are recorded in the report: **codec deletion converted** (a
+  Kotlin emitter is step 13's charter, not an M4 chore), and the ergonomics helpers (6a checker lambda,
+  6b Sendable) funnel to the same "`bolted-ffi-gen` emits only Rust" root. Five upstream drafts written
+  (not filed). No `dist/` patched; no kill criteria hit. The Fable-plans/Opus-implements split earned
+  its keep here — a planner's optimism about the seam is what the implementer caught.
 - **Step 13 — per-language contract tests from the C-IDs.** A new generator target: test code emitted
-  in Swift and Kotlin, plus the generated typed field accessors it needs (step 08, friction 1). Split
-  from 12 because it is a full session; step 12's M0 answers whether foreign-language emission can
-  lean on any upstream passthrough or is entirely ours.
+  in Swift and Kotlin, plus the generated typed field accessors it needs (step 08, friction 1). Step
+  12 answered its foundational question — foreign-language emission is **entirely ours** (BoltFFI 0.27.3
+  has no passthrough, and its DTO wire ser/de is `internal`), so step 13 must **stand up the
+  foreign-language emitter** and resolve its infra (where generated Kotlin/Swift lives, how it builds,
+  how it drift-checks). It also inherits the **codec emitter** M4 converted (`step-12-m4-codec.md`) and
+  the `StashAcceptedFfi`/`StashRefusedFfi` surface D27 added. See `steps/step-12-report.md` handoff.
 - **Step 14 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
   not optional here, WinUI binding shape), then the generator template.
 

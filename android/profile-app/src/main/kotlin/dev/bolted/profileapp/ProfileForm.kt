@@ -35,6 +35,18 @@ import com.example.gen_profile_ffi.CheckStateFfi
  *
  * Error *sentences* likewise: `vm.inlineError(field)` renders `ErrorData` through
  * [Localization]; the numbers inside them are params the core supplied.
+ *
+ * ## The one rule a Compose author here must not break (step 07 friction 1; step 12 M6)
+ *
+ * **A composable reads core state as a parameter or through `collectAsStateWithLifecycle` — never by
+ * calling a ViewModel method that reads state.** Compose only observes `State` reads that happen
+ * *during composition*; a `vm.conflict(field)` that reaches into a `StateFlow` behind Compose's back
+ * is invisible to it, and with strong skipping (default since Kotlin 2.x) an unchanged row is skipped
+ * outright — so a conflict banner would simply never appear. That is why every state-reading helper
+ * below takes the `snapshot` it reads (`vm.inlineError(field, snapshot)`), threaded from the single
+ * `collectAsStateWithLifecycle` at the top of [ProfileForm]. `vm.maxLength`/`vm.isRequired` need no
+ * snapshot: constraints are static metadata, not state. This rule is a `bolted-check` lint candidate
+ * for Phase 4 (see the step-12 report) — until then it lives here, where it is written and obeyed.
  */
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
