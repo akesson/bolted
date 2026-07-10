@@ -40,6 +40,11 @@ public final class ProfileViewModel {
     private let makeChecker: () -> any UniquenessChecker
     private let debounce: Duration
     private var focused: ProfileFieldId?
+    /// Has the user typed into the focused control since the core last wrote its buffer? This — not
+    /// `dirty` — is what §6's echo rule protects: typing `"  alice  "` over the base value `"alice"`
+    /// leaves the field CLEAN (the core trims, so the value never moved) while the buffer holds live
+    /// keystrokes. Repainting it would eat the spaces and jump the caret.
+    private var focusedTouched = false
     private var draftTask: Task<Void, Never>?
     private var canonicalTask: Task<Void, Never>?
     private var checkTask: Task<Void, Never>?
@@ -83,17 +88,30 @@ public final class ProfileViewModel {
 
     // ---- editing (the echo rule) ------------------------------------------------------------
 
-    public func focus(_ field: ProfileFieldId) { focused = field }
+    public func focus(_ field: ProfileFieldId) {
+        focused = field
+        focusedTouched = false
+    }
 
     /// On blur the field is no longer owned by the native control, so its buffer refreshes to the
     /// core's sanitized value (or the retained `Invalid.raw`).
     public func blur(_ field: ProfileFieldId) {
-        if focused == field { focused = nil }
+        if focused == field {
+            focused = nil
+            focusedTouched = false
+        }
         syncBuffers(from: snapshot)
+    }
+
+    /// Record a keystroke against the focused control. Only the focused buffer is ever protected,
+    /// so one flag suffices.
+    private func touch(_ field: ProfileFieldId) {
+        if focused == field { focusedTouched = true }
     }
 
     public func editUsername() {
         guard draft.isLive() else { return }
+        touch(.username)
         try? draft.trySetUsername(raw: usernameText) // per-keystroke try_set — the bet, exercised
         reconcile(draft.snapshot())                  // self-update; the focused buffer is untouched
         scheduleCheck()
@@ -101,18 +119,21 @@ public final class ProfileViewModel {
 
     public func editName() {
         guard draft.isLive() else { return }
+        touch(.name)
         try? draft.trySetName(raw: nameText)
         reconcile(draft.snapshot())
     }
 
     public func editEmail() {
         guard draft.isLive() else { return }
+        touch(.email)
         try? draft.trySetEmail(raw: emailText)
         reconcile(draft.snapshot())
     }
 
     public func editAvailability() {
         guard draft.isLive() else { return }
+        touch(.availability)
         try? draft.trySetAvailability(start: startDate, end: endDate)
         reconcile(draft.snapshot())
     }
@@ -302,33 +323,33 @@ public final class ProfileViewModel {
         d.setUniquenessChecker(checker: makeChecker())
         draft = d
         focused = nil
+        focusedTouched = false
         subscribeDraft(d)
         let snap = d.snapshot()
         snapshot = snap
         syncBuffers(from: snap)
     }
 
-    /// Refresh editing buffers from a snapshot, skipping the focused field (echo rule) unless
-    /// `force` names it (a value moved from outside a keystroke, e.g. a resolution).
+    /// Refresh editing buffers from a snapshot.
+    ///
+    /// The echo rule (§6): the native control owns its text while focused **and typed into**. A
+    /// focused control the user never touched holds nothing worth protecting, so a rebase repaints
+    /// it at once (D9). `force` names a field whose value moved from outside a keystroke (a
+    /// resolution): refresh it regardless.
     private func syncBuffers(from snap: ProfileSnapshot, force: ProfileFieldId? = nil) {
-        setBuffer(.username, Self.display(snap.username.validity), force: force)
-        setBuffer(.name, Self.display(snap.name.validity), force: force)
-        setBuffer(.email, Self.display(snap.email.validity), force: force)
-        if force == .availability || focused != .availability {
+        let keepFocused = focusedTouched && force != focused
+        func keep(_ field: ProfileFieldId) -> Bool { focused == field && keepFocused }
+
+        if !keep(.username) { usernameText = Self.display(snap.username.validity) }
+        if !keep(.name) { nameText = Self.display(snap.name.validity) }
+        if !keep(.email) { emailText = Self.display(snap.email.validity) }
+        if !keep(.availability) {
             let (start, end) = Self.dateRange(snap.availability.validity, seed: seed)
             startDate = start
             endDate = end
         }
-    }
-
-    private func setBuffer(_ field: ProfileFieldId, _ value: String, force: ProfileFieldId?) {
-        if focused == field && force != field { return }
-        switch field {
-        case .username: usernameText = value
-        case .name: nameText = value
-        case .email: emailText = value
-        case .availability: break
-        }
+        // Whatever we just wrote is exactly what the core would render: pristine again.
+        if !keepFocused { focusedTouched = false }
     }
 
     private func currentCanonicalValues() -> ProfileValues? {

@@ -82,6 +82,10 @@ class ErrorProbe {
     @Test
     fun aTier2RuleViolationCrossesWithItsPinsAndParams() {
         draft.trySetUsername("corp_alice")
+        // C16: a dirty username with an unrun check is itself a rule violation, so without this the
+        // report would carry two and the tier-2 rule under test would not be `single()`.
+        draft.setUniquenessChecker(uniqueChecker())
+        draft.runUsernameCheck()
         try {
             draft.submit()
             fail("expected SubmitErrorFfi.Validation carrying a rule violation")

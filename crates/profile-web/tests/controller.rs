@@ -570,3 +570,24 @@ fn a_pending_check_blocks_submit() {
         ErrorData::new("username_check_pending")
     );
 }
+
+/// The reason D9's predicate is **touched**, not `dirty`.
+///
+/// The user types trailing spaces over the base value. The core trims them, so the value never
+/// moved and the field is *clean* — while the buffer holds live keystrokes. Had `refresh_buffers`
+/// keyed on `is_dirty()`, an unrelated server change would repaint this field, eat the spaces and
+/// jump the caret. `dirty` and `touched` agree everywhere except here, and here `dirty` is wrong.
+#[test]
+fn echo_rule_a_focused_field_that_sanitizes_back_to_base_still_keeps_its_text() {
+    let mut c = controller();
+    c.focus(Username);
+    c.edit_username("  alice  ".to_string()); // trims to "alice" == base -> valid, NOT dirty
+    assert!(!c.is_dirty(Username));
+
+    c.sim_set_name("Server Name"); // an unrelated field changed on the server
+    assert_eq!(c.username_buf(), "  alice  ", "the caret must not move");
+
+    // ...and blur still hands ownership back to the core.
+    c.blur(Username);
+    assert_eq!(c.username_buf(), "alice");
+}

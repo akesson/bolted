@@ -5,6 +5,8 @@ import com.example.spike_profile_ffi.PlainDate
 import com.example.spike_profile_ffi.PlainDateRange
 import com.example.spike_profile_ffi.ProfileStoreFfi
 import com.example.spike_profile_ffi.ProfileValues
+import com.example.spike_profile_ffi.UniquenessChecker
+import com.example.spike_profile_ffi.UniquenessVerdictFfi
 
 /**
  * Shared fixture + the measurement channel.
@@ -38,6 +40,17 @@ val SEED: ProfileValues =
 
 /** A store with canonical already applied, so checked-out drafts rebase like a real one. */
 fun seededStore(): ProfileStoreFfi = ProfileStoreFfi.new().also { it.applyCanonical(SEED) }
+
+/**
+ * A checker that approves everything. Since C16, a *dirty* username with an unrun check blocks
+ * submit, so any probe that edits the username and then submits must run a check first — exactly as
+ * a real shell must. Generated as a plain `interface`, not a `fun interface`, so no SAM conversion
+ * (step-05 friction 5).
+ */
+fun uniqueChecker(): UniquenessChecker =
+    object : UniquenessChecker {
+        override fun checkUnique(username: String): UniquenessVerdictFfi = UniquenessVerdictFfi.UNIQUE
+    }
 
 /** Sorted elapsed nanos for [iterations] calls of [body], after [warmup] untimed calls (ART JIT). */
 fun timeSorted(iterations: Int, warmup: Int, body: (Int) -> Unit): LongArray {

@@ -94,6 +94,14 @@ pub struct ProfileController {
     handle: ProfileHandle,
     seed: Profile,
     focused: Option<ProfileField>,
+    /// Has the user typed into the focused field since the core last wrote its buffer?
+    ///
+    /// This is what §6's echo rule actually protects. `is_dirty()` is *not* a substitute: a user
+    /// typing `"  alice  "` over the base value `"alice"` produces a **clean** field (the core trims,
+    /// so the value never moved) whose buffer nonetheless holds live keystrokes. Repainting it would
+    /// eat the spaces and move the caret. Shell-local presentation state about a text control —
+    /// not the core-side `touched` flag ARCHITECTURE §8 rejected.
+    focused_touched: bool,
     username_buf: String,
     name_buf: String,
     email_buf: String,
@@ -120,6 +128,7 @@ impl ProfileController {
             handle,
             seed,
             focused: None,
+            focused_touched: false,
             username_buf: String::new(),
             name_buf: String::new(),
             email_buf: String::new(),
@@ -267,6 +276,7 @@ impl ProfileController {
 
     pub fn focus(&mut self, field: ProfileField) {
         self.focused = Some(field);
+        self.focused_touched = false;
     }
 
     /// On blur the field is no longer owned by the control, so its buffer refreshes to the
@@ -274,8 +284,17 @@ impl ProfileController {
     pub fn blur(&mut self, field: ProfileField) {
         if self.focused == Some(field) {
             self.focused = None;
+            self.focused_touched = false;
         }
         self.refresh_buffers(None);
+    }
+
+    /// Record a keystroke against the focused control. Only the focused field's buffer is ever
+    /// protected, so one flag suffices.
+    fn touch(&mut self, field: ProfileField) {
+        if self.focused == Some(field) {
+            self.focused_touched = true;
+        }
     }
 
     /// Per-keystroke `try_set` — the bet, exercised. The buffer keeps the user's exact text;
@@ -283,6 +302,7 @@ impl ProfileController {
     /// Returns the debounce ticket for this edit (see [`Self::fire_check_if_current`]).
     pub fn edit_username(&mut self, text: String) -> u64 {
         self.username_buf = text;
+        self.touch(ProfileField::Username);
         let raw = self.username_buf.clone();
         self.edit(|d| {
             let _ = d.try_set_username(raw);
@@ -293,6 +313,7 @@ impl ProfileController {
 
     pub fn edit_name(&mut self, text: String) {
         self.name_buf = text;
+        self.touch(ProfileField::Name);
         let raw = self.name_buf.clone();
         self.edit(|d| {
             let _ = d.try_set_name(raw);
@@ -301,6 +322,7 @@ impl ProfileController {
 
     pub fn edit_email(&mut self, text: String) {
         self.email_buf = text;
+        self.touch(ProfileField::Email);
         let raw = self.email_buf.clone();
         self.edit(|d| {
             let _ = d.try_set_email(raw);
@@ -309,11 +331,13 @@ impl ProfileController {
 
     pub fn edit_start(&mut self, text: String) {
         self.start_buf = text;
+        self.touch(ProfileField::Availability);
         self.try_set_dates();
     }
 
     pub fn edit_end(&mut self, text: String) {
         self.end_buf = text;
+        self.touch(ProfileField::Availability);
         self.try_set_dates();
     }
 
@@ -451,47 +475,46 @@ impl ProfileController {
 
     /// Refresh editing buffers from the core.
     ///
-    /// The echo rule (§6): the native control owns its text while focused **and dirty**. A focused
-    /// field the user has actually typed into keeps its buffer, so core sanitization can never move
-    /// the caret. A focused *clean* field holds nothing the user typed, so it adopts a rebase
-    /// immediately — before the freeze it stayed stale until blur, and the running app showed the
-    /// canonical pane and the focused field disagreeing with nothing to explain it (step-04).
+    /// The echo rule (§6): the native control owns its text while focused **and typed into**. A
+    /// focused field holding live keystrokes keeps its buffer, so core sanitization can never move
+    /// the caret. A focused field the user never touched holds nothing worth protecting, so it
+    /// adopts a rebase immediately — before the freeze it stayed stale until blur, and the running
+    /// app showed the canonical pane and the focused field disagreeing with nothing on screen to
+    /// explain it (step-04).
     ///
     /// `force` names a field whose value moved from outside a keystroke (a resolution): refresh it
-    /// regardless.
+    /// regardless, and the control is no longer holding anything of the user's.
     fn refresh_buffers(&mut self, force: Option<ProfileField>) {
-        let Some((username, name, email, dates, dirty)) = self.handle.borrow().map(|d| {
+        let Some((username, name, email, dates)) = self.handle.borrow().map(|d| {
             (
                 display(&d.username, |v| v.as_str().to_string()),
                 display(&d.name, |v| v.as_str().to_string()),
                 display(&d.email, |v| v.as_str().to_string()),
                 date_bufs(&d.availability, &self.seed.availability),
-                [
-                    ProfileField::Username,
-                    ProfileField::Name,
-                    ProfileField::Email,
-                    ProfileField::Availability,
-                ]
-                .map(|f| dirty_of(&d, f)),
             )
         }) else {
             return; // a tombstoned handle has no state to show
         };
 
-        let keep = |field: ProfileField, i: usize| {
-            self.focused == Some(field) && dirty[i] && force != Some(field)
-        };
-        if !keep(ProfileField::Username, 0) {
+        // Only the focused field can be protected, and only while it holds the user's keystrokes.
+        let keep_focused = self.focused_touched && force != self.focused;
+        let keep = |field: ProfileField| self.focused == Some(field) && keep_focused;
+
+        if !keep(ProfileField::Username) {
             self.username_buf = username;
         }
-        if !keep(ProfileField::Name, 1) {
+        if !keep(ProfileField::Name) {
             self.name_buf = name;
         }
-        if !keep(ProfileField::Email, 2) {
+        if !keep(ProfileField::Email) {
             self.email_buf = email;
         }
-        if !keep(ProfileField::Availability, 3) {
+        if !keep(ProfileField::Availability) {
             (self.start_buf, self.end_buf) = dates;
+        }
+        if !keep_focused {
+            // Whatever we just wrote is exactly what the core would render: pristine again.
+            self.focused_touched = false;
         }
     }
 }

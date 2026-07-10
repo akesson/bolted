@@ -97,30 +97,46 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isDirty(.name))
     }
 
-    /// ARCHITECTURE §9 — focused-but-untouched field during rebase. A CLEAN field that is *focused*
-    /// when a rebase arrives adopts theirs at the snapshot level immediately, but keeps its visible
-    /// buffer until blur (the echo rule owns the focused control's text). Pins the CURRENT behaviour
-    /// as a regression guard; whether stale-until-blur is the desired UX stays a §9 question for the
-    /// freeze. (The end-to-end UI suite cannot drive this case — real clicks can't order focus/blur
-    /// against the async rebase snapshot — so it is verified here, deterministically, instead.)
-    func testLiveRebaseFocusedCleanFieldStaleUntilBlur() async throws {
+    /// **D9 (was an ARCHITECTURE §9 question).** A focused field the user never typed into adopts a
+    /// rebase live: the control owns its text only while focused AND touched. Before the freeze this
+    /// field stayed stale until blur, and the running app showed the canonical pane and the focused
+    /// field disagreeing with nothing on screen to explain it.
+    ///
+    /// (The end-to-end UI suite cannot drive this case — real clicks can't order focus/blur against
+    /// the async rebase snapshot — so it is verified here, deterministically, instead.)
+    func testLiveRebaseFocusedCleanFieldAdoptsLive() async throws {
         let vm = try makeVM()
-        vm.focus(.name) // focus, do not edit — clean
+        vm.focus(.name) // focus, do not edit — untouched
         vm.applyServerChange(.name("Server Name"))
-        await eventually {
-            if case .valid(let v) = vm.snapshot.name.validity { return v == "Server Name" }
-            return false
-        }
-        // The snapshot adopts theirs immediately, and the field stays clean...
+        await eventually { vm.nameText == "Server Name" }
+
         guard case .valid(let adopted) = vm.snapshot.name.validity else {
             return XCTFail("focused clean field should adopt theirs at the snapshot level")
         }
         XCTAssertEqual(adopted, "Server Name")
         XCTAssertFalse(vm.isDirty(.name))
-        // ...but the focused buffer stays stale until blur.
-        XCTAssertEqual(vm.nameText, "Alice Smith", "focused buffer must not repaint mid-rebase")
+        XCTAssertEqual(vm.nameText, "Server Name", "an untouched focused buffer repaints at once")
+    }
+
+    /// ...and the protection the echo rule *does* give. `dirty` would be the wrong predicate here:
+    /// the core trims `"  Alice Smith  "` back to the base value, so the field is CLEAN while the
+    /// buffer holds live keystrokes. Repainting it would eat the spaces and jump the caret.
+    func testEchoRuleFocusedFieldThatSanitizesBackToBaseKeepsItsText() async throws {
+        let vm = try makeVM()
+        vm.focus(.name)
+        vm.nameText = "  Alice Smith  "
+        vm.editName()
+        XCTAssertFalse(vm.isDirty(.name), "trimmed back to the base value")
+
+        vm.applyServerChange(.email("team@corp.example")) // an unrelated field moved
+        await eventually {
+            if case .valid(let v) = vm.snapshot.email.validity { return v == "team@corp.example" }
+            return false
+        }
+        XCTAssertEqual(vm.nameText, "  Alice Smith  ", "the caret must not move")
+
         vm.blur(.name)
-        XCTAssertEqual(vm.nameText, "Server Name", "on blur the adopted value becomes visible")
+        XCTAssertEqual(vm.nameText, "Alice Smith", "blur hands ownership back to the core")
     }
 
     /// A canonical change to a DIRTY field conflicts, preserving yours and exposing theirs.

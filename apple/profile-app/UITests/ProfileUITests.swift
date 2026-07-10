@@ -74,9 +74,9 @@ final class ProfileUITests: XCTestCase {
         expectValue(name, equals: "Server Name", timeout: 3, "take-theirs adopts their value")
     }
 
-    // MARK: item 4 — F6: a conflicted field edited to EQUAL theirs stays conflicted
+    // MARK: item 4 — C14: a conflicted field edited to EQUAL theirs auto-converges
 
-    func test4_F6_editToEqualTheirs_staysConflicted() {
+    func test4_C14_editToEqualTheirs_autoConverges() {
         let user = app.textFields["field-username"]
         edit(user, to: "xyz")
         app.textFields["field-name"].click() // blur → dirty
@@ -89,9 +89,12 @@ final class ProfileUITests: XCTestCase {
         edit(user, to: "server_user")
         app.textFields["field-name"].click() // blur
 
-        // F6: try_set touches only validity, never sync — so the conflict must persist.
-        XCTAssertTrue(app.staticTexts["conflict-theirs-username"].exists,
-                      "F6: conflict must persist even when the field is edited to equal theirs")
+        // C14 (was F6): two edits that agree are not a conflict, whichever arrived first. Before the
+        // freeze the banner stayed, with "Keep mine" and "Take theirs" doing visibly the same thing.
+        XCTAssertFalse(app.staticTexts["conflict-theirs-username"].exists,
+                       "C14: editing to theirs must clear the conflict banner")
+        XCTAssertFalse(app.staticTexts["dirty-username"].exists,
+                       "C14: and the field lands clean")
     }
 
     // MARK: item 5 — async uniqueness check: taken → error, valid → clean; spinner best-effort

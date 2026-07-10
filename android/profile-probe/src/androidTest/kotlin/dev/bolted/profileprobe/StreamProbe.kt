@@ -140,23 +140,21 @@ class StreamProbe {
     }
 
     /**
-     * **Finding (structural — recorded, not fixed).** A draft snapshot's `version` is the draft's
-     * `base_version`, and `ProfileDraft::rebase(&mut self, entity)` takes no version and never
-     * updates it. It is therefore **frozen at checkout for the draft's whole life**: it advances
-     * neither on an edit nor on a rebase.
+     * **C15 — the draft's version stamp tracks its rebase.** This probe found the bug in step 05 and
+     * now guards the fix.
      *
-     * That makes it worse than merely static. After canonical moves to v2 and the draft rebases onto
-     * it, the draft still *reports* v1 — a stale stamp. A consumer reconciling `snapshot()` against
-     * the first streamed event (step-02's mitigation for the future-only subscribe race) would
-     * conclude it is current with v1 when it is actually based on v2.
+     * Then: a draft snapshot's `version` was its `base_version`, written once by `from_canonical`
+     * and never again, because `ProfileDraft::rebase` took no version. After canonical moved to v2
+     * and the draft rebased onto it, the draft still *reported* v1 — a stale stamp. So step-02's
+     * version-guarded reconcile (the mitigation for the future-only subscribe race) could never fire
+     * on a draft stream; it silently worked on the entity stream only, where the store stamps the
+     * live version.
      *
-     * The store's canonical stream is unaffected: `canonical_snapshot` stamps the live store version.
-     * So the mitigation works for `observe`-ing the entity and not for `observe`-ing a draft.
-     *
-     * Current state stays recoverable via `snapshot()`, so this is a contract gap, not a kill.
+     * Now: `StoreDraft::rebase(entity, version)` records the canonical the draft is actually based
+     * on. An *edit* still must not bump it — an edit does not move the draft onto a new canonical.
      */
     @Test
-    fun theDraftVersionStampIsFrozenAtCheckoutWhileTheStoreVersionAdvances() {
+    fun theDraftVersionStampAdvancesWithTheRebaseButNotWithAnEdit() {
         val draftAtCheckout = draft.snapshot().version
         val storeAtCheckout = store.canonical()!!.version
 
@@ -182,9 +180,9 @@ class StreamProbe {
 
         assertTrue("the store's version stamp advances", storeAfterCanonical > storeAtCheckout)
         assertEquals(
-            "the draft rebased onto the new canonical yet still reports its checkout version — " +
-                "a STALE stamp, so version-based reconcile cannot work on a draft stream",
-            draftAtCheckout,
+            "the draft rebased onto the new canonical, so its stamp must name that canonical — " +
+                "otherwise version-based reconcile cannot work on a draft stream",
+            storeAfterCanonical,
             draftAfterCanonical,
         )
     }
