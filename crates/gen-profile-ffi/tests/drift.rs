@@ -55,3 +55,18 @@ fn the_committed_kotlin_contract_suite_matches_the_declaration() {
         panic!("{e}");
     }
 }
+
+/// D28: the committed Swift contract suite is exactly what the declaration generates. Byte equality;
+/// the values-only `ProfileConformanceFixture.swift` beside it is hand-written and not drift-checked.
+#[test]
+fn the_committed_swift_contract_suite_matches_the_declaration() {
+    let source = include_str!("../../gen-profile/src/lib.rs");
+    let committed = include_str!(
+        "../../../apple/profile-probe/Tests/ProfileProbeTests/Generated/ProfileConformanceSuite.swift"
+    );
+    if let Err(e) =
+        bolted_ffi_gen::check_swift_contract_suite_drift(source, "GenProfileFfi", committed)
+    {
+        panic!("{e}");
+    }
+}

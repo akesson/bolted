@@ -46,6 +46,12 @@ cargo run -q -p bolted-ffi-gen --bin gen-kotlin-suite -- \
   "com.example.gen_profile_ffi" \
   "dev.bolted.profileprobe.generated" \
   "android/profile-probe/src/androidTest/kotlin/dev/bolted/profileprobe/generated/ProfileConformanceSuite.kt"
+# The Swift contract suite (D28, step 13) — same map, one language out. Run on the simulator/macOS by
+# `test:apple`. `@testable import GenProfileFfi` is the Swift binding module.
+cargo run -q -p bolted-ffi-gen --bin gen-swift-suite -- \
+  "crates/gen-profile/src/lib.rs" \
+  "GenProfileFfi" \
+  "apple/profile-probe/Tests/ProfileProbeTests/Generated/ProfileConformanceSuite.swift"
 echo
 echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
 """

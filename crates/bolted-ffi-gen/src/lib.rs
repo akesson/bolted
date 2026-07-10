@@ -322,6 +322,25 @@ pub fn check_kotlin_contract_suite_drift(
     kotlin_drift("Kotlin contract suite", committed, &generated)
 }
 
+/// Emit the Swift per-language contract suite (D28) — the same C-IDs, one language out (deliverable 5).
+///
+/// `binding_module` is the Swift module BoltFFI generates the bindings into (`GenProfileFfi`).
+pub fn swift_contract_suite(source: &str, binding_module: &str) -> syn::Result<String> {
+    let file = syn::parse_file(source)?;
+    let feature = Feature::from_file(&file)?;
+    Ok(foreign::emit_swift_contract_suite(&feature, binding_module))
+}
+
+/// The drift check for the committed Swift contract suite (D28), run inside `mise run check`.
+pub fn check_swift_contract_suite_drift(
+    source: &str,
+    binding_module: &str,
+    committed: &str,
+) -> Result<(), String> {
+    let generated = swift_contract_suite(source, binding_module).map_err(|e| e.to_string())?;
+    kotlin_drift("Swift contract suite", committed, &generated)
+}
+
 /// **Byte** equality, not code equality: nothing formats a foreign generated file (rustfmt is why
 /// `check_drift` had to compare code, not bytes — there is no such formatter here), so the committed
 /// bytes must be exactly what the emitter writes. If an `.editorconfig`/ktlint hook ever rewrites the
