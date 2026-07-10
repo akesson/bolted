@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/bolted-core",
+    "crates/bolted-decl",
     "crates/bolted-macros",
     "crates/bolted-conformance",
     "crates/spike-profile",

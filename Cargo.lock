@@ -147,9 +147,19 @@ name = "bolted-core"
 version = "0.0.0"
 
 [[package]]
+name = "bolted-decl"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "bolted-macros"
 version = "0.0.0"
 dependencies = [
+ "bolted-decl",
  "prettyplease",
  "proc-macro2",
  "quote",

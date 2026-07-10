@@ -8,6 +8,7 @@ publish.workspace = true
 proc-macro = true
 
 [dependencies]
+bolted-decl = { path = "../bolted-decl" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing"] }

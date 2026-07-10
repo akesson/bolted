@@ -1,5 +1,7 @@
 //! `#[bolted_macros::entity]` — the entity, and the draft that edits one.
 //!
+//! Since step 10 the declaration is parsed by `bolted-decl` (D25); this file is emission only.
+//!
 //! Read the emitted code as a table, not as a program. Every block below is one line per declared
 //! field, and the line is always the same line. Where a judgement has to be made — is this field's
 //! input an error? may this draft commit? does an unrun check block? — the emitted code calls a
@@ -16,61 +18,38 @@
 //!   compiler reads it: `try_set_name` cannot touch `username`, so it is not guarded, and does not
 //!   clone a `Username` on every keystroke of the name box (see `setters`).
 
-use crate::expand::{suffixed, take_attrs, upper_camel};
+use bolted_decl::EntityDecl;
+use bolted_decl::naming::suffixed;
+use bolted_decl::{Check, EntityField};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::spanned::Spanned;
-use syn::{Fields, Ident, ItemStruct, LitStr, Type, Visibility, parse2};
-
-/// A declared field, plus the async check pinned to it (if any).
-struct EntityField {
-    ident: Ident,
-    ty: Type,
-    /// `username` → `Username`, the field-id variant.
-    variant: Ident,
-    check: Option<Check>,
-}
-
-/// `#[check(rule = "…", pending_key = "…", required_key = "…")]`
-struct Check {
-    /// The stable rule name a violation reports under.
-    rule: String,
-    /// `username_unique` → `UsernameUnique`, the `CheckId` variant.
-    variant: Ident,
-    /// The private `SingleFlight` field on the draft.
-    slot: Ident,
-    pending_key: String,
-    required_key: String,
-}
+use syn::{Ident, ItemStruct, Visibility};
 
 pub(crate) fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
-    let has_rules = parse_entity_attr(attr)?;
-    let mut item: ItemStruct = parse2(item)?;
-    let fields = parse_fields(&mut item)?;
+    let decl = EntityDecl::parse(attr, item)?;
+    let (entity, vis, fields) = (&decl.name, &decl.vis, &decl.fields);
 
-    let entity = item.ident.clone();
-    let vis = item.vis.clone();
-    let field_id = suffixed(&entity, "Field");
-    let check_id = suffixed(&entity, "Check");
-    let draft = suffixed(&entity, "Draft");
-    let stash = suffixed(&entity, "Stash");
-    let store = suffixed(&entity, "Store");
-    let rule_set = suffixed(&entity, "Rules");
+    let field_id = suffixed(entity, "Field");
+    let check_id = suffixed(entity, "Check");
+    let draft = suffixed(entity, "Draft");
+    let stash = suffixed(entity, "Stash");
+    let store = suffixed(entity, "Store");
+    let rule_set = suffixed(entity, "Rules");
 
-    let checks: Vec<&Check> = fields.iter().filter_map(|f| f.check.as_ref()).collect();
+    let checks = decl.checks();
 
-    let entity_decl = entity_decl(&item, &fields);
-    let field_enum = field_enum(&vis, &field_id, &fields);
-    let check_enum = check_enum(&vis, &check_id, &checks);
-    let stash_decl = stash_decl(&vis, &stash, &fields);
-    let draft_decl = draft_decl(&vis, &draft, &fields, &checks);
-    let setters = setters(&draft, &fields);
-    let guard = guard(&draft, &fields);
-    let rule_set_decl = rule_set_decl(&vis, &rule_set, &field_id, &draft, has_rules);
-    let draft_impl = draft_impl(&entity, &draft, &field_id, &rule_set, &fields);
-    let store_draft_impl = store_draft_impl(&entity, &draft, &fields, &checks);
-    let stashable_impl = stashable_impl(&draft, &stash, &fields, &checks);
-    let checked_impl = checked_impl(&draft, &check_id, &field_id, &fields);
+    let entity_decl = entity_decl(&decl.item, fields);
+    let field_enum = field_enum(vis, &field_id, fields);
+    let check_enum = check_enum(vis, &check_id, &checks);
+    let stash_decl = stash_decl(vis, &stash, fields);
+    let draft_decl = draft_decl(vis, &draft, fields, &checks);
+    let setters = setters(&draft, fields);
+    let guard = guard(&draft, fields);
+    let rule_set_decl = rule_set_decl(vis, &rule_set, &field_id, &draft, decl.has_rules);
+    let draft_impl = draft_impl(entity, &draft, &field_id, &rule_set, fields);
+    let store_draft_impl = store_draft_impl(entity, &draft, fields, &checks);
+    let stashable_impl = stashable_impl(&draft, &stash, fields, &checks);
+    let checked_impl = checked_impl(&draft, &check_id, &field_id, fields);
 
     Ok(quote! {
         #entity_decl
@@ -88,107 +67,6 @@ pub(crate) fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<Toke
         #store_draft_impl
         #stashable_impl
         #checked_impl
-    })
-}
-
-/// `#[bolted::entity]` or `#[bolted::entity(rules)]`.
-fn parse_entity_attr(attr: TokenStream2) -> syn::Result<bool> {
-    if attr.is_empty() {
-        return Ok(false);
-    }
-    let ident: Ident = parse2(attr)?;
-    if ident == "rules" {
-        Ok(true)
-    } else {
-        Err(syn::Error::new(
-            ident.span(),
-            "the only argument is `rules`, meaning a `#[bolted::rules]` impl block exists",
-        ))
-    }
-}
-
-fn parse_fields(item: &mut ItemStruct) -> syn::Result<Vec<EntityField>> {
-    let Fields::Named(named) = &mut item.fields else {
-        return Err(syn::Error::new(
-            item.span(),
-            "`#[bolted::entity]` declares a struct with named fields",
-        ));
-    };
-    if named.named.is_empty() {
-        return Err(syn::Error::new(
-            item.span(),
-            "an entity with no fields has no draft to edit",
-        ));
-    }
-
-    let mut out = Vec::new();
-    for field in named.named.iter_mut() {
-        let Some(ident) = field.ident.clone() else {
-            return Err(syn::Error::new(field.span(), "a named field is required"));
-        };
-        let declared = take_attrs(&mut field.attrs, "check");
-        let check = match declared.as_slice() {
-            [] => None,
-            [attr] => Some(parse_check(attr, &ident)?),
-            [_, second, ..] => {
-                return Err(syn::Error::new(
-                    second.span(),
-                    "at most one `#[check(..)]` per field",
-                ));
-            }
-        };
-        out.push(EntityField {
-            variant: upper_camel(&ident),
-            ty: field.ty.clone(),
-            ident,
-            check,
-        });
-    }
-    Ok(out)
-}
-
-fn parse_check(attr: &syn::Attribute, field: &Ident) -> syn::Result<Check> {
-    let (mut rule, mut pending_key, mut required_key) = (None, None, None);
-    attr.parse_nested_meta(|m| {
-        let target = if m.path.is_ident("rule") {
-            &mut rule
-        } else if m.path.is_ident("pending_key") {
-            &mut pending_key
-        } else if m.path.is_ident("required_key") {
-            &mut required_key
-        } else {
-            return Err(m.error("expected `rule`, `pending_key` or `required_key`"));
-        };
-        *target = Some(m.value()?.parse::<LitStr>()?.value());
-        Ok(())
-    })?;
-
-    let (Some(rule), Some(pending_key), Some(required_key)) = (rule, pending_key, required_key)
-    else {
-        // All three are l10n keys that shells already ship. Defaulting them from the field name
-        // would move a translation key on a rename, silently.
-        return Err(syn::Error::new(
-            attr.span(),
-            "`#[check(..)]` needs `rule`, `pending_key` and `required_key` — they are stable \
-             localisation keys, and a macro must not invent them",
-        ));
-    };
-
-    // `format_ident!` panics on a string that is not an identifier, and a rule name is a *string* the
-    // user chose. Parse it, so a bad one is a `compile_error!` rather than an ICE-shaped panic.
-    let rule_ident: Ident = syn::parse_str(&rule).map_err(|_| {
-        syn::Error::new(
-            attr.span(),
-            "a `rule` name must be a valid identifier: it becomes a `CheckId` variant",
-        )
-    })?;
-
-    Ok(Check {
-        variant: upper_camel(&rule_ident),
-        slot: format_ident!("{}_check", field, span = field.span()),
-        rule,
-        pending_key,
-        required_key,
     })
 }
 

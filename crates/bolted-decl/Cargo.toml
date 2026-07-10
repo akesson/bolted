@@ -1,0 +1,17 @@
+[package]
+name = "bolted-decl"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The declaration model, parsed once. `bolted-macros` emits the feature from it; `bolted-ffi-gen`
+# emits the FFI layer from it. Two parsers would be two contracts, and the drift check in
+# `mise run check` would then be checking a generator against itself (D25).
+#
+# Deliberately NOT a proc-macro crate: a proc-macro crate can export nothing but its macros, which is
+# what forced this split. Nothing here touches `proc_macro::TokenStream`.
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing"] }
