@@ -656,6 +656,222 @@ fn c19_canonical_returning_to_the_ancestor_clears_the_conflict_and_rebase_is_ide
 }
 
 // --------------------------------------------------------------------------------------------
+// C20–C21: stash / restore across process death
+// --------------------------------------------------------------------------------------------
+
+// C20 — every field's value, ancestor, validity and dirtiness survive the round trip, including an
+// `Invalid { raw }` the user never fixed (C06 does not stop being true because the process died).
+#[test]
+fn c20_stash_round_trips_values_ancestors_and_validity() {
+    let base = base_profile();
+    let mut d = ProfileDraft::from_canonical(Some(&base), 7);
+    d.try_set_name("My Name".to_string()).expect("valid");
+    d.try_set_email("not-an-email".to_string())
+        .expect_err("no @: invalid");
+
+    let restored = ProfileDraft::from_stash(&d.stash());
+
+    // a dirty, valid field: value and ancestor both intact
+    assert_eq!(restored.name.value().map(|v| v.as_str()), Some("My Name"));
+    assert_eq!(restored.name.base().map(|v| v.as_str()), Some("Alice"));
+    assert!(restored.name.is_dirty());
+
+    // an invalid field: the user's rejected text is still the user's rejected text
+    match restored.email.validity() {
+        Validity::Invalid { raw, .. } => assert_eq!(raw, "not-an-email"),
+        other => panic!("expected the raw attempt to survive, got {other:?}"),
+    }
+    assert!(restored.email.is_dirty());
+
+    // an untouched field stays clean, and the whole-draft bits carry over
+    assert_eq!(restored.username.value().map(|v| v.as_str()), Some("alice"));
+    assert!(!restored.username.is_dirty());
+    assert_eq!(restored.base_version(), 7);
+    assert_eq!(restored.status(), DraftStatus::Live);
+    assert_eq!(
+        restored.dirty_fields(),
+        vec![ProfileField::Name, ProfileField::Email]
+    );
+}
+
+// C20 — an async verdict does NOT survive: it endorses a value against a server state that may have
+// moved while we were dead. C13 + C16 then make the restored draft safe with no new invariant.
+#[test]
+fn c20_an_async_verdict_does_not_survive_the_stash() {
+    let base = base_profile();
+    let mut d = ProfileDraft::from_canonical(Some(&base), 0);
+    d.try_set_username("alice2".to_string()).expect("valid");
+    pass_check(&mut d);
+    assert!(matches!(
+        d.username_check_state(),
+        CheckState::Done { verdict: Ok(()) }
+    ));
+    assert!(d.validate().is_ok());
+
+    let restored = ProfileDraft::from_stash(&d.stash());
+
+    assert!(matches!(restored.username_check_state(), CheckState::Idle));
+    assert!(restored.username.is_dirty());
+    let report = restored.validate();
+    let v = report
+        .rule_errors
+        .iter()
+        .find(|v| v.rule == "username_unique")
+        .expect("C16 must demand a fresh check for a restored dirty username");
+    assert_eq!(v.error.key, "username_check_required");
+}
+
+// C20 — `sync` is not stashed. `theirs` from before the death is a value the server may no longer
+// hold, so the conflict is re-derived against FRESH canonical, not restored from a stale memory.
+#[test]
+fn c20_sync_is_not_stashed_and_re_derives_against_fresh_canonical() {
+    let base = base_profile();
+    let mut d = ProfileDraft::from_canonical(Some(&base), 0);
+    d.try_set_username("mine1".to_string()).expect("valid");
+    d.rebase(&with_username("their1"), 1);
+    assert_eq!(d.conflicts(), vec![ProfileField::Username]);
+
+    // the stash carries no conflict...
+    let mut restored = ProfileDraft::from_stash(&d.stash());
+    assert!(restored.conflicts().is_empty());
+    assert_eq!(restored.username.value().map(|v| v.as_str()), Some("mine1"));
+    assert_eq!(restored.username.base().map(|v| v.as_str()), Some("alice"));
+
+    // ...and the rebase against whatever canonical says NOW re-derives it, with a fresh `theirs`
+    restored.rebase(&with_username("their2"), 5);
+    assert_eq!(restored.conflicts(), vec![ProfileField::Username]);
+    assert_eq!(
+        restored.username.theirs().map(|v| v.as_str()),
+        Some("their2"),
+        "a restored conflict must name the CURRENT canonical, not the one we died holding"
+    );
+}
+
+// C21 — restore is a rebase: `Store::adopt` conflicts exactly those fields whose canonical moved
+// while the process was dead, and leaves the rest alone (which is C19 doing the work).
+#[test]
+fn c21_restore_conflicts_only_the_fields_whose_canonical_moved() {
+    // Before the death: two dirty fields on a store at the base profile.
+    let mut store: ProfileStore = Store::new(Some(base_profile()));
+    let handle = store.checkout();
+    let stash = {
+        let mut d = handle.borrow_mut().expect("live");
+        d.try_set_name("My Name".to_string()).expect("valid");
+        d.try_set_email("mine@other.com".to_string())
+            .expect("valid");
+        d.stash()
+    };
+    drop(handle); // the process dies; the core-side draft dies with it
+
+    // After: a fresh store, seeded from the server — which moved `email` and nothing else.
+    let mut server = base_profile();
+    server.email = Email::try_new("server@corp.example".to_string()).expect("valid");
+    let mut store: ProfileStore = Store::new(Some(server));
+
+    let handle = store.adopt(ProfileDraft::from_stash(&stash));
+    let d = handle.borrow().expect("live");
+
+    assert_eq!(
+        d.conflicts(),
+        vec![ProfileField::Email],
+        "only `email` moved on the server while we were away"
+    );
+    assert_eq!(
+        d.email.theirs().map(|v| v.as_str()),
+        Some("server@corp.example")
+    );
+    assert_eq!(d.email.value().map(|v| v.as_str()), Some("mine@other.com"));
+
+    // `name` was dirty and untouched by the server: it comes back dirty, not conflicted.
+    assert!(d.name.is_dirty());
+    assert!(!d.name.is_conflicted());
+    assert_eq!(d.name.value().map(|v| v.as_str()), Some("My Name"));
+
+    // and the draft is registered for live rebase again, stamped with the new store version
+    assert_eq!(store.live_draft_count(), 1);
+    assert_eq!(d.base_version(), store.version());
+}
+
+// C21 — a prior `resolve_keep_mine` survives, because its effect lives in the *ancestor* and the
+// ancestor is stashed. The restored field stays dirty and in sync; nothing re-litigates.
+#[test]
+fn c21_a_resolved_conflict_stays_resolved_across_restore() {
+    let base = base_profile();
+    let mut d = ProfileDraft::from_canonical(Some(&base), 0);
+    d.try_set_name("My Name".to_string()).expect("valid");
+    d.rebase(
+        &{
+            let mut p = base_profile();
+            p.name = PersonName::try_new("Their Name".to_string()).expect("valid");
+            p
+        },
+        1,
+    );
+    d.resolve_keep_mine(ProfileField::Name); // base := "Their Name", value stays "My Name"
+    assert_eq!(d.name.base().map(|v| v.as_str()), Some("Their Name"));
+
+    // The process dies. The server still says "Their Name" — the value we already accepted.
+    let mut server = base_profile();
+    server.name = PersonName::try_new("Their Name".to_string()).expect("valid");
+    let mut store: ProfileStore = Store::new(Some(server));
+
+    let handle = store.adopt(ProfileDraft::from_stash(&d.stash()));
+    let d = handle.borrow().expect("live");
+    assert!(
+        d.conflicts().is_empty(),
+        "the user already resolved this; C19's early-out is what keeps it resolved"
+    );
+    assert_eq!(d.name.value().map(|v| v.as_str()), Some("My Name"));
+    assert!(d.name.is_dirty());
+}
+
+// C21 — the entity was deleted while we were dead. The restored draft orphans (C11); it does not
+// quietly commit and resurrect the entity.
+#[test]
+fn c21_restore_into_a_deleted_canonical_orphans_the_draft() {
+    let base = base_profile();
+    let mut d = ProfileDraft::from_canonical(Some(&base), 3);
+    d.try_set_name("My Name".to_string()).expect("valid");
+
+    let mut store: ProfileStore = Store::new(None); // the server 404s
+    let handle = store.adopt(ProfileDraft::from_stash(&d.stash()));
+
+    let d = handle.borrow().expect("live");
+    assert_eq!(d.status(), DraftStatus::Orphaned);
+    assert_eq!(store.live_draft_count(), 0); // an orphan is not registered for rebase
+    assert_eq!(d.base_version(), 3); // an orphan's stamp stops moving (C15)
+    drop(d);
+
+    let mut handle = handle;
+    assert_eq!(store.submit(&mut handle), Err(SubmitError::Orphaned));
+}
+
+// C21 — a create-flow draft has no ancestor, so it is never moved by canonical, restored or not
+// (C12). It commits normally.
+#[test]
+fn c21_a_restored_create_flow_draft_is_never_moved() {
+    let mut d = ProfileDraft::from_canonical(None, 0);
+    d.try_set_username("newbie".to_string()).expect("valid");
+
+    // someone else created the entity while we were dead
+    let mut store: ProfileStore = Store::new(Some(base_profile()));
+    let handle = store.adopt(ProfileDraft::from_stash(&d.stash()));
+
+    let d = handle.borrow().expect("live");
+    assert_eq!(d.username.value().map(|v| v.as_str()), Some("newbie"));
+    assert!(d.username.base().is_none());
+    assert!(d.conflicts().is_empty());
+    assert_eq!(d.status(), DraftStatus::Live);
+    assert_eq!(store.live_draft_count(), 0, "create-flow never registers");
+
+    // ...and a canonical change still does not move it
+    drop(d);
+    store.apply_canonical(with_username("bravo"));
+    let d = handle.borrow().expect("live");
+    assert_eq!(d.username.value().map(|v| v.as_str()), Some("newbie"));
+}
+
+// --------------------------------------------------------------------------------------------
 // The suite's own drift check (VISION's rung 3): the document and this file must not disagree.
 // --------------------------------------------------------------------------------------------
 

@@ -159,6 +159,26 @@ merging, ever** (perimeter).
   must not shift underfoot.
 - `is_dirty()` = diff vs base. Cancel and unsaved-changes warnings are free.
 
+**Stash and restore** (C20/C21). A core-side draft dies with the process, and on Android the process
+dies whenever the OS says so. A draft therefore flattens to raw, serializable data — per field, the
+last input attempt and the ancestor it was made over — and restores through the store's single draft
+entry point, `adopt(D::from_stash(..))`, which rebases it onto whatever canonical says *now*.
+`checkout()` is `adopt` of a freshly-built draft.
+
+Two things are deliberately absent from the stash, and their absence is the design:
+
+- **`sync`.** A conflict names a canonical value the server may no longer hold. It re-derives on the
+  restoring rebase, against fresh canonical, and so names the right value.
+- **The async verdict.** It endorses a value against a server state that may have moved. A restored
+  checked field is unchecked, and C16 then refuses to submit it while dirty. C13 + C16 make restore
+  safe without an invariant of their own.
+
+What *is* stashed is the ancestor, and it carries every prior resolution with it: a `keep_mine`d field
+has `base == old theirs`, so if canonical still holds that value the restored field lands dirty and
+`InSync` — the user's decision stands, unlitigated. The stash is also the framework's first
+**untrusted input**: an ancestor that no longer parses means the constraints changed between app
+versions (`bolted-check`'s constraint-semver snapshots, VISION).
+
 **Commit is the parse-don't-validate moment**: `commit(self) -> Result<Entity, (Self, CommitError)>`
 — a `Draft` goes in, an always-valid `Entity` comes out, or the draft comes *back* with a typed
 reason (`Validation` / `Conflicted` / `Orphaned`). On success the core may normalize /
@@ -268,8 +288,8 @@ structural rather than aspirational.
 
 ## 7. Invariants — the conformance suite
 
-The design's falsifiable claims, C01–C19, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
-and exist as named tests (`c01_*` … `c19_*`) in `crates/spike-profile/tests/conformance.rs`. A drift
+The design's falsifiable claims, C01–C21, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
+and exist as named tests (`c01_*` … `c21_*`) in `crates/spike-profile/tests/conformance.rs`. A drift
 test parses the document and fails the build if an ID has no test or a test has no ID — the mapping is
 verified by the build, not by review (VISION rung 3).
 
@@ -280,7 +300,8 @@ refusal typed · **C08** rebase re-runs tier 2 · **C09** resolution semantics �
 wins · **C11** deletion orphans · **C12** create-flow never rebases · **C13** verdicts are value-bound ·
 **C14** auto-converge on edit · **C15** the base version tracks the rebase · **C16** an unrun check
 blocks a dirty field · **C17** submit tombstones the handle · **C18** release is explicit and
-idempotent · **C19** rebase is a three-way merge, and idempotent.
+idempotent · **C19** rebase is a three-way merge, and idempotent · **C20** a draft stashes to raw data
+and restores from it · **C21** restore is a rebase.
 
 Step 08 makes the suite generic over a feature; step 10 emits it as per-language contract tests.
 
@@ -314,7 +335,8 @@ what, and why it was worth it.
 | **D12** — keep the `Draft` / `StoreDraft` split | Promote `from_canonical`/`rebase`/`orphan` into `Draft` | `Draft` is the FFI surface and shells never call the plumbing. Four shells, zero friction (step-01 Q1) |
 | **D13** — `Constraint::Required` stays in the same enum, prepended at the field layer | A separate field-metadata channel | A value type cannot know whether its field is `Option<_>`, but shells want one uniform list to derive affordances from. Three shells did exactly that with no constraint literal leaking (step-01 Q3) |
 | Failed submit returns the draft (D4/D5) | Submit consumes the handle on every outcome | Losing the user's edits on a rejected submit is data loss (step-01 F3) |
-| **D14 (C19)** — `rebase` compares `theirs` against `base` first: an unmoved canonical never conflicts | Guard in the generated `Draft::rebase`, skipping fields whose canonical equals their base | Post-freeze amendment (step 07). The store rebases every field on every canonical change, so a dirty `name` conflicted whenever the server moved `email` — offering "take theirs" over the user's own ancestor. Putting the guard in the core fixes it once, makes `rebase` idempotent, and makes `checkout() == adopt(from_canonical(..))`; putting it in generated code means every generator must re-derive it, and none of them would clear a conflict when canonical moves *back* to the ancestor |
+| **D14 (C19)** — `rebase` compares `theirs` against `base` first: an unmoved canonical never conflicts | Guard in the generated `Draft::rebase`, skipping fields whose canonical equals their base | Post-freeze amendment (step 07). The store rebases every field on every canonical change, so a dirty `name` conflicted whenever the server moved `email` — offering "take theirs" over the user's own ancestor. Putting the guard in the core fixes it once and makes `checkout() == adopt(from_canonical(..))`; putting it in generated code means every generator must re-derive it, and none of them would clear a conflict when canonical moves *back* to the ancestor |
+| **D15 (C20/C21)** — the draft stash is `{base_version, status, per-field (raw, base)}`; restore is `Store::adopt(D::from_stash(..))`, which rebases onto fresh canonical | Stash `sync` too, or replay `try_set` onto a fresh checkout with no ancestor | Step 07. `theirs` from before a process death names a canonical value the server may no longer hold — restoring it restores a lie, and it re-derives for free on the next rebase. Replaying without the ancestor is worse: a field the server moved while we were dead returns *dirty*, not *conflicted*, and submit silently overwrites the server. The verdict is not stashed either, and C13 + C16 then make the restored draft safe with no new invariant |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 

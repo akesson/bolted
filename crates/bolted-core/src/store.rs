@@ -24,6 +24,14 @@ pub trait StoreDraft: Draft {
     fn rebase(&mut self, entity: &Self::Entity, version: u64);
     /// Mark the whole draft orphaned (its base entity was deleted).
     fn orphan(&mut self);
+    /// Was this draft checked out from an existing entity? A create-flow draft has no base entity,
+    /// so it never rebases and never orphans (C12).
+    ///
+    /// [`Store::checkout`] used to read this off the store (`self.canonical.is_some()`), which
+    /// [`Store::adopt`] cannot do: a draft restored from a stash carries its own answer. **Derived
+    /// from the fields' bases, never stored** — two copies of one fact are two facts to keep
+    /// consistent (ARCHITECTURE §8, D3/F7).
+    fn is_based(&self) -> bool;
 }
 
 /// Why a submit was refused. `Conflicted` survives here for the outer core↔server loop; within one
@@ -128,9 +136,34 @@ impl<D: StoreDraft> Store<D> {
     /// Check out a draft. Existing-entity checkouts register for live rebase; create-flow drafts
     /// (no canonical) are NOT registered — they never rebase (conformance C12).
     pub fn checkout(&mut self) -> DraftHandle<D> {
-        let draft = D::from_canonical(self.canonical.as_ref(), self.version);
+        self.adopt(D::from_canonical(self.canonical.as_ref(), self.version))
+    }
+
+    /// Take ownership of an **externally built** draft — one restored from a stash after process
+    /// death — and bring it up to date with the store.
+    ///
+    /// This is the store's only draft entry point; `checkout` is `adopt` of a freshly built draft,
+    /// which works because rebasing a draft onto the canonical it was just built from is a no-op
+    /// (C19's idempotence).
+    ///
+    /// | `draft.is_based()` | canonical | result |
+    /// |---|---|---|
+    /// | true | `Some` | rebase onto it, register for live rebase |
+    /// | true | `None` | **orphan**: the entity was deleted while we were dead (C11) |
+    /// | false | either | untouched, unregistered — create-flow never rebases (C12) |
+    ///
+    /// The rebase is what makes restore correct rather than merely convenient: a field whose
+    /// canonical moved while the process was dead comes back **conflicted**, not silently dirty over
+    /// a base it never saw (conformance C21).
+    pub fn adopt(&mut self, mut draft: D) -> DraftHandle<D> {
+        let based = draft.is_based();
+        match (based, &self.canonical) {
+            (true, Some(entity)) => draft.rebase(entity, self.version),
+            (true, None) => draft.orphan(),
+            (false, _) => {}
+        }
         let rc = Rc::new(RefCell::new(Some(draft)));
-        if self.canonical.is_some() {
+        if based && self.canonical.is_some() {
             self.live.push(Rc::downgrade(&rc));
         }
         DraftHandle { inner: rc }

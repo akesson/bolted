@@ -8,7 +8,8 @@ use crate::value_types::{
 };
 use bolted_core::{
     CheckState, CheckToken, CommitError, Constraint, Draft, DraftHandle, DraftStatus, ErrorData,
-    Field, RuleViolation, SingleFlight, Store, StoreDraft, ValidationReport, Validity, Value,
+    Field, FieldStash, RuleViolation, SingleFlight, Store, StoreDraft, ValidationReport, Validity,
+    Value,
 };
 
 /// The always-valid entity (canonical state). `#[bolted::entity]` would generate this alongside
@@ -52,6 +53,27 @@ impl ProfileField {
 pub type ProfileStore = Store<ProfileDraft>;
 pub type ProfileHandle = DraftHandle<ProfileDraft>;
 
+/// The serializable projection of a [`ProfileDraft`] — everything an edit session needs to survive
+/// process death, and nothing that would be a lie on the other side of it (`sync`, and the async
+/// verdict; see [`FieldStash`] and [`ProfileDraft::from_stash`]).
+///
+/// `#[bolted::entity]` would emit this alongside the draft: one [`FieldStash`] per field, in the
+/// field's raw type, plus the whole-draft bits. Note that three of the four collapse to
+/// `FieldStash<String>` — fresh evidence for ARCHITECTURE §9's "codegen dedup by raw type".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileStash {
+    pub username: FieldStash<String>,
+    pub name: FieldStash<String>,
+    pub email: FieldStash<String>,
+    pub availability: FieldStash<(Date, Date)>,
+    /// The store version this draft was last based on. Carried so a shell can tell how far behind
+    /// it is; the restore itself does not need it, because `Store::adopt` rebases onto whatever
+    /// canonical is current and stamps the draft with the store's version (C15).
+    pub base_version: u64,
+    /// A draft orphaned before the process died stays orphaned: the entity is gone (C11).
+    pub orphaned: bool,
+}
+
 /// The draft: one `Field<V>` per entity field, plus the async uniqueness check and lifecycle bits.
 pub struct ProfileDraft {
     pub username: Field<Username>,
@@ -85,6 +107,44 @@ impl ProfileDraft {
     /// unchanged (a `Pending`/`Done(Err)` check still blocks; `Idle`/`Done(Ok)` still pass).
     pub fn username_check_state(&self) -> &CheckState<Result<(), ErrorData>> {
         self.username_check.state()
+    }
+
+    // --- stash / restore: surviving process death (ARCHITECTURE §4, conformance C20/C21) ---
+
+    /// Flatten this draft to serializable data. Per-field `{raw, base}`, plus status and the version
+    /// it was based on. A macro emits this per field, mechanically.
+    pub fn stash(&self) -> ProfileStash {
+        ProfileStash {
+            username: self.username.stash(),
+            name: self.name.stash(),
+            email: self.email.stash(),
+            availability: self.availability.stash(),
+            base_version: self.base_version,
+            orphaned: matches!(self.status, DraftStatus::Orphaned),
+        }
+    }
+
+    /// Rebuild a draft from its stash. **Not yet reconciled with canonical** — hand it to
+    /// [`Store::adopt`], which rebases it onto whatever the server says now.
+    ///
+    /// The async uniqueness verdict deliberately does not survive. It endorses a *value* against a
+    /// server state that may have moved while the process was dead, so it restores as `Idle` — and
+    /// C16 then refuses to submit a dirty username without a fresh check. Stash/restore needs no
+    /// invariant of its own here: C13 and C16 already make the restored draft safe.
+    pub fn from_stash(stash: &ProfileStash) -> Self {
+        ProfileDraft {
+            username: Field::from_stash(&stash.username),
+            name: Field::from_stash(&stash.name),
+            email: Field::from_stash(&stash.email),
+            availability: Field::from_stash(&stash.availability),
+            username_check: SingleFlight::new(),
+            status: if stash.orphaned {
+                DraftStatus::Orphaned
+            } else {
+                DraftStatus::Live
+            },
+            base_version: stash.base_version,
+        }
     }
 
     // --- monomorphic setters (one per field; `try_set_availability` takes the grouped raw) ---
@@ -362,5 +422,16 @@ impl StoreDraft for ProfileDraft {
 
     fn orphan(&mut self) {
         self.status = DraftStatus::Orphaned;
+    }
+
+    /// Every field of an entity-backed draft has a base; a create-flow draft has none. Derived per
+    /// field rather than stored as a `based: bool`, because two copies of one fact are two facts to
+    /// keep consistent (D3/F7) — and because a corrupt stash that loses one ancestor should not be
+    /// able to claim the whole draft is create-flow.
+    fn is_based(&self) -> bool {
+        self.username.base().is_some()
+            || self.name.base().is_some()
+            || self.email.base().is_some()
+            || self.availability.base().is_some()
     }
 }

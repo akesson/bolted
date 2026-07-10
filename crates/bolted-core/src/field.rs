@@ -39,6 +39,25 @@ pub struct Field<V: Value> {
     base: Option<V>,
 }
 
+/// A [`Field`] flattened to raw, serializable data, so a draft can survive process death.
+///
+/// Two facts, both in `V::Raw`: what the user last typed, and the ancestor they typed it over. In
+/// `V::Raw` and not `V` because an *invalid* attempt must survive too (C06) — a value object cannot
+/// hold one by construction.
+///
+/// **`sync` is deliberately absent.** A conflict is a relationship between your value and a
+/// canonical value, and process death invalidates the canonical half: `theirs` from before the
+/// death is a value the server may no longer hold. Stashing it would restore a lie. Restore the
+/// `{raw, base}` pair and the relationship re-derives, correctly, against *fresh* canonical on the
+/// next [`Field::rebase`] (conformance C20).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldStash<R> {
+    /// The last input attempt, valid or not. `None` if the field was never set (create flow).
+    pub raw: Option<R>,
+    /// The ancestor this field is based on. `None` in create flow.
+    pub base: Option<R>,
+}
+
 impl<V: Value> Field<V> {
     /// Create flow: no base, no value.
     pub fn new_unset() -> Self {
@@ -212,6 +231,44 @@ impl<V: Value> Field<V> {
             Validity::Valid(v) => Some(v),
             _ => None,
         }
+    }
+
+    /// Flatten this field to raw, serializable data (C20). See [`FieldStash`] for why `sync` is not
+    /// part of it.
+    pub fn stash(&self) -> FieldStash<V::Raw> {
+        FieldStash {
+            raw: match &self.validity {
+                Validity::Unset => None,
+                Validity::Valid(v) => Some(v.clone().into_raw()),
+                Validity::Invalid { raw, .. } => Some(raw.clone()),
+            },
+            base: self.base.clone().map(V::into_raw),
+        }
+    }
+
+    /// Rebuild a field from its stash. Infallible and best-effort: the caller is handing us bytes
+    /// the operating system kept while our process was dead, which is the first **untrusted input**
+    /// in the system.
+    ///
+    /// - A `raw` that no longer parses lands as `Invalid { raw }` — exactly as if the user had just
+    ///   typed it, which is what C06 already promises.
+    /// - A `base` that no longer parses is a harder problem: C01 says a value's raw form roundtrips,
+    ///   so this can only happen if the stash was tampered with, or if **the constraints tightened
+    ///   between app versions**. We degrade to create-flow (`base: None`) rather than fabricate an
+    ///   ancestor: the field then reads as unset-with-a-value, submit re-validates everything (C07),
+    ///   and nothing is silently overwritten. Recorded as a real concern for `bolted-check`'s
+    ///   constraint-semver snapshots — see the step-07 report.
+    ///
+    /// `sync` is not restored. It re-derives on the next `rebase` against fresh canonical.
+    pub fn from_stash(stash: &FieldStash<V::Raw>) -> Self {
+        let mut field = match stash.base.clone().and_then(|raw| V::try_new(raw).ok()) {
+            Some(base) => Field::from_base(base),
+            None => Field::new_unset(),
+        };
+        if let Some(raw) = stash.raw.clone() {
+            let _ = field.try_set(raw);
+        }
+        field
     }
 }
 
