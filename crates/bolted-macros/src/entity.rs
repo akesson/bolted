@@ -12,7 +12,9 @@
 //! - `dirty_fields()` / `conflicts()` push in **declaration order**, which is observable.
 //! - Every mutation that can move a checked field's value is wrapped in **one** generated guard, so
 //!   no path can skip C13's verdict reset. `spike-profile` needed this on five call sites; a macro
-//!   that emitted the reset per call site would drop it from the sixth.
+//!   that emitted the reset per call site would drop it from the sixth. *"Can move"* is read as the
+//!   compiler reads it: `try_set_name` cannot touch `username`, so it is not guarded, and does not
+//!   clone a `Username` on every keystroke of the name box (see `setters`).
 
 use crate::expand::{suffixed, take_attrs, upper_camel};
 use proc_macro2::TokenStream as TokenStream2;
@@ -356,16 +358,30 @@ fn before_ident(field: &Ident) -> Ident {
 }
 
 /// One monomorphic setter per field — generic methods cannot cross a language boundary (§5).
+///
+/// A setter is guarded **iff its own field carries a check**. `try_set_name` cannot move `username`'s
+/// value, so routing it through the guard would clone the username on every keystroke and compare it
+/// with itself — on the exact path step 07's kill criterion 4 measures, and the path the whole
+/// "core validates every keystroke" bet rests on. The resolvers and `rebase` are guarded
+/// unconditionally, because they take a field id at *runtime* or move every field at once.
+///
+/// This is not a case of a macro deciding something. Which fields carry a check is written in the
+/// declaration, and regeneration cannot forget a path the way a hand-written call site can.
 fn setters(draft: &Ident, fields: &[EntityField]) -> TokenStream2 {
     let setters = fields.iter().map(|f| {
         let (ident, ty) = (&f.ident, &f.ty);
         let name = format_ident!("try_set_{}", ident, span = ident.span());
+        let body = if f.check.is_some() {
+            quote!(self.bolted_guard(|__d| __d.#ident.try_set(raw)))
+        } else {
+            quote!(self.#ident.try_set(raw))
+        };
         quote! {
             pub fn #name(
                 &mut self,
                 raw: <#ty as ::bolted_core::Value>::Raw,
             ) -> ::core::result::Result<(), <#ty as ::bolted_core::Value>::Error> {
-                self.bolted_guard(|__d| __d.#ident.try_set(raw))
+                #body
             }
         }
     });

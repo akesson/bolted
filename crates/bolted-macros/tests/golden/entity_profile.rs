@@ -79,19 +79,19 @@ impl ProfileDraft {
         &mut self,
         raw: <PersonName as ::bolted_core::Value>::Raw,
     ) -> ::core::result::Result<(), <PersonName as ::bolted_core::Value>::Error> {
-        self.bolted_guard(|__d| __d.name.try_set(raw))
+        self.name.try_set(raw)
     }
     pub fn try_set_email(
         &mut self,
         raw: <Email as ::bolted_core::Value>::Raw,
     ) -> ::core::result::Result<(), <Email as ::bolted_core::Value>::Error> {
-        self.bolted_guard(|__d| __d.email.try_set(raw))
+        self.email.try_set(raw)
     }
     pub fn try_set_availability(
         &mut self,
         raw: <DateRange as ::bolted_core::Value>::Raw,
     ) -> ::core::result::Result<(), <DateRange as ::bolted_core::Value>::Error> {
-        self.bolted_guard(|__d| __d.availability.try_set(raw))
+        self.availability.try_set(raw)
     }
 }
 #[doc(hidden)]

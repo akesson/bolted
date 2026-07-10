@@ -47,13 +47,13 @@ impl NoteDraft {
         &mut self,
         raw: <Title as ::bolted_core::Value>::Raw,
     ) -> ::core::result::Result<(), <Title as ::bolted_core::Value>::Error> {
-        self.bolted_guard(|__d| __d.title.try_set(raw))
+        self.title.try_set(raw)
     }
     pub fn try_set_body(
         &mut self,
         raw: <Body as ::bolted_core::Value>::Raw,
     ) -> ::core::result::Result<(), <Body as ::bolted_core::Value>::Error> {
-        self.bolted_guard(|__d| __d.body.try_set(raw))
+        self.body.try_set(raw)
     }
 }
 #[doc(hidden)]

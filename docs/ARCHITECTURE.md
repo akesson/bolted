@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.2, step 06; amended steps 07 and 08).** Phase 1 validated this design against
+**Status: FROZEN (v1.3, step 06; amended steps 07, 08 and 09).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -9,8 +9,10 @@ beat. What remains **OPEN** in §9 is genuinely undecided and each item names th
 verified defect in `rebase` (C03 amended, C19 added), and **D15** adds `Store::adopt` and the draft
 stash. **v1.2** carries step 08's, which §9 had scheduled for it: **D16** makes the store id-keyed and
 lock-free (C17/C18 amended, C22 added) and **D17** moves the resolvers onto `Draft` and adds
-`Stashable`. A freeze is a commitment to a design, not a promise that the design was already correct —
-the record of what changed, and why, is the point.
+`Stashable`. **v1.3** carries step 09's: **D18** gives the async check a contract (`Checked`), and C07
+is amended to state the precedence of its own refusals — a rule both spikes had implemented since step
+01 and no test had ever checked. A freeze is a commitment to a design, not a promise that the design
+was already correct — the record of what changed, and why, is the point.
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
@@ -257,6 +259,15 @@ pub trait Stashable: Draft {                                    // D17 — optio
     fn from_stash(stash: &Self::Stash) -> Self where Self: Sized;
 }
 
+pub trait Checked: Draft {                                      // D18 — optional; async checks
+    type CheckId: Copy + Eq + Debug;
+    fn begin_check(&mut self, check: Self::CheckId) -> CheckToken;
+    fn complete_check(&mut self, check: Self::CheckId, token: CheckToken,
+                      verdict: Result<(), ErrorData>) -> bool;
+    fn check_state(&self, check: Self::CheckId) -> &CheckState<Result<(), ErrorData>>;
+    fn check_pins(check: Self::CheckId) -> Self::FieldId;       // C13's "value-bound" names this field
+}
+
 pub enum CommitError<FieldId> { Validation(ValidationReport<FieldId>), Conflicted { fields: Vec<FieldId> }, Orphaned }
 pub enum SubmitError<FieldId> { Validation(..),                        Conflicted { .. },                  Orphaned, AlreadySubmitted }
 ```
@@ -269,20 +280,32 @@ the lock" without the core knowing that locks or streams exist.
 
 `Draft` is the FFI surface and stays minimal, but *minimal* means what shells call, not what is
 convenient: the resolvers were inherent methods on the concrete draft until step 08, invisible to
-anything generic, though every shell called them across the boundary (D17). The store-facing plumbing
-— `from_canonical` / `rebase(entity, version)` / `orphan` / `is_based` — sits on a `StoreDraft: Draft`
+anything generic, though every shell called them across the boundary (D17). The same was true of
+`begin`/`complete`/`state` for an async check until step 09 (D18). The store-facing plumbing —
+`from_canonical` / `rebase(entity, version)` / `orphan` / `is_based` — sits on a `StoreDraft: Draft`
 subtrait that no shell ever calls (§8, D12). `AlreadySubmitted` is the one failure an *id* can have
 that a draft cannot, which is why the two enums differ by exactly that variant.
+
+**Thin macros, in practice.** Writing `bolted-macros` (step 09) is what put teeth in "generics carry
+behavior". Three judgements were about to be emitted per feature, and each moved down into the core
+instead: `Field::required_error` (the `Unset` → `required` decision, D13), `commit_gates` (C07's three
+gates, in order), and `SingleFlight::violation` (C13 + C16's whole payload). The rule the generated
+code now obeys is checkable, and is checked: **no `match` over a `Validity`, no `if` that decides
+whether a commit is refused, no re-derivation of single-flight sequencing.** A macro that reaches for
+one of those shapes has moved the design's most consequential judgements to its least verifiable code.
 
 **Crate layout** (physicalizes VISION's narrow-coupling promise):
 
 ```
 bolted-core         all traits + generic types; sans-io, and lock-free; NEVER depends on boltffi
 bolted-conformance  C01–C22, generic over a feature; the executable form of CONFORMANCE.md
-bolted-macros       the derives; output = thin delegation to bolted-core
+bolted-macros       the derives (value, entity, rules); output = thin delegation to bolted-core
 bolted-ffi          the ONLY crate importing boltffi (the swappable seam)
 bolted-check        build-time analyses (drift, coverage, constraint semver)
 ```
+
+`#[bolted::feature_model]` is **not** in `bolted-macros` and cannot be: it composes onto BoltFFI's
+`#[data]`/`#[export]`, and the `Feature` trait it would stamp has never been written (§9, D21).
 
 **Sans-io / runtime-agnostic core**: effects are data driven by the platform layer; no tokio in
 `bolted-core`. This is what makes headless deterministic tests and wasm32 compatibility
@@ -317,16 +340,18 @@ structural rather than aspirational.
 
 The design's falsifiable claims, C01–C22, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
 and exist as generic functions (`c01_*` … `c22_*`) in `crates/bolted-conformance`, stamped into tests
-by `*_suite!` macros. Two features implement the fixture traits — `spike-profile` (rule, async check,
-composite value) and `spike-note` (none of them) — because a suite with one implementor is a suite
-shaped like its implementor. A drift test parses the document and fails the build if an ID has no
-function, a function has no ID, or a function no macro stamps: the mapping is verified by the build,
-not by review (VISION rung 3).
+by `*_suite!` macros. **Four** features implement the fixture traits — `spike-profile` (rule, async
+check, composite value) and `spike-note` (none of them), plus `gen-profile` and `gen-note`, which
+declare the same two features through `bolted-macros` — because a suite with one implementor is a
+suite shaped like its implementor, and a macro with one input is a macro shaped like it. A drift test
+parses the document and fails the build if an ID has no function, a function has no ID, or a function
+no macro stamps: the mapping is verified by the build, not by review (VISION rung 3).
 
 In one line each: **C01** value roundtrip · **C02** a clean field follows canonical · **C03** a dirty
 field whose canonical moved is never silently overwritten · **C04** convergent rebase is clean ·
 **C05** revert-for-free · **C06** no stale-value submit · **C07** commit is the parse moment, each
-refusal typed · **C08** rebase re-runs tier 2 · **C09** resolution semantics · **C10** latest check
+refusal typed, and orphaned outranks conflicted outranks validation · **C08** rebase re-runs tier 2 ·
+**C09** resolution semantics · **C10** latest check
 wins · **C11** deletion orphans · **C12** create-flow never rebases, and an ancestor anywhere means
 entity-backed · **C13** verdicts are value-bound · **C14** auto-converge on edit · **C15** the base
 version tracks the rebase · **C16** an unrun check blocks a dirty field · **C17** submit releases the
@@ -371,6 +396,10 @@ what, and why it was worth it.
 | **D15 (C20/C21)** — the draft stash is `{base_version, status, per-field (raw, base)}`; restore is `Store::adopt(D::from_stash(..))`, which rebases onto fresh canonical | Stash `sync` too, or replay `try_set` onto a fresh checkout with no ancestor | Step 07. `theirs` from before a process death names a canonical value the server may no longer hold — restoring it restores a lie, and it re-derives for free on the next rebase. Replaying without the ancestor is worse: a field the server moved while we were dead returns *dirty*, not *conflicted*, and submit silently overwrites the server. The verdict is not stashed either, and C13 + C16 then make the restored draft safe with no new invariant |
 | **D16 (C17/C18/C22)** — the store owns its drafts in a `BTreeMap<DraftId, _>`, ships **no lock**, and returns its fan-out as data; handles are `Copy` ids | An `Rc<RefCell<Store>>` RAII handle that closes on `Drop` (keeping C18's old Drop clause); or keep two hand-written stores | Step 08, answering §9's store-concurrency question. Phase 1 wrote the loop three times and the copies had already drifted (C22). One `Store`, `Send` by construction, serves both a lock-free Rust shell and the FFI's single `Mutex` — step 02's three constraints become structural rather than remembered. The RAII alternative was *tried*: `LocalHandle::drop` must take the `RefCell` to reach the store, and ordinary safe code (`let g = store.borrow_mut(); drop(handle);`) panics; `try_borrow_mut` leaks instead. A framework mechanic that can only fail at runtime is rung 4, which VISION forbids. The price is real and named in C18: `close(id)` is now mandatory in Rust too |
 | **D17** — `Draft` carries `resolve_keep_mine`/`resolve_take_theirs`; `Stashable: Draft` carries `type Stash` | Leave both as inherent methods and let the conformance fixture supply them as function pointers | Step 08. Making the suite generic is what exposed it: every shell calls the resolvers across the FFI, yet nothing generic could reach them. D12's principle is that `Draft` is what shells call — and shells call these. `Stashable` is a subtrait because `from_stash` needs `Sized` and because a feature whose process cannot die owes no stash. The alternative makes the fixture trait a mirror of `spike-profile`'s inherent API, and step 10's generated contract tests would inherit that shape |
+| **D18** — the async check is a core subtrait, `Checked: Draft`, id-keyed by a concrete `CheckId` enum | Leave `begin`/`complete`/`state` as inherent methods the macro stamps per feature; or defer to step 10 | Step 09, answering §9. Four independent consumers — two shells, `spike-profile-ffi`, and step 08's `AsyncCheckFeature` — had each re-derived the same three methods, and the fixture carried a comment saying a later step should promote them. When that happens the contract is missing a name, not the consumers a convention. It is D17's argument one layer down, so it gets D17's answer: a `CheckId` enum is monomorphic and crosses FFI exactly as `FieldId` does; `check_pins` is what lets a generic state C13 ("verdicts are value-bound" — bound to *which* field?). Deferring would have step 10 design a core trait while writing codegen against it, with generated bindings as its only evidence. The fixture lost four members and not one test changed |
+| **D19** — "codegen dedup by raw type" is **dissolved**; the residue is reassigned to step 10 | Build a cross-field dedup pass into `#[bolted::entity]` | Step 09, answering §9. In Rust there is nothing to dedup: generics already key on the axis that varies. `FieldStash<R>` keys on the **raw**, so `ProfileStash` shares one `FieldStash<String>` across three fields with no analysis at all; `Field<V>` keys on the **value**, and `Field<Username>` must differ from `Field<PersonName>` because they parse differently. `#[bolted::entity]` never emits a field-state family, so no dedup pass could exist for it. The near-duplication the question was about is entirely in `spike-profile-ffi/src/dto.rs`, where `#[data]` forbids generics — a `bolted-ffi` question, with the cost already measured in that file. The alternative adds the first cross-field analysis to a macro whose doctrine is that it stays readable at a glance (§5) |
+| **D20** — `#[bolted::value]` is a **newtype** DSL that also derives the `ErrorData` bridge; composite values keep a hand-written `Value` impl | A full DSL including composites; or thin wiring over user-written `sanitize`/`validate` fns | Step 09. §5's sketch says "newtype", and `DateRange::try_new` is one `start <= end` comparison no DSL improves; a composite shape justified by exactly one example is a guess. The `From<Error> for ErrorData` block is the most repetitive thing in a hand-written value type and is pure name-stamping (variant → snake_case key, named fields → params) — generating it is most of why the macro pays for itself, so "thin wiring" leaves the boilerplate the doctrine exists to delete. `custom(..)` takes `key`/`variant` overrides so that a generated feature keeps the l10n keys its shells already ship; `len_chars` does not, and a uniform DSL therefore renames `spike-note`'s `blank` to `too_short` — a real migration cost, recorded rather than hidden |
+| **D21** — `#[bolted::feature_model]` is **cut**; `Feature` is not designed here | Design `State`/`Msg`/`Caps`/`update` now; or emit `#[boltffi::data]` as opaque tokens without linking boltffi | Step 09. `bolted-macros` may not import boltffi (§5 makes `bolted-ffi` the only crate that does, and that seam is the swappable one), and the `Feature` trait has never been written in any of five spikes — it is a sketch in §5 and nowhere else. Emitting boltffi tokens blind is possible and **untestable** inside `mise run check`: the only crate that could compile the output is `spike-profile-ffi`, step 10's rewrite target. Designing `Feature` from zero evidence is a design session, not an implementation step. That the Elm half of §1 has no code behind it after five spikes is itself a finding — §9 now says so |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -400,14 +429,22 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   atomic inside one call, so `Pending` is only ever seen on the stream, never by a `snapshot()` caller.
   A spinner bound to a `snapshot()` read needs the split `begin`/`complete` exposed across the
   boundary (which D10 says is the right shape anyway).
-- **Codegen dedup by raw type** — *step 09.* Three of the spike's four field-state families are
-  structurally identical (`String` raw). Per-value-type stamping is what a macro naturally does; is the
-  dedup worth the complexity?
-- **Where does the async check's surface live?** — *step 09.* `begin` / `complete` / `state` for a
-  single-flight check are on no trait: every shell and every generated binding re-derives them, and
-  step 08's `AsyncCheckFeature` had to declare them itself in order to test C10/C13/C16. If a macro is
-  to emit them, the contract should name them. Introduced by the extraction, which is what extractions
-  are for.
+- **FFI dedup of field-state families** — *step 10 (`bolted-ffi`).* What survives of "codegen dedup by
+  raw type" after D19 dissolved the Rust half. `#[data]` forbids generics, so `spike-profile-ffi`
+  stamps three structurally identical `…FieldState` families for `Username`/`PersonName`/`Email`
+  (`Raw = String`) and a fourth for `Availability`. Should `bolted-ffi` emit one `TextFieldState`
+  instead? The cost is already measured in `dto.rs`; the question is whether a shared DTO is worth the
+  loss of per-field naming in Swift and Kotlin.
+- **The `Feature` trait is unwritten** — *its own session, before Phase 4.* §1 describes an Elm core
+  and §5 sketches `Feature` (`State` / `Msg` / `Caps` / `update`), but five spikes have shipped without
+  one: every shell drives `Store` and `Draft` directly. `#[bolted::feature_model]` cannot exist until
+  this does (D21). Either the trait is real and the spikes have been quietly ignoring it, or §1's Elm
+  framing describes the *store* and the trait should be struck. This is the largest undischarged claim
+  in the architecture.
+- **Composite value objects in `#[bolted::value]`** — *whenever a second one exists.* D20 scopes the
+  macro to newtypes, so `DateRange` (raw `(Date, Date)`, invariant across two parts) stays
+  hand-written. A composite needs struct-shaped parts, a tuple raw, and a cross-field invariant — a
+  second macro shape, currently justified by exactly one example. Do not design it from that one.
 
 ## 10. Prior art
 

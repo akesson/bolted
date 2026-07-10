@@ -218,6 +218,33 @@ fn a_composite_value_is_refused_with_a_pointer_to_the_decision() {
     );
 }
 
+/// Two validators raising the same error variant emit duplicate enum variants and an unreachable
+/// match arm. The compiler catches it either way — but at the use site, pointing into generated code
+/// the user never wrote. Refusing here is the difference between a diagnosis and a symptom.
+#[test]
+fn two_validators_may_not_raise_the_same_error_variant() {
+    refuses(
+        crate::value::expand(
+            quote!(),
+            quote! {
+                #[validate(len_chars(min = 1, max = 5), len_chars(min = 2, max = 9))]
+                pub struct X(String);
+            },
+        ),
+        "merge them into one `len_chars",
+    );
+    refuses(
+        crate::value::expand(
+            quote!(),
+            quote! {
+                #[validate(custom(a::check), custom(b::check))]
+                pub struct X(String);
+            },
+        ),
+        "give one of them `variant =",
+    );
+}
+
 /// The three `#[check(..)]` keys are stable l10n strings that three shells already ship. A macro
 /// that defaulted them from the field name would silently move a translation key on a rename.
 #[test]
@@ -376,14 +403,64 @@ fn every_mutation_path_routes_through_the_single_guard() {
         .expect("the guard is emitted");
     assert!(guard.contains(". reset ()"), "the reset lives in the guard");
 
-    // Every mutation routes through it. For an entity of N fields the guard is named once to define
-    // it, once per `try_set_*`, once per resolver, and once in `rebase` — and nowhere else, because
-    // there is nowhere else a field's value can move.
-    const FIELDS: usize = 2;
+    // Every mutation that CAN move a checked field's value routes through it: the checked field's own
+    // setter, both resolvers (which take a field id at runtime), and `rebase` (which moves every
+    // field). Named once more to define it. Nowhere else, because nowhere else can a checked value
+    // move.
+    const CHECKED_SETTERS: usize = 1;
     assert_eq!(
         out.matches("bolted_guard").count(),
-        1 + FIELDS + 2 + 1,
-        "definition, {FIELDS} setters, 2 resolvers, rebase — and no unguarded mutation path"
+        1 + CHECKED_SETTERS + 2 + 1,
+        "definition, {CHECKED_SETTERS} checked setter, 2 resolvers, rebase — and no unguarded path"
+    );
+}
+
+/// The converse, and it is about latency, not correctness: `try_set_name` **must not** be guarded.
+///
+/// The guard clones every checked field's value and compares it afterwards. Routing an unchecked
+/// field's setter through it would clone the `Username` on every keystroke of the *name* box — on the
+/// exact path step 07's kill criterion 4 measures, and the one the "core validates every keystroke"
+/// bet rests on. `spike-profile` guards only `try_set_username`; the first version of this macro
+/// guarded all four, and the report would have claimed the hot path was untouched.
+#[test]
+fn an_unchecked_fields_setter_does_not_pay_for_the_guard() {
+    // Three fields, so that neither setter under test is the last one: `body_of` slices up to the
+    // next `pub fn`, and the final setter would otherwise swallow the resolvers and `rebase` — whose
+    // guards are correct and would make this test pass for the wrong reason.
+    let out = expand_entity(
+        quote!(),
+        quote! {
+            pub struct Profile {
+                #[check(rule = "u", pending_key = "p", required_key = "r")]
+                pub username: Username,
+                pub name: PersonName,
+                pub email: Email,
+            }
+        },
+    )
+    .to_string();
+
+    let body_of = |setter: &str| -> String {
+        let body = out
+            .split(&format!("pub fn {setter}"))
+            .nth(1)
+            .and_then(|s| s.split("pub fn ").next())
+            .unwrap_or_else(|| panic!("{setter} is emitted"))
+            .to_string();
+        assert!(
+            !body.contains("resolve_keep_mine"),
+            "the slice for {setter} must stop before the resolvers, or it proves nothing"
+        );
+        body
+    };
+
+    assert!(
+        !body_of("try_set_name").contains("bolted_guard"),
+        "an unchecked field's setter must not clone every checked value on every keystroke"
+    );
+    assert!(
+        body_of("try_set_username").contains("bolted_guard"),
+        "the checked field's own setter must be guarded (C13)"
     );
 }
 

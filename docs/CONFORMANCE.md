@@ -1,9 +1,9 @@
 # Bolted — Conformance suite
 
 **Status: frozen with ARCHITECTURE.md (step 06); C03 amended and C19 added in step 07; C12/C17/C18
-amended and C22 added in step 08.** These are the design's falsifiable claims. Each one is normative:
-an implementation of the Bolted contract that violates any of them is not a Bolted implementation,
-whatever else it does.
+amended and C22 added in step 08; C07 amended in step 09.** These are the design's falsifiable claims.
+Each one is normative: an implementation of the Bolted contract that violates any of them is not a
+Bolted implementation, whatever else it does.
 
 Every `CNN` below has at least one `cNN_*` function in
 [`crates/bolted-conformance`](../crates/bolted-conformance/src), generic over a feature, and
@@ -18,7 +18,8 @@ the mapping is verified by the build, not by review.
 | Step | What happens to it |
 |------|--------------------|
 | 06 | Named, documented, and running against `spike-profile`, the hand-written "as-if-generated" reference implementation. |
-| 08 (now) | **Generic over a feature**, extracted into `bolted-conformance`, and run against **two** — `spike-profile` (rule + async check + composite value) and `spike-note` (neither). A suite with one implementor proves nothing about genericity. |
+| 08 | **Generic over a feature**, extracted into `bolted-conformance`, and run against **two** — `spike-profile` (rule + async check + composite value) and `spike-note` (neither). A suite with one implementor proves nothing about genericity. |
+| 09 (now) | Run against **four**: the two above, plus `gen-profile` and `gen-note`, which declare the same features through `bolted-macros`. A generated feature either satisfies the contract unmodified or the doctrine that macros only stamp names is wrong. |
 | 10 | Emitted as **per-language contract tests** (Swift, Kotlin, C#) from the same IDs, so a generated binding that breaks C09 fails its own build. |
 
 Wording convention: **must** is normative. "The field" means an editable `Field<V>` of a draft; "the
@@ -55,7 +56,17 @@ async check; a feature with neither still satisfies the rest. The suite says so 
 | C21 | **Restore is a rebase.** Adopting a restored draft must conflict exactly those fields whose canonical moved while it was away, and leave the others dirty and `InSync` (C19). A resolution taken before the restore must survive it, because its effect lives in the ancestor. Adopting an entity-backed draft into a store with no canonical must orphan it (C11). A create-flow draft must never be moved (C12). |
 | C22 | **"A draft exists" and "a draft rebases" are different questions.** The store must answer both, separately. A create-flow draft (C12) and an orphan (C11) exist but do not rebase; `close` removes a draft from both counts. No single count may stand for the pair. |
 
-## Notes on six of them
+## Notes on the ones that cost something
+
+**C07's precedence clause was added in step 09, and it is an invariant nobody had written down.**
+Every `c07_*` assertion built a draft that fails exactly *one* gate, so none of them could see the
+order the gates run in. `commit_gates` reordered to check conflicts before orphaned passed the entire
+suite — found by mutation, not by reading. Both spikes have implemented `Orphaned → Conflicted →
+Validation` since step 01, identically and by accident of writing order. It matters because a shell
+obeying the wrong order shows a "keep mine / take theirs" banner over an entity the server has
+deleted, and offers to merge into a record that is gone. Step 09 *generates* those three `if`s, where
+a reordering is one line. Same disease as C12's second sentence: **a suite is silent about the states
+it never constructs.**
 
 **C13 + C16 together** are what make client-side async validation trustworthy. C13 guarantees a
 surviving `Done(Ok)` was computed for the value now in the field; C16 guarantees the value in a dirty

@@ -61,6 +61,7 @@ pub(crate) fn expand(_attr: TokenStream2, item: TokenStream2) -> syn::Result<Tok
             "`#[sanitize(..)]` is only defined for a `String` raw",
         ));
     }
+    reject_duplicate_variants(&validators)?;
 
     let name = item.ident.clone();
     let error = format_ident!("{}Error", name, span = name.span());
@@ -258,6 +259,47 @@ fn parse_custom(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Validator> {
         constraint: last.to_string(),
         path,
     })
+}
+
+/// The error-enum variant each validator raises, in order.
+fn variant_idents(validators: &[Validator]) -> Vec<Ident> {
+    let mut out = Vec::new();
+    for v in validators {
+        match v {
+            Validator::LenChars { min, .. } => {
+                if *min > 0 {
+                    out.push(format_ident!("TooShort"));
+                }
+                out.push(format_ident!("TooLong"));
+            }
+            Validator::Custom { variant, .. } => out.push(variant.clone()),
+        }
+    }
+    out
+}
+
+/// Two validators raising the same variant emit a duplicate enum variant *and* an unreachable match
+/// arm — a compile error at the use site, pointing into code the user never wrote. Refuse it here,
+/// where the message can name the declaration and say what to do.
+///
+/// Found by asking what a second `len_chars` on one value does. Nothing forbade it, and the answer
+/// was two `TooShort`s.
+fn reject_duplicate_variants(validators: &[Validator]) -> syn::Result<()> {
+    let names = variant_idents(validators);
+    for (i, first) in names.iter().enumerate() {
+        if let Some(dup) = names[i + 1..].iter().find(|n| *n == first) {
+            let hint = if first == "TooShort" || first == "TooLong" {
+                "merge them into one `len_chars(min = .., max = ..)`"
+            } else {
+                "give one of them `variant = SomeOtherName`"
+            };
+            return Err(syn::Error::new(
+                dup.span(),
+                format!("two validators both raise `{first}`: {hint}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn error_variants(validators: &[Validator]) -> Vec<TokenStream2> {
