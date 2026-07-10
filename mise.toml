@@ -319,10 +319,10 @@ for s in $serials; do
     exit 1 ;;
   esac
 done
-# `PhysicalChattinessProbe` asserts on Build.FINGERPRINT too, so the guard survives someone calling
-# gradle directly. Belt and braces: a benchmark that lies about its hardware is worse than none.
-gradle connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.class=dev.bolted.profileapp.PhysicalChattinessProbe "$@"
+# `-Pbolted.hw` selects the @PhysicalDevice suite (and only it). `PhysicalChattinessProbe` also
+# asserts on Build.FINGERPRINT, so the guard survives someone calling gradle directly. Belt and
+# braces: a benchmark that lies about its hardware is worse than no benchmark.
+gradle connectedDebugAndroidTest -Pbolted.hw "$@"
 echo
 echo "Numbers are in logcat under the 'BoltedApp' tag, and in:"
 echo "  android/profile-app/build/reports/androidTests/connected/"

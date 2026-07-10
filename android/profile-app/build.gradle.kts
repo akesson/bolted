@@ -10,6 +10,10 @@ plugins {
 // a stale `pack` fails loudly rather than compiling against a checked-in copy.
 val ffiDist = file("../../crates/spike-profile-ffi/dist/android")
 
+// `-Pbolted.hw` flips the suite over to the hardware benchmark (`@PhysicalDevice`), which refuses to
+// run on an emulator. By default it is excluded, so the headless GMD suite stays green.
+val hardwareOnly = providers.gradleProperty("bolted.hw").isPresent
+
 android {
     namespace = "dev.bolted.profileapp"
     compileSdk = 35
@@ -23,6 +27,13 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // One ABI: the app runs on an arm64-v8a emulator or device (see boltffi.toml).
         ndk { abiFilters += "arm64-v8a" }
+
+        val physical = "dev.bolted.profileapp.PhysicalDevice"
+        if (hardwareOnly) {
+            testInstrumentationRunnerArguments["annotation"] = physical
+        } else {
+            testInstrumentationRunnerArguments["notAnnotation"] = physical
+        }
     }
 
     sourceSets {
