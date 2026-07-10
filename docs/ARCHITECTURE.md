@@ -1,18 +1,20 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.1, step 06; amended step 07).** Phase 1 validated this design against four
-independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
+**Status: FROZEN (v1.2, step 06; amended steps 07 and 08).** Phase 1 validated this design against
+four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
 
 **v1.1** carries step 07's two amendments, both owner-approved before implementation: **D14** fixes a
 verified defect in `rebase` (C03 amended, C19 added), and **D15** adds `Store::adopt` and the draft
-stash. A freeze is a commitment to a design, not a promise that the design was already correct — the
-record of what changed, and why, is the point.
+stash. **v1.2** carries step 08's, which §9 had scheduled for it: **D16** makes the store id-keyed and
+lock-free (C17/C18 amended, C22 added) and **D17** moves the resolvers onto `Draft` and adds
+`Stashable`. A freeze is a commitment to a design, not a promise that the design was already correct —
+the record of what changed, and why, is the point.
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
-[CONFORMANCE.md](CONFORMANCE.md) as C01–C18, each with a test.
+[CONFORMANCE.md](CONFORMANCE.md) as C01–C22, each with a test.
 
 Read [VISION.md](VISION.md) first for scope and principles — especially the verification ladder,
 which every decision below is justified against.
@@ -185,23 +187,29 @@ reason (`Validation` / `Conflicted` / `Orphaned`). On success the core may norma
 server-round-trip; the shell receives final truth via the ordinary observe path, never its own input
 echoed back. A refused commit must never destroy the edit session (step-01 F3).
 
-**The handle is a lifecycle object.** `submit` borrows it; on success the draft is consumed and the
-handle becomes an inert **tombstone** (`is_live()` false, no draft access, a second submit is
-`AlreadySubmitted`), and on refusal the draft goes straight back (C17). `close()` releases the draft,
-is idempotent, and stops the store rebasing it (C18).
+**The store owns the drafts; a handle is a `DraftId`** — `Copy`, monotonically issued, never reused
+(D16). `submit(id)` consumes the draft on success, after which the id is not live (`is_live()` false,
+no draft access, a second submit is `AlreadySubmitted`); on refusal the draft goes straight back under
+the same id (C17). `close(id)` releases the draft, is idempotent, and stops the store rebasing it
+(C18).
 
-This is not symmetric across languages, and pretending otherwise would be a lie:
+**`close` is the only release path, on every platform.** An id is not an owner, so nothing reaps a
+draft that a shell simply forgets. This used to be asymmetric, and pretending the asymmetry was
+harmless was the lie:
 
 | | release path | use after release |
 |---|---|---|
-| Rust | `Drop`; `close()` is a convenience | `None` from every borrow |
-| Swift / ARC | `deinit` runs Rust `Drop` automatically | impossible (ARC), plus the tombstone |
-| Kotlin / C# | **`close()` only** — the GC never frees the Rust draft | **must** be a typed error (step 10) |
+| Rust | `close(id)` — an id is not an owner | `None` from `draft(id)` |
+| Swift / ARC | `deinit` runs the wrapper's `Drop`, which calls `close` | impossible (ARC), plus the dead id |
+| Kotlin / C# | `close()` only — the GC never frees the Rust draft | **must** be a typed error (step 10) |
 
 Step 05 measured this on ART: an abandoned Kotlin handle is collected while the Rust draft stays
-registered forever, an unreachable zombie the store keeps rebasing. So the contract names an explicit
-release everywhere, `use { }` / `IDisposable` are the idiomatic forms, and BoltFFI's raw-pointer
-handles make use-after-close silent UB today — which `bolted-ffi` must close (§9).
+registered forever, an unreachable zombie the store keeps rebasing. Before D16 the Rust reference
+implementation reaped that zombie on `Drop`, so a lifecycle bug written against it surfaced for the
+first time on Android. Now the contract reads identically everywhere, `use { }` / `IDisposable` are
+the idiomatic wrappers, and BoltFFI's raw-pointer handles make use-after-close silent UB today —
+which `bolted-ffi` must close (§9). Note that an *id* has no such hazard: a stale one is simply not
+live, which is the mechanism step 10 needs.
 
 ## 5. Manifestation: generics for behavior, macros for names, traits as contracts
 
@@ -238,25 +246,42 @@ pub trait Draft {
     fn dirty_fields(&self) -> Vec<Self::FieldId>;
     fn conflicts(&self) -> Vec<Self::FieldId>;
     fn validate(&self) -> ValidationReport<Self::FieldId>;
+    fn resolve_keep_mine(&mut self, field: Self::FieldId);      // D17
+    fn resolve_take_theirs(&mut self, field: Self::FieldId);    // D17
     fn commit(self) -> Result<Self::Entity, (Self, CommitError<Self::FieldId>)> where Self: Sized;
+}
+
+pub trait Stashable: Draft {                                    // D17 — optional; process death
+    type Stash: Clone + PartialEq + Debug;
+    fn stash(&self) -> Self::Stash;
+    fn from_stash(stash: &Self::Stash) -> Self where Self: Sized;
 }
 
 pub enum CommitError<FieldId> { Validation(ValidationReport<FieldId>), Conflicted { fields: Vec<FieldId> }, Orphaned }
 pub enum SubmitError<FieldId> { Validation(..),                        Conflicted { .. },                  Orphaned, AlreadySubmitted }
 ```
 
-`Draft` is the FFI surface and stays minimal. The store-facing plumbing it needs to drive live rebase
-— `from_canonical` / `rebase(entity, version)` / `orphan` — sits on a `StoreDraft: Draft` subtrait
-that no shell ever calls (§8). `AlreadySubmitted` is the one failure a *handle* can have that a draft
-cannot, which is why the two enums differ by exactly that variant.
+**The store ships no lock** (D16). `Store<D>` owns its drafts, so it is `Send` whenever `D` is, and the
+shell chooses the sharing discipline: a Rust shell holds it by value, `bolted-ffi` holds it behind one
+`Mutex`. Mutations return their fan-out as data (`Vec<DraftId>`) rather than calling out to a
+subscriber — sans-io, applied to the store, and what lets a shell obey "never emit or call out under
+the lock" without the core knowing that locks or streams exist.
+
+`Draft` is the FFI surface and stays minimal, but *minimal* means what shells call, not what is
+convenient: the resolvers were inherent methods on the concrete draft until step 08, invisible to
+anything generic, though every shell called them across the boundary (D17). The store-facing plumbing
+— `from_canonical` / `rebase(entity, version)` / `orphan` / `is_based` — sits on a `StoreDraft: Draft`
+subtrait that no shell ever calls (§8, D12). `AlreadySubmitted` is the one failure an *id* can have
+that a draft cannot, which is why the two enums differ by exactly that variant.
 
 **Crate layout** (physicalizes VISION's narrow-coupling promise):
 
 ```
-bolted-core    all traits + generic types; sans-io; NEVER depends on boltffi
-bolted-macros  the derives; output = thin delegation to bolted-core
-bolted-ffi     the ONLY crate importing boltffi (the swappable seam)
-bolted-check   build-time analyses (drift, coverage, constraint semver)
+bolted-core         all traits + generic types; sans-io, and lock-free; NEVER depends on boltffi
+bolted-conformance  C01–C22, generic over a feature; the executable form of CONFORMANCE.md
+bolted-macros       the derives; output = thin delegation to bolted-core
+bolted-ffi          the ONLY crate importing boltffi (the swappable seam)
+bolted-check        build-time analyses (drift, coverage, constraint semver)
 ```
 
 **Sans-io / runtime-agnostic core**: effects are data driven by the platform layer; no tokio in
@@ -275,35 +300,42 @@ structural rather than aspirational.
   leaves the field **clean** (the core trims, so the value never moved) while the control holds live
   keystrokes; repainting it would eat the spaces and jump the caret. `touched` is shell-local
   presentation state about a text control — not the core-side `touched` flag §8 rejects.
-- **GC languages (Kotlin, C#)**: no deterministic destruction, so `close()` is the only release path
-  and forgetting it leaks a Rust draft the store keeps rebasing. Measured on ART in step 05; see §4.
+- **GC languages (Kotlin, C#)**: no deterministic destruction, so `close()` cannot be optional. Since
+  D16 it is not optional anywhere — an id is not an owner — and forgetting it leaks a Rust draft the
+  store keeps rebasing, in every language. Measured on ART in step 05; see §4.
 - **JNI is the performance worst case**, not Swift. Measured (step 05, emulator): a per-keystroke
   `try_set` + `snapshot` round-trip costs **12–13 µs** against a 1.0 ms bar, ~1.5–2× Apple's on the
   same host. The per-keystroke bet holds; no shell-side write buffer is needed. *Re-check on physical
   hardware in step 07 — an emulator on an arm64 host is the right VM and the wrong CPU.*
-- **Process death (Android)**: core-side drafts die with the process → drafts must be
-  serializable with a stash/restore hook. Undesigned; owned by step 07 (§9).
+- **Process death (Android)**: core-side drafts die with the process, so a draft flattens to raw data
+  and comes back through `Store::restore` (D15, C20/C21, §4). The shell decides when — Android's
+  `SavedStateHandle`; nothing else has to.
 - **Rust shells** (web, Linux-native): consume `bolted-core` + feature crates directly; zero
   FFI; the web target also enforces `wasm32-unknown-unknown` discipline on the whole core.
 
 ## 7. Invariants — the conformance suite
 
-The design's falsifiable claims, C01–C21, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
-and exist as named tests (`c01_*` … `c21_*`) in `crates/spike-profile/tests/conformance.rs`. A drift
-test parses the document and fails the build if an ID has no test or a test has no ID — the mapping is
-verified by the build, not by review (VISION rung 3).
+The design's falsifiable claims, C01–C22, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
+and exist as generic functions (`c01_*` … `c22_*`) in `crates/bolted-conformance`, stamped into tests
+by `*_suite!` macros. Two features implement the fixture traits — `spike-profile` (rule, async check,
+composite value) and `spike-note` (none of them) — because a suite with one implementor is a suite
+shaped like its implementor. A drift test parses the document and fails the build if an ID has no
+function, a function has no ID, or a function no macro stamps: the mapping is verified by the build,
+not by review (VISION rung 3).
 
 In one line each: **C01** value roundtrip · **C02** a clean field follows canonical · **C03** a dirty
 field whose canonical moved is never silently overwritten · **C04** convergent rebase is clean ·
 **C05** revert-for-free · **C06** no stale-value submit · **C07** commit is the parse moment, each
 refusal typed · **C08** rebase re-runs tier 2 · **C09** resolution semantics · **C10** latest check
-wins · **C11** deletion orphans · **C12** create-flow never rebases · **C13** verdicts are value-bound ·
-**C14** auto-converge on edit · **C15** the base version tracks the rebase · **C16** an unrun check
-blocks a dirty field · **C17** submit tombstones the handle · **C18** release is explicit and
-idempotent · **C19** rebase is a three-way merge, and idempotent · **C20** a draft stashes to raw data
-and restores from it · **C21** restore is a rebase.
+wins · **C11** deletion orphans · **C12** create-flow never rebases, and an ancestor anywhere means
+entity-backed · **C13** verdicts are value-bound · **C14** auto-converge on edit · **C15** the base
+version tracks the rebase · **C16** an unrun check blocks a dirty field · **C17** submit releases the
+draft · **C18** release is explicit, idempotent, and the only path · **C19** rebase is a three-way
+merge, and idempotent · **C20** a draft stashes to raw data and restores from it · **C21** restore is
+a rebase · **C22** "exists" and "rebases" are different questions.
 
-Step 08 makes the suite generic over a feature; step 10 emits it as per-language contract tests.
+Not every feature owes every invariant: C08 presupposes a tier-2 rule, C10/C13/C16 an async check.
+Step 10 emits the suite as per-language contract tests.
 
 ## 8. Resolved decisions (with the losing alternative)
 
@@ -337,6 +369,8 @@ what, and why it was worth it.
 | Failed submit returns the draft (D4/D5) | Submit consumes the handle on every outcome | Losing the user's edits on a rejected submit is data loss (step-01 F3) |
 | **D14 (C19)** — `rebase` compares `theirs` against `base` first: an unmoved canonical never conflicts | Guard in the generated `Draft::rebase`, skipping fields whose canonical equals their base | Post-freeze amendment (step 07). The store rebases every field on every canonical change, so a dirty `name` conflicted whenever the server moved `email` — offering "take theirs" over the user's own ancestor. Putting the guard in the core fixes it once and makes `checkout() == adopt(from_canonical(..))`; putting it in generated code means every generator must re-derive it, and none of them would clear a conflict when canonical moves *back* to the ancestor |
 | **D15 (C20/C21)** — the draft stash is `{base_version, status, per-field (raw, base)}`; restore is `Store::adopt(D::from_stash(..))`, which rebases onto fresh canonical | Stash `sync` too, or replay `try_set` onto a fresh checkout with no ancestor | Step 07. `theirs` from before a process death names a canonical value the server may no longer hold — restoring it restores a lie, and it re-derives for free on the next rebase. Replaying without the ancestor is worse: a field the server moved while we were dead returns *dirty*, not *conflicted*, and submit silently overwrites the server. The verdict is not stashed either, and C13 + C16 then make the restored draft safe with no new invariant |
+| **D16 (C17/C18/C22)** — the store owns its drafts in a `BTreeMap<DraftId, _>`, ships **no lock**, and returns its fan-out as data; handles are `Copy` ids | An `Rc<RefCell<Store>>` RAII handle that closes on `Drop` (keeping C18's old Drop clause); or keep two hand-written stores | Step 08, answering §9's store-concurrency question. Phase 1 wrote the loop three times and the copies had already drifted (C22). One `Store`, `Send` by construction, serves both a lock-free Rust shell and the FFI's single `Mutex` — step 02's three constraints become structural rather than remembered. The RAII alternative was *tried*: `LocalHandle::drop` must take the `RefCell` to reach the store, and ordinary safe code (`let g = store.borrow_mut(); drop(handle);`) panics; `try_borrow_mut` leaks instead. A framework mechanic that can only fail at runtime is rung 4, which VISION forbids. The price is real and named in C18: `close(id)` is now mandatory in Rust too |
+| **D17** — `Draft` carries `resolve_keep_mine`/`resolve_take_theirs`; `Stashable: Draft` carries `type Stash` | Leave both as inherent methods and let the conformance fixture supply them as function pointers | Step 08. Making the suite generic is what exposed it: every shell calls the resolvers across the FFI, yet nothing generic could reach them. D12's principle is that `Draft` is what shells call — and shells call these. `Stashable` is a subtrait because `from_stash` needs `Sized` and because a feature whose process cannot die owes no stash. The alternative makes the fixture trait a mirror of `spike-profile`'s inherent API, and step 10's generated contract tests would inherit that shape |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -349,13 +383,6 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   mechanics that can only fail at runtime; a typed `DraftClosed` is the floor. Should `bolted-ffi`
   also emit a `java.lang.ref.Cleaner` backstop so a forgotten `close()` leaks memory until GC rather
   than forever?
-- **Should the store hold drafts weakly?** — *step 08.* With `close()` mandatory and no backstop, a
-  forgotten handle grows the registry without bound and every canonical change rebases every zombie.
-- **Store concurrency model behind FFI** — *step 08.* Evidence from both sides: the browser wants
-  `Rc<RefCell>` and used `Store` unmodified; the FFI wants `Send + Sync` and bypassed `Store`
-  entirely. One type cannot serve both — parameterise the handle (`Rc` vs `Arc`) or ship two. Step 02's
-  three constraints hold and are not up for debate: **`Send` state behind one lock**, **id-keyed
-  handles, not `Rc` clones**, and **never emit or call out under the lock**.
 - **Stash schema evolution** — *step 10 (`bolted-ffi`) and Phase 4 (`bolted-check`).* The stash is the
   framework's first **untrusted input**: bytes the OS kept while the process was dead, possibly
   written by an *older version of the app*. C01 says a value's raw form roundtrips — so an ancestor
@@ -376,6 +403,11 @@ Each names the step that owns it. Nothing below blocks Phase 3.
 - **Codegen dedup by raw type** — *step 09.* Three of the spike's four field-state families are
   structurally identical (`String` raw). Per-value-type stamping is what a macro naturally does; is the
   dedup worth the complexity?
+- **Where does the async check's surface live?** — *step 09.* `begin` / `complete` / `state` for a
+  single-flight check are on no trait: every shell and every generated binding re-derives them, and
+  step 08's `AsyncCheckFeature` had to declare them itself in order to test C10/C13/C16. If a macro is
+  to emit them, the contract should name them. Introduced by the extraction, which is what extractions
+  are for.
 
 ## 10. Prior art
 
