@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import com.example.gen_profile_ffi.TextValidity
 import com.example.gen_profile_ffi.ProfileFieldId
 import com.example.gen_profile_ffi.CheckStateFfi
+import dev.bolted.profileapp.generated.ProfileStashCodec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -53,7 +54,7 @@ class StashRestoreTest {
         first.clear()
 
         // While we were dead the server moved `email`, and only `email`.
-        revived[ProfileViewModel.SERVER_KEY] = StashCodec.encodeValues(SEED.copy(email = "server@corp.example"))
+        revived[ProfileViewModel.SERVER_KEY] = ProfileStashCodec.encodeValues(SEED.copy(email = "server@corp.example"))
 
         val second = VmHost()
         val vm2 = second.create(revived)
@@ -177,9 +178,9 @@ class StashRestoreTest {
      */
     @Test
     fun aCorruptStashDegradesToAFreshCheckout() {
-        assertNull(StashCodec.decode("{not json"))
-        assertNull(StashCodec.decode("""{"schema_version":1,"username":{}}""")) // present version, missing fields
-        assertNull(StashCodec.decodeValues("[]"))
+        assertNull(ProfileStashCodec.decode("{not json"))
+        assertNull(ProfileStashCodec.decode("""{"schema_version":1,"username":{}}""")) // present version, missing fields
+        assertNull(ProfileStashCodec.decodeValues("[]"))
 
         val handle = SavedStateHandle()
         val host = VmHost()
@@ -209,10 +210,10 @@ class StashRestoreTest {
         // Simulate an upgraded app: rewrite the persisted envelope's version to one this build does
         // not recognise. The bytes stay well-formed — only the schema version is unacceptable.
         val bundle = revived.get<android.os.Bundle>(ProfileViewModel.STASH_KEY)!!
-        val stale = StashCodec.decode(bundle.getString("stash")!!)!!
+        val stale = ProfileStashCodec.decode(bundle.getString("stash")!!)!!
             .let { it.copy(schemaVersion = it.schemaVersion + 1u) }
         revived[ProfileViewModel.STASH_KEY] =
-            android.os.Bundle().apply { putString("stash", StashCodec.encode(stale)) }
+            android.os.Bundle().apply { putString("stash", ProfileStashCodec.encode(stale)) }
 
         val second = VmHost()
         val vm2 = second.create(revived)

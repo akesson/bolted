@@ -28,6 +28,7 @@ import com.example.gen_profile_ffi.ProfileStoreFfi
 import com.example.gen_profile_ffi.ProfileValues
 import com.example.gen_profile_ffi.SubmitErrorFfi
 import com.example.gen_profile_ffi.UsernameChecker
+import dev.bolted.profileapp.generated.ProfileStashCodec
 import com.example.gen_profile_ffi.CheckVerdictFfi
 import com.example.gen_profile_ffi.CheckStateFfi
 import com.example.gen_profile_ffi.ValidationReportFfi
@@ -138,7 +139,7 @@ class ProfileViewModel(
         // whatever the server says NOW, not onto what it said when we died.
         store.applyCanonical(savedState.serverState() ?: SEED)
 
-        val stash = savedState.get<Bundle>(STASH_KEY)?.getString(STASH_JSON)?.let(StashCodec::decode)
+        val stash = savedState.get<Bundle>(STASH_KEY)?.getString(STASH_JSON)?.let(ProfileStashCodec::decode)
         // D27: the decoded stash is untrusted (bytes an older build may have written). `acceptStash`
         // gates its schema version; a version this build does not accept is refused wholesale and
         // typed, and we start a fresh session rather than trusting a single field of it.
@@ -158,7 +159,7 @@ class ProfileViewModel(
         // once, at save time, not on every keystroke.
         savedState.setSavedStateProvider(STASH_KEY) {
             Bundle().apply {
-                if (draft.isLive()) putString(STASH_JSON, StashCodec.encode(draft.stash()))
+                if (draft.isLive()) putString(STASH_JSON, ProfileStashCodec.encode(draft.stash()))
             }
         }
 
@@ -324,7 +325,7 @@ class ProfileViewModel(
         }
         runCatching { store.applyCanonical(next) }
         // A restored VM must see the same server state, so remember it across process death too.
-        savedState[SERVER_KEY] = StashCodec.encodeValues(next)
+        savedState[SERVER_KEY] = ProfileStashCodec.encodeValues(next)
     }
 
     // ---- constraint-derived affordances (NO literals here or in the view) -----------------------
@@ -463,7 +464,7 @@ class ProfileViewModel(
     }
 
     private fun SavedStateHandle.serverState(): ProfileValues? =
-        get<String>(SERVER_KEY)?.let(StashCodec::decodeValues)
+        get<String>(SERVER_KEY)?.let(ProfileStashCodec::decodeValues)
 
     companion object {
         const val STASH_KEY = "bolted.draft"
