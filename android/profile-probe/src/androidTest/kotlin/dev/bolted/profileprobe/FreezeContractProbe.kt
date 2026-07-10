@@ -166,6 +166,35 @@ class FreezeContractProbe {
         }
     }
 
+    /**
+     * C22: "a draft exists" and "a draft rebases" are different questions, and the store answers
+     * both, separately.
+     *
+     * Until step 08 there were two hand-written store loops, and each had a `live_draft_count()`.
+     * The core's meant "would be rebased"; this wrapper's meant "exists". They disagreed by one on
+     * every create-flow draft and every orphan, for five steps, and no test could compare them
+     * because they lived in different crates. D16 deleted one loop; the wrapper now asks the core.
+     */
+    @Test
+    fun c22_draftCountAndRebasingDraftCountAreDifferentQuestions() {
+        ProfileStoreFfi().use { empty ->
+            empty.checkout().use { _ ->
+                assertEquals("a create-flow draft exists", 1u, empty.liveDraftCount())
+                assertEquals("and is never rebased (C12)", 0u, empty.rebasingDraftCount())
+
+                empty.applyCanonical(SEED)
+                empty.checkout().use { _ ->
+                    assertEquals("an entity-backed checkout is both", 2u, empty.liveDraftCount())
+                    assertEquals(1u, empty.rebasingDraftCount())
+                }
+                // close() removed it from both — and on ART, close() is the only thing that would
+                assertEquals(1u, empty.liveDraftCount())
+                assertEquals(0u, empty.rebasingDraftCount())
+            }
+            assertEquals(0u, empty.liveDraftCount())
+        }
+    }
+
     private fun canonicalUsername(): String {
         val validity = store.canonical()?.username?.validity
         return (validity as? com.example.spike_profile_ffi.UsernameValidity.Valid)?.value

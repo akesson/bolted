@@ -239,7 +239,8 @@ final class FreezeContractTests: XCTestCase {
         let restored = empty.restore(stash: stash)
 
         XCTAssertEqual(restored.snapshot().status, .orphaned)
-        XCTAssertEqual(empty.liveDraftCount(), 1) // present, but not rebasing — see below
+        XCTAssertEqual(empty.liveDraftCount(), 1) // it exists...
+        XCTAssertEqual(empty.rebasingDraftCount(), 0) // ...and it is not rebased (C22)
         XCTAssertThrowsError(try restored.submit()) { error in
             guard case .orphaned? = error as? SubmitErrorFfi else {
                 return XCTFail("expected .orphaned, got \(error)")
@@ -247,22 +248,30 @@ final class FreezeContractTests: XCTestCase {
         }
     }
 
-    /// FINDING (step-07 friction 4): `liveDraftCount()` does **not** mean the same thing on the two
-    /// sides of the boundary. `bolted_core::Store::live_draft_count` counts *drafts the store would
-    /// rebase*; this wrapper counts *un-submitted drafts*. They agree everywhere C18 looks, and
-    /// disagree on exactly the two drafts that are present-but-never-rebased: a restored orphan
-    /// (above) and a create-flow draft (here). The Rust suite asserts 0 for both
-    /// (`c21_restore_into_a_deleted_canonical_orphans_the_draft`,
-    /// `c21_a_restored_create_flow_draft_is_never_moved`).
+    /// C22 — and the closing of step-07 friction 4.
     ///
-    /// Same name, two semantics, across a boundary step 10 will *generate*. Pin it to a C-ID.
-    func testLiveDraftCountDisagreesWithTheCoreOnACreateFlowDraft() throws {
+    /// This test used to be called `testLiveDraftCountDisagreesWithTheCoreOnACreateFlowDraft`, and
+    /// it asserted a bug: `liveDraftCount()` meant *"drafts the store would rebase"* in
+    /// `bolted_core::Store` and *"un-submitted drafts"* in this wrapper. The two agreed everywhere
+    /// C18 looked and disagreed on exactly the drafts that are present-but-never-rebased — a
+    /// create-flow draft, and a restored orphan. Two hand-written store loops, so there was no
+    /// single answer to make right.
+    ///
+    /// Step 08 (D16) deleted one of the loops. The wrapper now asks the core, which answers two
+    /// questions under two names, and this test asserts the contract instead of the defect.
+    func testC22DraftCountAndRebasingDraftCountAreDifferentQuestions() throws {
         let empty = ProfileStoreFfi() // no canonical: every checkout is create-flow
         let draft = empty.checkout()
         XCTAssertFalse(draft.snapshot().username.dirty)
-        XCTAssertEqual(
-            empty.liveDraftCount(), 1,
-            "the wrapper counts un-submitted drafts; bolted_core::Store would say 0 here"
-        )
+
+        XCTAssertEqual(empty.liveDraftCount(), 1, "a create-flow draft exists")
+        XCTAssertEqual(empty.rebasingDraftCount(), 0, "and is never rebased (C12)")
+
+        // an entity-backed checkout is both
+        try empty.applyCanonical(values: validValues())
+        let edit = empty.checkout()
+        XCTAssertEqual(empty.liveDraftCount(), 2)
+        XCTAssertEqual(empty.rebasingDraftCount(), 1)
+        _ = edit
     }
 }
