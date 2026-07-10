@@ -77,7 +77,7 @@ class CallbackProbe {
     }
 
     /**
-     * I13, value-bound verdict reset: typing changes the checked value, so the core must discard the
+     * C13, value-bound verdict reset: typing changes the checked value, so the core must discard the
      * old verdict rather than show a `Passed`/`Failed` belonging to text that is gone.
      */
     @Test

@@ -1,9 +1,16 @@
 # Bolted — Architecture
 
-**Status: design draft, pre-validation.** This document records the architecture as designed;
-Phase 1 of [ROADMAP.md](ROADMAP.md) exists to validate it. Sections marked **OPEN** are
-deliberately undecided. Read [VISION.md](VISION.md) first for scope and principles —
-especially the verification ladder, which every decision below is justified against.
+**Status: FROZEN (v1.0, step 06).** Phase 1 validated this design against four independent shells —
+pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their friction logs. Every
+question that Phase 1 could answer is answered, in §8, with the alternative it beat. What remains
+**OPEN** in §9 is genuinely undecided and each item names the step that owns it.
+
+Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
+breaking change to Bolted, not an edit. The falsifiable claims live in
+[CONFORMANCE.md](CONFORMANCE.md) as C01–C18, each with a test.
+
+Read [VISION.md](VISION.md) first for scope and principles — especially the verification ladder,
+which every decision below is justified against.
 
 ---
 
@@ -26,7 +33,7 @@ The contract a feature model exposes has exactly three verbs (CQRS-shaped):
 
 | Verb | Surface | Semantics |
 |------|---------|-----------|
-| **observe** | `snapshots() -> Stream<FeatureSnapshot>` | read-only, always-valid state, flows continuously |
+| **observe** | read-only, always-valid current state | *how* it is delivered is per-target: a `snapshots()` stream across FFI, a direct read plus a change tick in a Rust shell (§8) |
 | **command** | `toggle_x() -> Result<(), CmdError>` | single-action mutation, validate-or-reject |
 | **draft** | `checkout() -> FeatureDraft` | multi-field edit session: checkout → edit → validate → submit |
 
@@ -58,13 +65,26 @@ updated"), not a keystroke log. This is what makes replay/time-travel meaningful
 **Async validation** (e.g. username uniqueness) is an effect from the draft with **single-flight
 semantics owned by the core**: a new check cancels the in-flight one; stale completions are
 discarded by sequence number. Shells choose *when* to trigger (debounce is shell taste); the
-core guarantees ordering correctness. Verdicts are **value-bound**: any change to the checked
-field's value — edit *or* rebase — resets the check to unchecked, so a completed verdict never
-endorses a value it wasn't computed for (step-01 friction F1; invariant 13, §8). The check's
-sub-state — unchecked / pending / passed / failed — is part of the draft's observable snapshot
-(it is core-owned verdict state, not presentation state, so this does not reintroduce the
-rejected visibility-policy enums of §8), letting a shell show progress without owning check
-logic; decided in step 03, closing the step-02 gap where the core draft did not expose it.
+core guarantees ordering correctness. The check's sub-state — unchecked / pending / passed /
+failed — is part of the draft's observable snapshot (core-owned verdict state, not presentation
+state, so this does not reintroduce the rejected visibility-policy enums of §8), letting a shell
+show progress without owning check logic.
+
+Two rules make a client-side verdict trustworthy, and neither is sufficient alone:
+
+- **Verdicts are value-bound** (C13). Any change to the checked field's value — edit, rebase, or
+  `take_theirs` — resets the check to unchecked. A completed verdict therefore always belongs to the
+  value currently in the field.
+- **An unrun check blocks a dirty field** (C16). If a check pins to a field, the field is dirty, and
+  the check never ran, `commit` refuses with a rule violation pinned to that field. A *clean* field
+  needs no check: it still holds the canonical value, which was verified when it was committed.
+
+Without C13 a stale pass endorses a value it never saw; without C16 the shell can simply never ask,
+and both spikes showed that not asking was the **default** path (step-01 F1/F2, step-03, step-04).
+
+**Capability callbacks are synchronous.** Asynchrony is expressed as a shell-driven `begin`/`complete`
+effect pair over a `CheckToken`, never as an async trait method — that is what keeps the core sans-io
+and what let the browser shell drive a check from `spawn_local` with no executor in the core (§8).
 
 **Validation policy belongs to the UI; verdicts belong to the core.** Shells decide when to call
 `try_set` / rules / async checks and what to display when. The litmus test: shells may add
@@ -81,7 +101,8 @@ Each draft field is `Field<V: Value>` with **two independent dimensions**:
 
 ```
 validity: Unset | Valid(V) | Invalid { raw: V::Raw, error: V::Error }
-sync:     InSync | Conflicted { base: Option<V>, theirs: V }
+sync:     InSync | Conflicted { theirs: V }
+base:     Option<V>                        // the common ancestor; does not move while conflicted
 ```
 
 - `try_set(raw)` always records the attempt: `Ok` → `Valid(v)`, `Err` → `Invalid{raw, error}`
@@ -91,6 +112,13 @@ sync:     InSync | Conflicted { base: Option<V>, theirs: V }
 - **Dirty is value-based, not touch-based**: dirty ⇔ current value ≠ base value. Editing a
   field back to its original value makes it clean again (revert-for-free). `Invalid` is
   always dirty.
+- The two dimensions are independent **state**, not independent **transitions**. `rebase` already
+  moved validity; symmetrically, a `try_set` that lands exactly on `theirs` clears the conflict
+  (C14). Two edits that agree are not a conflict, whichever arrived first — C04 makes the identical
+  judgement when the canonical change arrives second.
+- `{base, yours, theirs}` — the 3-way merge data — is read from the field: `base()`, the validity,
+  and `theirs()`. The ancestor is stored **once**; duplicating it into the `Conflicted` variant meant
+  two copies of one fact to keep consistent (step-01 F7).
 
 ## 4. Drafts: core-side handles with live rebase
 
@@ -111,22 +139,41 @@ merging, ever** (perimeter).
   orphaned is a typed outcome the app decides (fail / convert-to-create).
 - Because drafts live in the core and the store serializes state changes, **there is no
   conflict window at submit** within one device: submit refuses while any field is
-  `Conflicted`, and that's never a surprise (the UI already showed it). `SubmitError::Conflict`
+  `Conflicted`, and that's never a surprise (the UI already showed it). `SubmitError::Conflicted`
   survives only for the outer core↔server loop — the same pattern telescoped
   (shell↔core mirrors core↔server: snapshot down, transactional submit up, reconcile).
-- Drafts expose their own snapshot stream (they can change from underneath via rebase). A
-  draft is thus a mini feature-model — same stream+operations shape, same generated binding
-  machinery, reused.
+- Across FFI, drafts expose their own snapshot stream (they can change from underneath via rebase);
+  a draft is then a mini feature-model, same stream+operations shape, same generated binding
+  machinery, reused. A **Rust shell does not want the stream** and does not get one — see §8.
+- Every snapshot carries the store `version` it is based on. A draft's stamp advances with each
+  rebase (C15), so a consumer can reconcile a `snapshot()` read against a future-only subscription.
 - `checkout()` is live by default; a `checkout_frozen()` escape hatch may exist for flows that
   must not shift underfoot.
-- Discard = drop. `is_dirty()` = diff vs base. Cancel and unsaved-changes warnings are free.
+- `is_dirty()` = diff vs base. Cancel and unsaved-changes warnings are free.
 
-**Commit is the parse-don't-validate moment**: `commit(self) -> Result<Entity, ValidationReport>`
-— a `Draft` goes in, an always-valid `Entity` comes out, or a report keyed by typed field IDs.
-On success the core may normalize / server-round-trip; the shell receives final truth via the
-ordinary snapshot stream (never its own input echoed back). A refused submit must never destroy
-the edit session: store-level `submit` consumes the draft only on the success path and returns
-the handle alongside the error otherwise (step-01 friction F3; §8).
+**Commit is the parse-don't-validate moment**: `commit(self) -> Result<Entity, (Self, CommitError)>`
+— a `Draft` goes in, an always-valid `Entity` comes out, or the draft comes *back* with a typed
+reason (`Validation` / `Conflicted` / `Orphaned`). On success the core may normalize /
+server-round-trip; the shell receives final truth via the ordinary observe path, never its own input
+echoed back. A refused commit must never destroy the edit session (step-01 F3).
+
+**The handle is a lifecycle object.** `submit` borrows it; on success the draft is consumed and the
+handle becomes an inert **tombstone** (`is_live()` false, no draft access, a second submit is
+`AlreadySubmitted`), and on refusal the draft goes straight back (C17). `close()` releases the draft,
+is idempotent, and stops the store rebasing it (C18).
+
+This is not symmetric across languages, and pretending otherwise would be a lie:
+
+| | release path | use after release |
+|---|---|---|
+| Rust | `Drop`; `close()` is a convenience | `None` from every borrow |
+| Swift / ARC | `deinit` runs Rust `Drop` automatically | impossible (ARC), plus the tombstone |
+| Kotlin / C# | **`close()` only** — the GC never frees the Rust draft | **must** be a typed error (step 10) |
+
+Step 05 measured this on ART: an abandoned Kotlin handle is collected while the Rust draft stays
+registered forever, an unreachable zombie the store keeps rebasing. So the contract names an explicit
+release everywhere, `use { }` / `IDisposable` are the idiomatic forms, and BoltFFI's raw-pointer
+handles make use-after-close silent UB today — which `bolted-ffi` must close (§9).
 
 ## 5. Manifestation: generics for behavior, macros for names, traits as contracts
 
@@ -147,9 +194,9 @@ surface must be monomorphic with concrete names. Therefore:
 Key trait sketches (authoritative signatures live in the step docs / code):
 
 ```rust
-pub trait Value: Clone + PartialEq + Send + Sync + 'static {
-    type Raw:   Clone + PartialEq + Send + Sync + 'static;
-    type Error: Clone + PartialEq + std::fmt::Debug + Send + Sync + 'static;
+pub trait Value: Clone + PartialEq + Send + Sync + 'static {   // and NOT Copy — see §8
+    type Raw:   Clone + PartialEq + Debug + Send + Sync + 'static;
+    type Error: Clone + PartialEq + Debug + Send + Sync + 'static + Into<ErrorData>;
     fn try_new(raw: Self::Raw) -> Result<Self, Self::Error>;
     fn into_raw(self) -> Self::Raw;
     fn constraints() -> &'static [Constraint];
@@ -158,12 +205,22 @@ pub trait Value: Clone + PartialEq + Send + Sync + 'static {
 pub trait Draft {
     type Entity;
     type FieldId: Copy + Eq + std::fmt::Debug;
+    fn status(&self) -> DraftStatus;
+    fn base_version(&self) -> u64;
     fn dirty_fields(&self) -> Vec<Self::FieldId>;
     fn conflicts(&self) -> Vec<Self::FieldId>;
     fn validate(&self) -> ValidationReport<Self::FieldId>;
-    fn commit(self) -> Result<Self::Entity, ValidationReport<Self::FieldId>>;
+    fn commit(self) -> Result<Self::Entity, (Self, CommitError<Self::FieldId>)> where Self: Sized;
 }
+
+pub enum CommitError<FieldId> { Validation(ValidationReport<FieldId>), Conflicted { fields: Vec<FieldId> }, Orphaned }
+pub enum SubmitError<FieldId> { Validation(..),                        Conflicted { .. },                  Orphaned, AlreadySubmitted }
 ```
+
+`Draft` is the FFI surface and stays minimal. The store-facing plumbing it needs to drive live rebase
+— `from_canonical` / `rebase(entity, version)` / `orphan` — sits on a `StoreDraft: Draft` subtrait
+that no shell ever calls (§8). `AlreadySubmitted` is the one failure a *handle* can have that a draft
+cannot, which is why the two enums differ by exactly that variant.
 
 **Crate layout** (physicalizes VISION's narrow-coupling promise):
 
@@ -180,98 +237,108 @@ structural rather than aspirational.
 
 ## 6. Platform notes
 
-- **Text echo rule**: the native text control owns its text *while focused*; core `raw` is
-  authoritative on blur/programmatic change. Sanitization runs on blur/commit, not keystroke
-  (cursor survival). Validated in the Swift spike.
-- **GC languages (Kotlin, C#)**: no deterministic destruction → core-side draft handles leak
-  unless the API has an explicit lifecycle. Likely outcome: explicit `close()` everywhere for
-  symmetry. **OPEN** until the Android probe (Step 5).
-- **JNI is the performance worst case**, not Swift: the per-keystroke `try_set` bet must be
-  measured on Android, not inferred from Swift.
+- **Text echo rule**: the native text control owns its text while focused **and typed into**; core
+  `raw` is authoritative on blur / programmatic change. Sanitization runs on blur/commit, not
+  keystroke (cursor survival). A focused field the user has *not* touched holds nothing worth
+  protecting and adopts a rebase live — otherwise two views over the same store visibly disagree
+  with nothing on screen to explain it (step-04).
+
+  *The predicate is `touched`, not `dirty`.* Typing `"  alice  "` over the base value `"alice"`
+  leaves the field **clean** (the core trims, so the value never moved) while the control holds live
+  keystrokes; repainting it would eat the spaces and jump the caret. `touched` is shell-local
+  presentation state about a text control — not the core-side `touched` flag §8 rejects.
+- **GC languages (Kotlin, C#)**: no deterministic destruction, so `close()` is the only release path
+  and forgetting it leaks a Rust draft the store keeps rebasing. Measured on ART in step 05; see §4.
+- **JNI is the performance worst case**, not Swift. Measured (step 05, emulator): a per-keystroke
+  `try_set` + `snapshot` round-trip costs **12–13 µs** against a 1.0 ms bar, ~1.5–2× Apple's on the
+  same host. The per-keystroke bet holds; no shell-side write buffer is needed. *Re-check on physical
+  hardware in step 07 — an emulator on an arm64 host is the right VM and the wrong CPU.*
 - **Process death (Android)**: core-side drafts die with the process → drafts must be
-  serializable with a stash/restore hook. Design in Phase 2.
+  serializable with a stash/restore hook. Undesigned; owned by step 07 (§9).
 - **Rust shells** (web, Linux-native): consume `bolted-core` + feature crates directly; zero
   FFI; the web target also enforces `wasm32-unknown-unknown` discipline on the whole core.
 
-## 7. Invariants (the conformance suite seed)
+## 7. Invariants — the conformance suite
 
-These are the design's falsifiable claims; they exist as tests from Step 1 onward and later
-become per-language contract tests:
+The design's falsifiable claims, C01–C18, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
+and exist as named tests (`c01_*` … `c18_*`) in `crates/spike-profile/tests/conformance.rs`. A drift
+test parses the document and fails the build if an ID has no test or a test has no ID — the mapping is
+verified by the build, not by review (VISION rung 3).
 
-1. `Value::try_new(v.into_raw()) == Ok(v)` for every valid `v` (roundtrip).
-2. A non-dirty field always equals canonical after rebase (`InSync`).
-3. A dirty field is never silently overwritten by rebase (yours preserved, `Conflicted`).
-4. Convergent rebase (yours == theirs) lands clean and `InSync`.
-5. Setting a field back to its base value clears dirty.
-6. A failed `try_set` blocks submit (no stale-value submit).
-7. `commit` succeeds ⇔ all fields `Valid`, none `Conflicted`, no rule violations; the
-   committed entity equals the field values.
-8. Rebase re-runs tier-2 validation.
-9. `resolve_keep_mine`: value=yours, base=theirs, dirty, `InSync`. `resolve_take_theirs`:
-   value=theirs, clean, `InSync`.
-10. Stale async completions (old sequence) are ignored; latest wins.
-11. Canonical deletion ⇒ draft `Orphaned`; submit on orphaned is a typed error.
-12. Create-flow drafts (no base) never rebase and commit normally.
-13. A completed async-check verdict does not survive a change to the checked field's value:
-    edit or rebase of the pinned field resets the check to unchecked. *(Added after step 01
-    — F1; the test lands with the fix, scheduled with the step-03 implementation session.)*
+In one line each: **C01** value roundtrip · **C02** a clean field follows canonical · **C03** a dirty
+field is never silently overwritten · **C04** convergent rebase is clean · **C05** revert-for-free ·
+**C06** no stale-value submit · **C07** commit is the parse moment, each refusal typed · **C08** rebase
+re-runs tier 2 · **C09** resolution semantics · **C10** latest check wins · **C11** deletion orphans ·
+**C12** create-flow never rebases · **C13** verdicts are value-bound · **C14** auto-converge on edit ·
+**C15** the base version tracks the rebase · **C16** an unrun check blocks a dirty field · **C17**
+submit tombstones the handle · **C18** release is explicit and idempotent.
+
+Step 08 makes the suite generic over a feature; step 10 emits it as per-language contract tests.
 
 ## 8. Resolved decisions (with the losing alternative)
+
+Decisions from steps 01–05 and the step-06 freeze. Every row cost something; the third column says
+what, and why it was worth it.
 
 | Decision | Rejected alternative | Why |
 |----------|---------------------|-----|
 | Lean contract; UI orchestrates validation timing | Core-side visibility-policy enums (`touched`, `visible_errors`) | Presentation-adjacent state in core violated prefer-simple; retrofittable later as an optional battery ("FormKit") on top of the lean surface — the reverse migration would be breaking |
-| Drafts core-side (handles) | Detached value-struct copied to shell | Validation/derived values must not fork; leans on BoltFFI cheap calls (the core bet) |
+| Drafts core-side (handles) | Detached value-struct copied to shell | Validation/derived values must not fork; leans on BoltFFI cheap calls (the core bet), now measured at 12–13 µs per keystroke on the worst platform |
 | Live rebase default | Frozen drafts, conflicts at submit | Silent staleness is a data-loss bug, not a UX taste; machinery is once-in-framework, dormant when canonical is quiet |
 | Value-based dirty | Touch-based | Revert-for-free; dirty stays a pure function of data |
 | Field-level keep/take conflict ceiling | Text/CRDT merge | Perimeter: rung-4 complexity, different product |
-| Sans-io core | Async runtime in core | Deterministic tests, wasm32, Elm effect model |
-| Errors as key+params | Message strings from core | Localization is shell/platform territory |
+| Sans-io core | Async runtime in core | Deterministic tests, wasm32, Elm effect model. Proven: the browser shell drove the async check from `spawn_local` and the core produced only a `CheckToken` |
+| Errors as key+params | Message strings from core | Localization is shell/platform territory. Confirmed structurally on two codegen backends, so this is a BoltFFI property, not a Swift-generator one |
 | Snapshot-per-change streams (feature + draft) | Per-property notifications | Simpler surface, native UIs diff anyway, enables replay |
-| Value-bound async verdicts: pinned-field change (edit or rebase) resets the check to unchecked | Verdict carries the value it validated, compared at `validate()`; or shell re-triggers on change | A stale `Done(Ok)` endorsing a value it never saw is a correctness bug (step-01 F1); reset-on-change keeps the state model minimal (unchecked means unchecked); shell-side re-trigger is exactly the runtime glue Bolted exists to remove |
-| Failed submit returns the draft handle with the error | Submit consumes the handle on every outcome | Losing the user's edits on a rejected submit is data loss (step-01 F3); pre-checks run under a borrow, so only the success path needs ownership |
+| Value-bound async verdicts: pinned-field change (edit or rebase) resets the check to unchecked (C13) | Verdict carries the value it validated, compared at `validate()`; or shell re-triggers on change | A stale `Done(Ok)` endorsing a value it never saw is a correctness bug (step-01 F1); reset-on-change keeps the state model minimal (unchecked means unchecked); shell-side re-trigger is exactly the runtime glue Bolted exists to remove |
+| **D1** — `Value::Error: Into<ErrorData>` is a trait bound | An external `From` bridge per feature | Two crates independently restated the bound in a `where` clause to write the same three-line match (step-01 Q2, step-04 friction 3). It is part of the contract: a tier-1 error that cannot become report data is not a tier-1 error |
+| **D2 (C14)** — `try_set` landing on `theirs` auto-converges | Resolution is always an explicit user act | C04 already makes this judgement when the rebase arrives second; making the outcome depend on event order is indefensible. The running web shell showed the old behaviour as a banner whose "Keep mine" and "Take theirs" buttons did visibly the same thing (step-04 F6 verdict) |
+| **D3** — `Conflicted { theirs }`; the ancestor is `Field::base()` | `Conflicted { base, theirs }`, self-contained 3-way data | They are provably always equal while conflicted (step-01 F7). Two copies of one fact is two facts to keep consistent. Invisible at the FFI boundary: the DTO still projects `{base, theirs}` |
+| **D4** — `commit(self) -> Result<Entity, (Self, CommitError)>`, typed refusals | `Result<Entity, ValidationReport>`, encoding conflict/orphan as synthetic rule violations | Two divergent taxonomies for one set of failures (step-01 F5). Returning `Self` also lets the store hand the draft back without a pre-check pass that duplicates `commit`'s own gates — which deleted the unreachable branch step-03 apologised for, in the core *and* in the FFI wrapper |
+| **D5 (C17/C18)** — the handle is a lifecycle object: `submit(&mut handle)`, tombstone on success, `is_live()`, `close()` | Consume the handle by value on every outcome; `close()` only where GC forces it | The FFI had already invented all of this (step 02's post-submit tombstone and its FFI-only `AlreadySubmitted`); the core API was the one lying. It also deletes the scratch-`checkout()` a `!Clone` handle in a struct field forced on every Rust shell (step-04 friction 1). Cost, measured: +1.8 % lines in the web controller |
+| **D6 (C16)** — an unrun check blocks a **dirty** pinned field | Accept, with the tier-3 server re-check as backstop; or block whenever unchecked | Accepting means shipping a client-side "unique" that was never computed, on the *default* path — both spikes submitted `admin` unverified (step-03, step-04 F2). Blocking always would make a user who edited only their email wait on a uniqueness lookup for a username nobody touched |
+| **D7 (C15)** — `rebase(entity, version)`; `base_version()` on `Draft` | Drop `version` from draft snapshots | The stamp was written once at checkout and never again, so the version-guarded reconcile step 02 shipped for the subscribe race **could never fire on a draft stream** — dead code since the day it was written (found in step 05, verified in step 06). Making the stamp true is a one-line trait change; dropping it would admit `observe` cannot be reconciled on a draft |
+| **D8** — value objects must not be `Copy` | Track `Copy`-ness in codegen, or blanket-`allow(clippy::clone_on_copy)` | Generated checkout/rebase clones every field uniformly; a `Copy` field makes that a hard clippy error under `-D warnings` (step-01 F4). Rust cannot express a negative bound, so `#[bolted::value]` will not emit `Copy` and `bolted-check` flags it |
+| **D9** — the echo rule protects a focused **touched** control; a focused untouched field adopts a rebase live | Stale-until-blur (the control owns its text, full stop) | Two views over the same store visibly disagreed with nothing to explain it, and fine-grained reactivity made it *easier* to notice (step-04). Note the predicate is `touched`, not `dirty`: sanitization can make a field clean while the control holds live keystrokes (§6) |
+| **D10** — capability callbacks are synchronous; asynchrony is a shell-driven `begin`/`complete` effect pair | An async trait method across FFI | A synchronous checker sufficed on all four shells and kept the core sans-io. An async callback would put an executor on the Rust side of the boundary, which §5 forbids. The cost is that `Pending` is never observable to a `snapshot()` caller between FFI calls — only on the stream (step-02 finding 7, step-05 friction 7) |
+| **D11** — `observe` is a contract verb; the snapshot **stream** is an FFI-boundary mechanism | `snapshots()` as a universal contract member | A Rust shell reads the contract directly and drives reactivity from an explicit tick: race-free (synchronous reads of the same memory), forks nothing, and needs no version-stamped reconcile. Across FFI a stream is unavoidable — there is no shared memory to read (step-04 headline 3) |
+| **D12** — keep the `Draft` / `StoreDraft` split | Promote `from_canonical`/`rebase`/`orphan` into `Draft` | `Draft` is the FFI surface and shells never call the plumbing. Four shells, zero friction (step-01 Q1) |
+| **D13** — `Constraint::Required` stays in the same enum, prepended at the field layer | A separate field-metadata channel | A value type cannot know whether its field is `Option<_>`, but shells want one uniform list to derive affordances from. Three shells did exactly that with no constraint literal leaking (step-01 Q3) |
+| Failed submit returns the draft (D4/D5) | Submit consumes the handle on every outcome | Losing the user's edits on a rejected submit is data loss (step-01 F3) |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
-- Draft handle lifecycle in GC languages (`close()`? `use`-block?) — pending Step 5.
-- One-shot effects (focus-first-invalid-field, toasts, **navigation**) — pattern undesigned;
-  likely `Option<(Request, Generation)>` state + ack, but navigation deserves its own session.
-- Draft stash/restore for process death — Phase 2.
-- Commit policy for never-run async checks (step-01 F2): unchecked currently *passes*, so a
-  draft that never triggered its uniqueness check commits client-side unverified (tier-3
-  server re-check is the backstop). Require-checked before commit, auto-trigger on validate,
-  or accept-with-backstop — decide at the freeze with step-03 evidence.
-- Focused-but-untouched field during rebase: updates live (rule stays pure); shells may soften
-  visually — revisit after Swift spike if it feels wrong.
-- Store↔draft wiring (step-01 Q1): live-rebase driving (`from_canonical`/`rebase`/`orphan`)
-  sits on a `StoreDraft` subtrait in the prototype, keeping the public `Draft` contract (the
-  FFI surface) exactly as §5 — promote into `Draft`, or keep the split? Decide at the freeze
-  with step-02 FFI evidence.
-- `Value::Error: Into<ErrorData>` as a trait bound (step-01 Q2)? The spike's external bridge
-  (`From<XError> for ErrorData` + a bounded helper) was cleaner than per-field code and points
-  at promoting it into `Value`.
-- `Constraint::Required` channel (step-01 Q3/D3): a value type can't know whether its field is
-  `Option<_>`, so the spike prepends `Required` at the field/entity layer — same enum, or a
-  separate field-metadata channel?
-- `commit` error taxonomy (step-01 Q4/F5): `commit` re-encodes conflicts/orphan as synthetic
-  rule violations while store `submit` has typed `Conflicted`/`Orphaned` variants — two
-  taxonomies for the same failures; unify (e.g. `CommitError { Validation | Conflict |
-  Orphan }`)?
-- `Copy` value objects vs uniform generated `.clone()` (step-01 F4): clippy `clone_on_copy`
-  under `-D warnings` forbids cloning a `Copy` field, so codegen must either track `Copy`-ness,
-  blanket-`allow` generated modules, or forbid `Copy` on value objects (spike's
-  recommendation). Decide at the freeze, binds step 09.
-- Conflicted field edited to equal `theirs` stays `Conflicted` (step-01 F6): resolution is an
-  explicit user act in the prototype — confirm or auto-converge, with step-03 UI evidence.
-- `SyncState::Conflicted { base, theirs }` duplicates `Field.base` (step-01 F7): they are
-  always equal while conflicted; keep the self-contained 3-way shape or drop `base` from the
-  variant — decide at the freeze/extraction.
-- Store concurrency model behind FFI (single-threaded actor vs `Arc<Mutex>`) — prototype uses
-  the simplest thing; decide at Phase 3 extraction.
-- Process topology for OS-integration surfaces (VISION: daemons, tray, file-manager
-  extensions): where the core runs (embedded vs daemon), how sandboxed extension processes
-  reach it (the contract over IPC?), single-instance ownership. Undesigned — needs its own
-  spike after Phase 2; nothing in Phases 1–2 depends on it.
+Each names the step that owns it. Nothing below blocks Phase 3.
+
+- **Use-after-close must become a typed error** — *step 10 (`bolted-ffi`), and arguably a BoltFFI
+  upstream fix.* BoltFFI handles are raw pointers and generated instance methods never consult the
+  `closed` flag, so on Kotlin a use-after-close returns stale data and, after allocator churn,
+  **silently aliases another live draft** (step 05, H2 — no crash). VISION's ladder forbids framework
+  mechanics that can only fail at runtime; a typed `DraftClosed` is the floor. Should `bolted-ffi`
+  also emit a `java.lang.ref.Cleaner` backstop so a forgotten `close()` leaks memory until GC rather
+  than forever?
+- **Should the store hold drafts weakly?** — *step 08.* With `close()` mandatory and no backstop, a
+  forgotten handle grows the registry without bound and every canonical change rebases every zombie.
+- **Store concurrency model behind FFI** — *step 08.* Evidence from both sides: the browser wants
+  `Rc<RefCell>` and used `Store` unmodified; the FFI wants `Send + Sync` and bypassed `Store`
+  entirely. One type cannot serve both — parameterise the handle (`Rc` vs `Arc`) or ship two. Step 02's
+  three constraints hold and are not up for debate: **`Send` state behind one lock**, **id-keyed
+  handles, not `Rc` clones**, and **never emit or call out under the lock**.
+- **Draft stash/restore for process death** — *step 07.* Core-side drafts die with the Android
+  process. Needs a serializable projection of `{raw values, base, sync}` and a restore that
+  re-checks-out and replays. Undesigned; step 07 is where it gets exercised.
+- **One-shot effects** (focus-first-invalid-field, toasts, **navigation**) — *its own session.*
+  Likely `Option<(Request, Generation)>` state + ack, but navigation deserves the session.
+- **Process topology for OS-integration surfaces** (daemons, tray, file-manager extensions) — *its own
+  spike, after Phase 2.* Where the core runs (embedded vs daemon), how sandboxed extension processes
+  reach it (the contract over IPC?), single-instance ownership. Nothing in Phases 1–3 depends on it.
+- **A real `Pending` across FFI** — *step 10.* With a synchronous checker, `begin` + `complete` are
+  atomic inside one call, so `Pending` is only ever seen on the stream, never by a `snapshot()` caller.
+  A spinner bound to a `snapshot()` read needs the split `begin`/`complete` exposed across the
+  boundary (which D10 says is the right shape anyway).
+- **Codegen dedup by raw type** — *step 09.* Three of the spike's four field-state families are
+  structurally identical (`String` raw). Per-value-type stamping is what a macro naturally does; is the
+  dedup worth the complexity?
 
 ## 10. Prior art
 

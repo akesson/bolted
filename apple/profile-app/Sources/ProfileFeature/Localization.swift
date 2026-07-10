@@ -18,9 +18,11 @@ public enum Localization {
         "corporate_email_domain": "A corp_ username needs a {expected} email (got {actual}).",
         // async uniqueness
         "username_check_pending": "Checking availability…",
+        "username_check_required": "Checking that this username is free…",
         "username_taken": "That username is already taken.",
-        // commit-level
-        "field_conflicted": "Resolve the conflict before submitting.",
+        // commit-level. `field_conflicted` is gone: since the freeze, a conflicted or orphaned draft
+        // is refused with a typed `SubmitError` variant, not a synthetic rule violation stuffed into
+        // a `ValidationReport` (step-01 F5).
         "draft_orphaned": "This profile was deleted on the server.",
     ]
 

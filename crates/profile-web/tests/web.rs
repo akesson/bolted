@@ -204,8 +204,8 @@ async fn the_async_check_shows_and_then_clears_a_spinner() {
     );
 }
 
-/// Typing through a pending check changes the checked value, so the core resets the check (I13)
-/// and discards the late completion by sequence (I10). The shell does no bookkeeping: the spinner
+/// Typing through a pending check changes the checked value, so the core resets the check (C13)
+/// and discards the late completion by sequence (C10). The shell does no bookkeeping: the spinner
 /// and the verdict simply follow the contract.
 #[wasm_bindgen_test]
 async fn typing_through_a_pending_check_never_shows_a_verdict_for_the_wrong_text() {

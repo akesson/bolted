@@ -41,7 +41,7 @@ impl<T> SingleFlight<T> {
     }
 
     /// Complete the check that `token` began. Returns `false` (and ignores `verdict`) if `token`
-    /// was superseded or the check was already settled — the latest `begin` wins (invariant I10).
+    /// was superseded or the check was already settled — the latest `begin` wins (conformance C10).
     pub fn complete(&mut self, token: CheckToken, verdict: T) -> bool {
         match self.state {
             CheckState::Pending { seq } if seq == token.0 => {
@@ -55,8 +55,8 @@ impl<T> SingleFlight<T> {
     /// Cancel any in-flight or settled check, returning to [`CheckState::Idle`] and bumping `seq`
     /// (symmetric with [`begin`](Self::begin)) so any still-outstanding [`CheckToken`] is stale by
     /// sequence as well as by state — a completion arriving after a `reset` is discarded exactly
-    /// as a superseded one is (invariant I10). This is the value-bound verdict reset: any change
-    /// to the checked field's value invalidates the check (ARCHITECTURE §2/§8, invariant I13).
+    /// as a superseded one is (conformance C10). This is the value-bound verdict reset: any change
+    /// to the checked field's value invalidates the check (ARCHITECTURE §2/§8, conformance C13).
     pub fn reset(&mut self) {
         self.seq += 1;
         self.state = CheckState::Idle;

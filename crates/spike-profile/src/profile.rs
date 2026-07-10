@@ -65,7 +65,7 @@ pub struct ProfileDraft {
 
 impl ProfileDraft {
     /// Run a mutation that may move the `username` value, resetting the async uniqueness check iff
-    /// the value actually changed (ARCHITECTURE §2/§8, invariant I13 — a verdict endorses a
+    /// the value actually changed (ARCHITECTURE §2/§8, conformance C13 — a verdict endorses a
     /// *value*, so a changed value un-endorses it). Implemented once by value comparison rather
     /// than per call site, so no mutation path can silently skip it. Comparing `value()` (`None`
     /// for `Unset`/`Invalid`) gets every case right: edit-to-different / edit-to-invalid /

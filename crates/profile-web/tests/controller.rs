@@ -116,7 +116,7 @@ fn reverting_to_the_base_value_clears_dirty() {
     c.edit_name("Bob".to_string());
     assert!(c.is_dirty(Name) && c.any_dirty());
     c.edit_name("Alice Smith".to_string());
-    assert!(!c.is_dirty(Name) && !c.any_dirty()); // revert-for-free (I5)
+    assert!(!c.is_dirty(Name) && !c.any_dirty()); // revert-for-free (C5)
 }
 
 // ---- the composite value object (grouped setter) ------------------------------------------------
@@ -173,7 +173,7 @@ fn live_rebase_convergent_edit_lands_clean() {
     c.edit_name("Server Name".to_string()); // the same edit the "server" is about to make
     c.sim_set_name("Server Name");
     assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
-    assert!(!c.is_dirty(Name)); // I4
+    assert!(!c.is_dirty(Name)); // C04
 }
 
 /// **D9, the sharpened echo rule.** The control owns its text while focused *and dirty*. A focused
@@ -234,7 +234,7 @@ fn resolve_keep_mine_rebases_the_base_and_stays_dirty() {
         Some("Server Name")
     );
     assert!(matches!(draft(&c).name.sync(), SyncState::InSync));
-    assert!(c.is_dirty(Name)); // I9
+    assert!(c.is_dirty(Name)); // C09
     assert_eq!(c.name_buf(), "My Name");
 }
 
@@ -276,7 +276,7 @@ fn c14_conflicted_field_edited_to_equal_theirs_auto_converges() {
     assert!(c.conflict(Name).is_none()); // and the banner is gone
 }
 
-/// I13, visible through the shell: take-theirs on username moves its value, so a completed
+/// C13, visible through the shell: take-theirs on username moves its value, so a completed
 /// uniqueness verdict cannot survive it.
 #[test]
 fn take_theirs_on_username_resets_the_async_check() {
@@ -306,7 +306,7 @@ fn rebase_adopting_username_resets_the_async_check() {
     let ticket = c.edit_username("bob_1".to_string());
     assert_eq!(run_check(&mut c, ticket), Some(true));
 
-    // Revert to base → clean → the next rebase adopts theirs → value moves → check resets (I13).
+    // Revert to base → clean → the next rebase adopts theirs → value moves → check resets (C13).
     c.edit_username("alice".to_string());
     assert!(matches!(c.username_check(), CheckState::Idle)); // the edit itself already reset it
     c.sim_set_username("server_user");
@@ -370,7 +370,7 @@ fn check_states_are_observable_idle_pending_done() {
 }
 
 /// Typing through a pending check invalidates the in-flight verdict: the value changed, so the
-/// core reset the check (I13) and the late completion is discarded by sequence (I10). No shell
+/// core reset the check (C13) and the late completion is discarded by sequence (C10). No shell
 /// bookkeeping — the spinner behaviour falls out of the contract.
 #[test]
 fn a_value_change_during_pending_discards_the_late_verdict() {

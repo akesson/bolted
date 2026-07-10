@@ -19,8 +19,8 @@ work around them.
 | 03 | SwiftUI spike app | 1 — Spike | **done** — [plan](steps/step-03-swiftui-app.md) · [report](steps/step-03-report.md); items 2–6 automated (XCUITest, `test:apple:ui`), item 1 confirmed by hand |
 | 04 | Rust web spike app | 1 — Spike | **done** — [plan](steps/step-04-rust-web-app.md) · [report](steps/step-04-report.md); zero-FFI path proven, no kill criteria hit, wasm baseline 304 KiB (85 KiB brotli) |
 | 05 | Android headless probe | 1 — Spike | **done** — [plan](steps/step-05-android-probe.md) · [report](steps/step-05-report.md); chattiness kill criterion clears (~80×), `close()` proven mandatory on ART |
-| 06 | Design freeze | 2 — Freeze | **ready** — all Phase-1 evidence in; §9's `close()` question answered by step 05 |
-| 07 | Kotlin/Compose spike app | 2 — Freeze | pending |
+| 06 | Design freeze | 2 — Freeze | **done** — [plan](steps/step-06-design-freeze.md) · [report](steps/step-06-report.md); ARCHITECTURE **frozen (v1.0)**, [CONFORMANCE.md](CONFORMANCE.md) C01–C18 with a build-time drift check |
+| 07 | Kotlin/Compose spike app | 2 — Freeze | **ready** — the frozen contract, on a real device |
 | 08 | Extract bolted-core + conformance suite | 3 — Extraction | pending |
 | 09 | bolted-macros | 3 — Extraction | pending |
 | 10 | bolted-ffi + regenerate Swift/Kotlin | 3 — Extraction | pending |
@@ -78,30 +78,48 @@ falsify the design cheaply — friction logs from these steps are the input to t
 
 ## Phase 2 — Design freeze
 
-- **Step 06 — Design freeze.** A planning session, not an implementation session: reconcile
-  all friction logs and probe reports (step-01's F1–F7/Q1–Q6 are recorded: decisions in
-  ARCHITECTURE §8, the rest deferred into §9); resolve the OPEN questions in ARCHITECTURE.md §9
-  (draft lifecycle/`close()`, echo rule confirmation, stash/restore design, one-shot
-  events); update ARCHITECTURE.md to "frozen" status; promote the invariant tests to the
-  named conformance suite.
+- **Step 06 — Design freeze.** **Done.** Reconciled all five friction logs and resolved every §9
+  question Phase 1 could answer, into ARCHITECTURE §8 as **D1–D13**, each with its losing
+  alternative. ARCHITECTURE.md is **frozen (v1.0)**; the invariants are promoted to
+  [CONFORMANCE.md](CONFORMANCE.md) (C01–C18) with a test that parses the document and fails the build
+  if it drifts from the suite. At the owner's direction the freeze also **conformed the reference
+  implementation**, so the contract and the code agree: three separate wounds (step-01 F3/F5,
+  step-03 friction 1, step-04 friction 1) turned out to be one and were closed by making the handle a
+  lifecycle object; F1/F2 were closed by C13+C16; F6 became C14; F7, Q1–Q4 and the `Copy` question
+  are settled. The stale draft `version` step 05 found is fixed (C15) — the version-guarded reconcile
+  step 02 shipped had never once fired on a draft stream. **Kill criteria: none hit.** Neither did
+  D9 survive contact unchanged: implementing "focused **and dirty**" exposed a caret-eating
+  regression, and the shipped predicate is "focused **and touched**" (report, deviation 1).
 - **Step 07 — Kotlin/Compose spike app.** The risks only a real Android app exercises:
-  process death mid-draft (stash/restore), configuration change (draft handle scoping),
-  main-thread snapshot delivery. Doubles as the hand-written "generated code" reference for
-  Kotlin.
+  process death mid-draft (**stash/restore — undesigned, §9, this step owns it**), configuration
+  change (draft handle scoping to a `ViewModel`, now that `close()` is mandatory), main-thread
+  snapshot delivery. Doubles as the hand-written "generated code" reference for Kotlin. **Also
+  re-measures the per-keystroke round-trip on physical hardware**: step 05's 12–13 µs is an emulator
+  lower bound (right VM, wrong CPU).
 
 ## Phase 3 — Framework extraction
 
 Extract from evidence, in dependency order; the hand-written spike code becomes the golden
 reference the generated code is diffed against.
 
-- **Step 08 — Extract `bolted-core`** generics + conformance suite as a reusable crate
-  (decide the store concurrency model here).
+- **Step 08 — Extract `bolted-core`** generics + conformance suite as a reusable crate. Inherits from
+  the freeze: make the suite **generic over a feature** (it is `spike-profile`-shaped today); decide
+  the **store concurrency model** under step-02's three non-negotiable constraints (`Send` state
+  behind one lock, id-keyed handles not `Rc` clones, never emit under the lock); decide whether the
+  store holds drafts **weakly** now that a forgotten `close()` leaks a rebasing zombie.
 - **Step 09 — `bolted-macros`** (`value`, `entity`, `rules`, `feature_model`); macro output
-  must reproduce the hand-written spike code (golden tests).
+  must reproduce the hand-written spike code (golden tests). Inherits: **never emit `Copy`** on a
+  value object (D8); decide codegen dedup by raw type (§9).
 - **Step 10 — `bolted-ffi`** (only crate importing boltffi) + regenerate the Swift and Kotlin
-  spike apps from macros; per-language contract tests from the conformance suite.
-- **Step 11 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics,
-  WinUI binding shape), then the generator template.
+  spike apps from macros; per-language contract tests generated from the C-IDs. Inherits a
+  requirements list the probes wrote: **use-after-close must raise a typed error** (silent UB today,
+  §9) and probably a `Cleaner` backstop; project `Send + Sync` Rust classes as `Sendable` Swift
+  classes; emit `fun interface` for single-method capability traits; a platform-stdlib
+  **name-collision policy** (`Date`, `URL`, `Data`, `Error`); no hyphens in crate names; expose the
+  split `begin`/`complete` so `Pending` is observable to a `snapshot()` caller. Also: **report the
+  `boltffi pack android` bug upstream** and delete the workaround in `mise run pack:android`.
+- **Step 11 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
+  not optional here, WinUI binding shape), then the generator template.
 
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)
 

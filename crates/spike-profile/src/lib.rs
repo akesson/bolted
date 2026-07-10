@@ -2,7 +2,7 @@
 //!
 //! A deliberately gnarly profile editor: a composite value object (`DateRange`), a relational
 //! tier-2 rule (`corporate_email`), an async uniqueness check, and live rebase with field-level
-//! conflicts. The invariant suite (ARCHITECTURE §7, I1–I12) lives in `tests/`.
+//! conflicts. The invariant suite (`docs/CONFORMANCE.md`, C01–C18) lives in `tests/`.
 #![forbid(unsafe_code)]
 
 pub mod profile;

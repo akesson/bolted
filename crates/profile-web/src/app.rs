@@ -95,8 +95,8 @@ impl App {
     /// the *shell* owns → the verdict goes back to the core. There is no executor in the core.
     ///
     /// Typing through a pending check changes the username's value, which resets the check
-    /// (I13); the late `complete_username_check` then carries a stale token and is discarded
-    /// (I10). Both fall out of the contract — this function does no bookkeeping for either.
+    /// (C13); the late `complete_username_check` then carries a stale token and is discarded
+    /// (C10). Both fall out of the contract — this function does no bookkeeping for either.
     fn schedule_check(self, ticket: u64) {
         wasm_bindgen_futures::spawn_local(async move {
             TimeoutFuture::new(self.timing.debounce_ms).await;

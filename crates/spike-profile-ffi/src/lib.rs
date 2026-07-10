@@ -83,7 +83,7 @@ struct DraftEntry {
     /// Per-draft snapshot stream (a draft is a mini feature-model, §4).
     producer: Arc<StreamProducer<ProfileSnapshot>>,
     /// Whether this draft participates in live rebase. Mirrors step-01's `Store`: only checkouts of
-    /// an existing canonical register; create-flow drafts never rebase (invariant I12).
+    /// an existing canonical register; create-flow drafts never rebase (conformance C12).
     rebases: bool,
 }
 
@@ -157,7 +157,7 @@ impl ProfileStoreFfi {
     }
 
     /// Check out a draft. Existing-canonical checkouts register for live rebase; create-flow
-    /// checkouts (no canonical) do not (invariant I12).
+    /// checkouts (no canonical) do not (conformance C12).
     pub fn checkout(&self) -> ProfileDraftFfi {
         let mut g = lock(&self.core);
         let id = g.next_id;
