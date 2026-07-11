@@ -285,24 +285,13 @@ if command -v rustup >/dev/null 2>&1; then
   rustup target add aarch64-linux-android >/dev/null 2>&1 || true
 fi
 
-# --- BoltFFI 0.27.3 bug: `pack android` is broken out of the box. -----------------------------
-# `pack apple` builds the crate with the binding-expansion environment (see the CLI's
-# build/expansion.rs `env()`), which switches the `#[export]` macro to emit crate-qualified symbol
-# names like `boltffi_method_class_spike_profile_ffi_profile_store_ffi_checkout`.
-# `pack android` (pack/android/mod.rs) passes `env: Vec::new()` instead, so the macro falls back to
-# legacy short names (`boltffi_profile_store_ffi_checkout`) — while the Kotlin/JNI glue and the C
-# header it generates in the SAME run still reference the long names. The .so therefore links with
-# undefined symbols and ART fails at `System.loadLibrary` with:
-#   dlopen failed: cannot locate symbol "boltffi_register_callback_spike_profile_ffi_uniqueness_checker"
-# Workaround: replicate what the Apple path exports. Drop this block when boltffi fixes pack android.
-# See docs/steps/step-05-report.md (friction log).
-crate_dir="$PWD"
-export BOLTFFI_BINDING_EXPANSION=1
-export BOLTFFI_BINDING_EXPANSION_ROOT="$crate_dir"
-export BOLTFFI_BINDING_EXPANSION_SOURCE="$crate_dir/src/lib.rs"
-export BOLTFFI_BINDING_EXPANSION_SURFACE=native
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--cfg boltffi_binding_expansion"
-# ---------------------------------------------------------------------------------------------
+# BoltFFI 0.27.3 shipped `pack android` broken: it passed `env: Vec::new()` to the crate build, so
+# `#[export]` fell back to legacy short symbol names (`boltffi_profile_store_ffi_checkout`) while the
+# Kotlin/JNI glue referenced crate-qualified long names — the .so linked with undefined symbols and
+# ART failed at `System.loadLibrary`. This repo carried an env-replication workaround (step 05).
+# BoltFFI 0.27.4/0.27.5 FIXED it (the Android JNI packaging fixes): `pack android --release` now emits
+# crate-qualified names matching the glue. Verified in step 15 M4 with a 0.27.3-vs-0.27.5 `nm` control
+# and a green `test:android` with no workaround (step-15 report, draft 01 → retired). Workaround removed.
 
 boltffi pack android --release
 """

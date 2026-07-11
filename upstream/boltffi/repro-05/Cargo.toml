@@ -1,0 +1,18 @@
+# Standalone repro crate for upstream draft 05. NOT a member of the bolted workspace:
+# the empty [workspace] table below makes this its own workspace root, so `mise run check`
+# (cargo --workspace at the repo root) never builds it, and `cargo build` inside this dir
+# does not attach it to bolted's workspace.
+[workspace]
+
+[package]
+name = "repro05"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Flip between "0.27.5" and "=0.27.3" to compare — both compile (draft 05 does not reproduce).
+boltffi = "0.27.5"
