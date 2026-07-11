@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.7, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15 design passes).** Phase 1 validated this design against
+**Status: FROZEN (v1.8, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -27,7 +27,11 @@ by `bolted-ffi-gen` over the one parsed declaration (D25) and byte-compared by t
 evidence: §4/§6's "the GC never frees the Rust draft" is **Kotlin-only** — the C# backend's generated
 handle owns a finalizer that reaches the store-side close — and **D26 is amended in place**: its
 revisit condition arrived, the decline stands sharpened, and the per-language leak-freedom test is now
-*required* to assert its baseline before any GC, so a finalizer can never green a forgotten release. A
+*required* to assert its baseline before any GC, so a finalizer can never green a forgotten release.
+**v1.8** carries the step-16 planning pass's one: **D29** discharges §9's largest open claim by
+rewriting §1 to the store-owned shape the spikes actually shipped — the unwritten
+`Feature (State/Msg/Caps/update)` trait is struck and the never-built `command` verb is demoted to §9
+— which opens Phase 4. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -40,11 +44,18 @@ which every decision below is justified against.
 
 ---
 
-## 1. The shape: MVVM with an Elm core
+## 1. The shape: MVVM over a store-owned core
 
-- **Model** — an Elm-style core per feature ("feature model"): single typed state, internal
-  messages, a pure `update` function, effects as data. Messages never cross the FFI.
-- **ViewModel** — generated per platform from the feature model's contract: thin, dumb glue
+- **Model** — a store-owned core per feature. A `Store<D>` owns the feature's single canonical,
+  always-valid entity and every open draft, keyed by id and lock-free (D16). Canonical state is
+  never mid-edit: all editing happens inside draft sessions, and the store's answer to a mutation is
+  **data** — the rebase fan-out is a returned `Vec<DraftId>`, an async check is a `CheckToken`
+  begin/complete pair (D10/D18), never an in-band callback. Nothing crosses the FFI but these typed
+  verbs and the values they carry; there are no messages, no `update` loop. *(§1 once framed this as
+  an Elm core with `State`/`Msg`/a pure `update` fn; six spikes shipped none of that and drove
+  `Store` + `Draft` directly — D29 rewrote the framing to match the code. Effects-as-data, the good
+  half of the Elm framing, survives; see §8's sans-io row.)*
+- **ViewModel** — generated per platform from the feature's contract: thin, dumb glue
   binding the contract to `@Observable` (Swift) / `StateFlow` (Kotlin) /
   `INotifyPropertyChanged` (C#). Rust shells (web via Leptos/Dioxus/Silkenweb, Linux-native)
   consume the contract directly as a crate — no codegen.
@@ -52,24 +63,28 @@ which every decision below is justified against.
   literals** (a max length appearing in shell code is a defect — greppable in CI).
 
 A "view" is any native surface, not just a window: a tray/menu-bar icon, a file-manager
-extension, a widget, a CLI — each is just another (often tiny) observer of feature models
-sending commands back. The main app window has no privileged status in the contract.
+extension, a widget, a CLI — each is just another (often tiny) observer of a feature's state,
+driving it back through the same verbs. The main app window has no privileged status in the contract.
 
-The contract a feature model exposes has exactly three verbs (CQRS-shaped):
+The contract a feature exposes has two shipped verbs (a third, `command`, is designed but unbuilt —
+see below):
 
 | Verb | Surface | Semantics |
 |------|---------|-----------|
 | **observe** | read-only, always-valid current state | *how* it is delivered is per-target: a `snapshots()` stream across FFI, a direct read plus a change tick in a Rust shell (§8) |
-| **command** | `toggle_x() -> Result<(), CmdError>` | single-action mutation, validate-or-reject |
 | **draft** | `checkout() -> FeatureDraft` | multi-field edit session: checkout → edit → validate → submit |
 
-Rule of thumb: a mutation that touches one field and needs no editing session is a command;
-otherwise it's a draft.
+A **third verb, `command`** — a session-less `toggle_x() -> Result<(), CmdError>` single-action
+mutation — completed the original CQRS triad but was **implemented zero times** across six spikes and
+four shells: every mutation the spike features want is a draft. D29 struck it from the shipped
+contract and demoted it to a §9 question, to be designed when a real feature needs it and not from
+zero examples (the D20/D21 precedent).
 
-**Canonical core state is never mid-edit.** All editing happens inside drafts. The Elm update
-function never sees keystrokes — submit dispatches one message carrying the fully-validated
-result (`Msg::ProfileSubmitted(ValidProfile)`), so the event log is a domain log ("profile
-updated"), not a keystroke log. This is what makes replay/time-travel meaningful.
+**Canonical core state is never mid-edit.** All editing happens inside drafts; `submit` applies one
+fully-validated result to the store in a single transition (§4), so the canonical entity only ever
+moves between valid states, never through a keystroke. A feature that records its submits therefore
+gets a domain log ("profile updated"), not a keystroke log — the precondition for meaningful
+replay/time-travel.
 
 ## 2. Validation: three tiers
 
@@ -172,7 +187,7 @@ merging, ever** (perimeter).
   survives only for the outer core↔server loop — the same pattern telescoped
   (shell↔core mirrors core↔server: snapshot down, transactional submit up, reconcile).
 - Across FFI, drafts expose their own snapshot stream (they can change from underneath via rebase);
-  a draft is then a mini feature-model, same stream+operations shape, same generated binding
+  a draft is then a mini feature, same stream+operations shape, same generated binding
   machinery, reused. A **Rust shell does not want the stream** and does not get one — see §8.
 - Every snapshot carries the store `version` it is based on. A draft's stamp advances with each
   rebase (C15), so a consumer can reconcile a `snapshot()` read against a future-only subscription.
@@ -250,8 +265,11 @@ surface must be monomorphic with concrete names. Therefore:
 - **The FFI layer is generated *source*, not macro output** (D22), and it is the one thing a macro
   *cannot* do: BoltFFI's bindgen reads the crate's source files with `syn` and never sees expanded
   Rust, so a macro-emitted `#[data]` is silently omitted from the bindings. See §6.
-- **Traits** are the contracts: `Value` (Raw / Error / try_new / into_raw / constraints),
-  `Draft` (FieldId / conflicts / validate / commit), `Feature` (State / Msg / Caps / update).
+- **Traits** are the contracts: `Value` (Raw / Error / try_new / into_raw / constraints) and
+  `Draft` (FieldId / conflicts / validate / commit) with its subtraits `Stashable`, `Checked`,
+  `StoreDraft`. There is no `Feature` trait — the Elm-style `Feature (State / Msg / Caps / update)`
+  this list once sketched was struck by D29, and the name now belongs to `bolted_decl::Feature`, the
+  declaration model (D25).
 
 Key trait sketches (authoritative signatures live in the step docs / code):
 
@@ -339,8 +357,8 @@ bindgen cannot see macro output. `<feature>-ffi/src/lib.rs` must `pub use genera
 crate root**, and `mise run check` cannot see that failure.
 
 `#[bolted::feature_model]` is **cut** (D21) and could never have existed: bindgen reads source text, so
-a macro's `#[data]` output is silently invisible. The `Feature` trait it would stamp has never been
-written (§9).
+a macro's `#[data]` output is silently invisible. The `Feature` trait it would have stamped was never
+written and is now **struck** (D29); §1 describes the store-owned shape that shipped instead.
 
 **Sans-io / runtime-agnostic core**: effects are data driven by the platform layer; no tokio in
 `bolted-core`. This is what makes headless deterministic tests and wasm32 compatibility
@@ -452,6 +470,7 @@ what, and why it was worth it.
 | **D26** — **no `Cleaner` backstop.** Leak-freedom is a **contract test** over C22's live-draft count (teardown returns the count to its baseline, per language), `close()` in `onCleared()` is the tested Kotlin rule, and the use-after-`close()` half stays an upstream filing | Emit a Kotlin layer that registers a `java.lang.ref.Cleaner` per handle, so a forgotten `close()` leaks until GC rather than forever | Step-12 design pass. Three reasons, in order of hardness. **Ownership**: the handle class, its `__boltffi_closed` CAS and its free shim are BoltFFI bindgen output (step 05 read them, step 11 M0 re-read them) — a Cleaner registered from outside that class must reach the free shim while holding no reference to the object, i.e. bypass the idempotence guard, trading a deterministic leak for a nondeterministic double-free and coupling Bolted to upstream internals. **Doctrine**: it is D16's rejected mechanic again — a framework device that acts only at runtime, at GC's discretion; under a Cleaner a forgotten `close()` *passes every test* that does not provoke a collection, which absolves the exact bug C18 exists to make loud. **Coverage**: the dangerous half, H2's use-after-`close()` UB, a Cleaner cannot touch — freed-at-GC dangles exactly like freed-at-close. The only real fix is generated methods consulting the flag they already carry, which is upstream's flag and upstream's filing (step 12 drafts it). What Bolted owns is the store side, and C22 already counts it — so the backstop Bolted ships is *detection at the contract-test tier*, not absolution at runtime. If upstream grows an opt-in Cleaner inside bindgen, where the CAS makes it safe, revisit. *Revisited (v1.7, step 14): the condition arrived — the C# backend ships exactly this shape, a finalizer over the CAS-guarded `Dispose`, and it does reach the store-side close at runtime. The decision stands, sharpened rather than reversed: a bindgen-owned finalizer is a welcome safety net but is not a release path, and the per-language leak-freedom test is now **required** to assert its baseline immediately after deterministic release, before any GC — under a finalizer, a test that provokes (or merely tolerates) a collection would pass with every `Dispose` deleted. The Kotlin decline is unchanged; nothing Bolted ships registers a Cleaner* |
 | **D27** — the stash envelope is **versioned, parse-don't-validate data**: the schema version is stamped into the *generated* stash DTO from the declaration; an envelope that fails the version/shape gate is refused **wholesale and typed**; inside a parsed envelope, restore salvages **per field** (step 07's degradation stands) and never refuses; constraint *tightening* is a **build-time** event — `bolted-check`'s constraint-semver snapshot (Phase 4) fails the build until the team makes a version decision | Refuse the whole stash whenever any field is stale; or bump the version on every constraint change so old stashes die at the gate; or the status quo — a hand-written shell codec owning an ad-hoc `FORMAT_VERSION` | Step-12 design pass. The raws inside a stash are the user's own keystrokes, and C06 already gives an unparseable raw a home (`Invalid { raw }`) — refusing them all because *one* field's constraints tightened is data loss as policy, the bug live-rebase exists to prevent; so the semantic case keeps per-field degradation (`base` → `None`). The degraded field is then *dirty from unset*, so the next rebase against live canonical must surface it as a **conflict** the UI already renders — a claim step 12 tests (C23) rather than assumes. The *structural* case is different: an envelope that cannot be parsed has nothing to salvage, and refusing it wholesale is just tier 1 applied to the envelope. The deciding fact is where today's only version gate lives: `StashCodec.kt`, a hand-written shell file that step 12's codec-deletion item would otherwise silently delete — the version therefore moves into the generated stash DTO, and the gate travels with the generated codec. What no runtime path can do is *warn the team* that a tightening happened; that is the build-time rung, and it is `bolted-check`'s (Phase 4). Costs nothing in the core: `Stashable::from_stash` stays infallible — the gate is at the DTO boundary, where the untrusted bytes are |
 | **D28** — foreign-language artifacts (the stash codec, the per-language contract tests) are **committed generated source** — D22, one language out. `bolted-ffi-gen` grows per-language emitters over `bolted-decl::Feature` (D25: one parser, another emitter); the emitted Kotlin/Swift lives at a source path the platform build already compiles, carries the `@generated` banner, and is **byte-compared** by the drift check inside `mise run check`. Emission is string-building in plain Rust — no template engine | Generate at platform build time (a Gradle task / SPM build-tool plugin writing into `build/`); a template engine over `.kt.jinja` files; wait for upstream filing 04 (public DTO wire ser/de) to land; keep hand-writing the foreign files | Step-13 design pass. Step 12 proved the need three ways at once: the codec deletion, the checker helper and the Sendable extension all converted for the *single* reason that the generator emits only Rust. Build-time generation loses everything D22 was chosen for — the output escapes review, no compiler judges it inside `check`, and the generator moves behind Gradle/Xcode, so the one verb every machine runs stops seeing drift. Byte-comparison is honest here in a way it could not be for Rust *because nothing else owns these files*: no formatter rewrites them (rustfmt forced D22 to compare code, not bytes), and the check environment has no Kotlin/Swift parser — pretending to normalise would mean maintaining a second grammar. A template engine is a second source of truth with no compiler on it, and the askama-class tooling already cost this repo a CLI-install workaround (step 02). Waiting on filing 04 blocks Phase 3 on someone else's release — D22 rejected that once — and it retires only the codec, never the contract tests |
+| **D29** — §1 is rewritten to the **store-owned** shape that shipped; the unwritten `Feature (State / Msg / Caps / update)` trait is **struck**, and the never-implemented `command` verb is demoted to §9 | Design `State`/`Msg`/`Caps`/`update` now so a Phase-4 harness has a trait to sit on; or leave §1 as aspiration and reconcile it after Phase 4 | Step-16 planning pass, discharging §9's "largest undischarged claim in the architecture". Six spikes and four shells drive `Store` and `Draft` directly and pass C01–C23 — the code has *been* the design since step 01, and §1's Elm core was the drift. Designing the trait now would make the spikes retroactively wrong and would design `State`/`Msg`/`update` from **zero examples**, the D20/D21 error twice-affirmed; the name `Feature` is meanwhile taken by `bolted_decl::Feature` (D25). Effects-as-data survives — it is what the sans-io row proved (`spawn_local` → a bare `CheckToken`) — so what is struck is the update-loop trait nothing ever implemented, not the effect model. The `command` verb goes to §9 for the same reason: zero of six spikes needed a session-less mutation, and a shape justified by no example is a guess (D20). D21's row stands as the historical record that first flagged this; this row closes it |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -462,13 +481,13 @@ Each names the step that owns it. Nothing below blocks Phase 3.
 - **Process topology for OS-integration surfaces** (daemons, tray, file-manager extensions) — *its own
   spike, after Phase 2.* Where the core runs (embedded vs daemon), how sandboxed extension processes
   reach it (the contract over IPC?), single-instance ownership. Nothing in Phases 1–3 depends on it.
-- **The `Feature` trait is unwritten** — *its own session, before Phase 4.* §1 describes an Elm core
-  and §5 sketches `Feature` (`State` / `Msg` / `Caps` / `update`), but six spikes have shipped without
-  one: every shell drives `Store` and `Draft` directly. Either the trait is real and the spikes have
-  been quietly ignoring it, or §1's Elm framing describes the *store* and the trait should be struck.
-  (D21 cut `#[bolted::feature_model]`, and step 10 showed it could never have existed — so this
-  question no longer has a macro waiting on it, only §1's honesty.) This is the largest undischarged
-  claim in the architecture.
+- **The `command` verb** — *reopens when a real feature needs a session-less mutation.* §1's original
+  CQRS triad included `command` (`toggle_x() -> Result<(), CmdError>`, a one-field validate-or-reject
+  with no edit session); six spikes and four shells implemented it **zero times** — every mutation is
+  a draft. D29 struck it from the shipped contract rather than design it from no examples (the D20
+  precedent). When a feature genuinely wants a session-less mutation, this question owns its design;
+  until then the shape would be a guess. *(This is the residue of §9's former "the `Feature` trait is
+  unwritten" question — the trait itself is closed by D29 below.)*
 - **Composite value objects in `#[bolted::value]`** — *whenever a second one exists.* D20 scopes the
   macro to newtypes, so `DateRange` (raw `(Date, Date)`, invariant across two parts) stays
   hand-written. A composite needs struct-shaped parts, a tuple raw, and a cross-field invariant — a
@@ -489,7 +508,9 @@ to `snapshot()` is not, and no split `begin`/`complete` across FFI is needed to 
 *the `Cleaner` backstop* → **D26** (declined: leak-freedom becomes a per-language contract test over
 C22's count; the use-after-close half stays an upstream filing) · *stash schema evolution* → **D27**
 (versioned envelope, wholesale refusal only at the parse gate, per-field salvage inside it; tightening
-becomes a build-time `bolted-check` event in Phase 4).
+becomes a build-time `bolted-check` event in Phase 4) · *the `Feature` trait / §1's Elm framing* →
+**D29** (struck: §1 rewritten to the store-owned shape that shipped; the never-built `command` verb is
+all that remains, demoted to the open question above).
 
 ## 10. Prior art
 
