@@ -135,6 +135,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolted-check"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "bolted-decl",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "bolted-conformance"
 version = "0.0.0"
 dependencies = [
@@ -679,22 +689,28 @@ dependencies = [
 name = "gen_note_ffi"
 version = "0.0.0"
 dependencies = [
+ "bolted-check",
  "bolted-core",
+ "bolted-decl",
  "bolted-ffi-gen",
  "bolted_ffi",
  "boltffi",
  "gen-note",
+ "syn",
 ]
 
 [[package]]
 name = "gen_profile_ffi"
 version = "0.0.0"
 dependencies = [
+ "bolted-check",
  "bolted-core",
+ "bolted-decl",
  "bolted-ffi-gen",
  "bolted_ffi",
  "boltffi",
  "gen-profile",
+ "syn",
 ]
 
 [[package]]

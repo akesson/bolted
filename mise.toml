@@ -29,6 +29,14 @@ gen gen-profile gen_profile
 # drift check compares code rather than bytes for exactly this reason; formatting here keeps the two
 # verbs from fighting over the same file.
 cargo fmt -p gen_note_ffi -p gen_profile_ffi
+# The constraint-surface snapshot (step 16, D27's build-time half). `bolted-check` renders it from the
+# parsed declaration; the generator lives in the -ffi crate because only there are the feature's
+# runtime `constraints()` (incl. the DateRange composite, D20) and `STASH_SCHEMA_VERSION` linked.
+# Byte-checked by `mise run check` (crates/gen-*-ffi/tests/constraint_snapshot.rs); NOTHING formats a
+# `.snap`, which is what keeps that byte comparison honest (D28). A one-token constraint edit is a
+# one-line diff here instead of noise inside a regenerated generated.rs.
+cargo run -q -p gen_note_ffi --example gen-note-constraints -- crates/gen-note/constraints.snap
+cargo run -q -p gen_profile_ffi --example gen-profile-constraints -- crates/gen-profile/constraints.snap
 # The foreign stash codec (D28): profile-app persists a draft across process death, and the codec is
 # emitted from the same declaration. Byte-compared by `mise run check` — no Gradle, NDK or formatter
 # in the loop, which is exactly what makes that comparison honest. Only `gen-profile` has a stash

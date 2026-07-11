@@ -20,3 +20,10 @@ boltffi = "0.27.5"
 
 [dev-dependencies]
 bolted-ffi-gen = { path = "../bolted-ffi-gen" }
+# Step 16: the constraint-surface snapshot. Dev-deps (not [dependencies]) so `bolted-check` + `syn`
+# stay OUT of the shipped cdylib — the `examples/gen-constraints` generator and the
+# `tests/constraint_snapshot` drift check are the only things that link them. This crate hosts them
+# because only here are the feature's runtime `constraints()` and `STASH_SCHEMA_VERSION` linked.
+bolted-check = { path = "../bolted-check" }
+bolted-decl = { path = "../bolted-decl" }
+syn = { version = "2", features = ["full", "parsing"] }
