@@ -116,7 +116,7 @@ run = [
 description = "Install the pinned boltffi CLI (idempotent; works around the askama symlink bug)."
 run = """
 set -eu
-want="0.27.3"
+want="0.27.5"
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 if command -v boltffi >/dev/null 2>&1 && boltffi --version 2>/dev/null | grep -q "$want"; then
   echo "boltffi $want already installed"

@@ -16,4 +16,4 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 bolted-core = { path = "../bolted-core" }
 spike-profile = { path = "../spike-profile" }
-boltffi = "0.27.3"
+boltffi = "0.27.5"

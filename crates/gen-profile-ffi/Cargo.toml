@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 bolted-core = { path = "../bolted-core" }
 bolted_ffi = { path = "../bolted-ffi" }
 gen-profile = { path = "../gen-profile" }
-boltffi = "0.27.3"
+boltffi = "0.27.5"
 
 [dev-dependencies]
 bolted-ffi-gen = { path = "../bolted-ffi-gen" }
