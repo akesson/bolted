@@ -29,8 +29,9 @@ work around them.
 | 13 | Per-language contract tests from the C-IDs | 3 — Extraction | **done** — [report](steps/step-13-report.md); **D28** shipped: Kotlin stash codec + both contract suites are committed generated source, byte-drift-checked in `check` (no Gradle/Xcode/NDK/boltffi). 22 emitted C-IDs (C10 exempt), 33 tests/language, generic over a values-only fixture (KC3 held — even C08's rule is `RuleFlip` data). `StashCodec.kt` deleted; `delete_canonical` the one accessor gap. Genericity golden caught a live Swift leak; every drift/manifest/suite check watched red. `test:android` 80/80 · `test:apple` 75+20. No kill criteria hit |
 | 14 | C# port + generator | 3 — Extraction | **stopped on kill criterion 1** — [plan](steps/step-14-csharp-port.md) · [report](steps/step-14-report.md); M0 (toolchain seam + packed artifact loads/calls) and M1 (probe, 14 tests) **done**; the emitted suite + genericity/falsification **not built** because feature 4 (callbacks) is broken on the C# backend: `run_username_check` throws (a boltffi 0.27.3 codegen bug — wrong return-marshalling on a struct-returning P/Invoke). Findings banked: §6's C# "GC never frees" row is **wrong** (a finalizer reaches store-side close — D26 revisit met), H2 looks **dead** (use-after-dispose is typed). Needs a §6/D26 design pass + an upstream fix before resuming |
 | 15 | boltffi 0.27.5 bump: resume C#, or prove why not | 3 — Extraction | **done (branch B)** — [plan](steps/step-15-boltffi-bump.md) · [report](steps/step-15-report.md); five pins → 0.27.5, every runnable tier green (`test:apple:ui` env-blocked, not a regression). Tripwire still green → **C# driver still broken at 0.27.5** (byte-identical `MarshalAs(I1)`-on-`FfiBuf` bug), so the emitted C# suite (M2/M3) stayed unbuilt. Upstream kit (`upstream/boltffi/`) re-verified: **01 fixed** (pack-android workaround removed), **02/03/04/06 alive → to file**, **05 not reproducible → do-not-file**; nothing posted. Churn tiny (Swift/C# byte-identical, Kotlin +26 lines JNI diagnostics); 0.27.3 CLI now needs `--locked` |
-| — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
-| 16+ | Verification harness | 4 — Harness | unplanned |
+| — | The `Feature` trait | design session | **done** — resolved as **D29** (ARCHITECTURE **v1.8**, step-16 planning pass): §1 rewritten to the store-owned shape that shipped, the unwritten trait struck, the never-built `command` verb demoted to §9. Phase 4's gate is discharged |
+| 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **ready** — [plan](steps/step-16-bolted-check.md) |
+| 17+ | Verification harness (cont.) | 4 — Harness | unplanned — wasm size budget, capability coverage, `doctor`, `bolted new` |
 
 ## Phase 1 — Design validation spike
 
@@ -267,8 +268,9 @@ reference the generated code is diffed against.
   condition met and answered) — the step-14 findings, now law rather than banked evidence.
 
   When the tripwire eventually goes **red** (upstream fixes draft 06), resuming step-14's M2/M3 — the
-  emitted C# contract suite, genericity, and the dotnet planted-red failure-mode proof — is the
-  natural **step 16** candidate, still gated on that red.
+  emitted C# contract suite, genericity, and the dotnet planted-red failure-mode proof — becomes its
+  own step, still gated on that red. (Step 16 is now Phase 4's first harness step; the C# resume takes
+  the next free number when the tripwire flips.)
 
 ## Phase 4 — Verification harness (unplanned sketch)
 
@@ -278,9 +280,14 @@ in-scope list is the authority.)*
 
 `bolted-check` (binding drift, capability coverage, constraint semver snapshots, WASM size
 budget), `bolted new` scaffolding, `doctor`, the standard mise verb set — per VISION.md's
-in-scope list. Planned after Phase 3 ships evidence about what drifts in practice. Gated on the
-`Feature`-trait design session (step-09 report, headline 4): §1's Elm framing has no code behind it
-after six spikes, the `command` verb of §1's triad has never been implemented either, and the name
-`Feature` is meanwhile taken by `bolted_decl::Feature` — the declaration model. Either the trait is
-designed or §1 is rewritten to describe what shipped; that session happens before any Phase-4 step
-doc is authored.
+in-scope list. Planned after Phase 3 ships evidence about what drifts in practice.
+
+**The gate is discharged.** The `Feature`-trait design session (§9's "largest undischarged claim")
+is resolved as **D29** (ARCHITECTURE v1.8): §1 is rewritten to the store-owned shape that shipped, the
+unwritten trait is struck, and the never-built `command` verb is demoted to a §9 question. Phase 4
+therefore **opens with step 16** — `bolted-check`'s first analysis, the **constraint-surface
+snapshot** that D27 explicitly deferred here (a constraint change becomes a reviewable, committed,
+drift-checked diff that names the stash-schema-version duty, instead of one silent token inside a
+regenerated file). The later analyses stay sketched, each authored when it becomes current: the WASM
+size budget against step-04's 304 KiB baseline (its own tier — it needs `trunk`/wasm32 and cannot
+live inside host-only `mise run check`), capability coverage, `doctor`, and `bolted new` scaffolding.
