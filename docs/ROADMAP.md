@@ -30,7 +30,7 @@ work around them.
 | 14 | C# port + generator | 3 — Extraction | **stopped on kill criterion 1** — [plan](steps/step-14-csharp-port.md) · [report](steps/step-14-report.md); M0 (toolchain seam + packed artifact loads/calls) and M1 (probe, 14 tests) **done**; the emitted suite + genericity/falsification **not built** because feature 4 (callbacks) is broken on the C# backend: `run_username_check` throws (a boltffi 0.27.3 codegen bug — wrong return-marshalling on a struct-returning P/Invoke). Findings banked: §6's C# "GC never frees" row is **wrong** (a finalizer reaches store-side close — D26 revisit met), H2 looks **dead** (use-after-dispose is typed). Needs a §6/D26 design pass + an upstream fix before resuming |
 | 15 | boltffi 0.27.5 bump: resume C#, or prove why not | 3 — Extraction | **done (branch B)** — [plan](steps/step-15-boltffi-bump.md) · [report](steps/step-15-report.md); five pins → 0.27.5, every runnable tier green (`test:apple:ui` env-blocked, not a regression). Tripwire still green → **C# driver still broken at 0.27.5** (byte-identical `MarshalAs(I1)`-on-`FfiBuf` bug), so the emitted C# suite (M2/M3) stayed unbuilt. Upstream kit (`upstream/boltffi/`) re-verified: **01 fixed** (pack-android workaround removed), **02/03/04/06 alive → to file**, **05 not reproducible → do-not-file**; nothing posted. Churn tiny (Swift/C# byte-identical, Kotlin +26 lines JNI diagnostics); 0.27.3 CLI now needs `--locked` |
 | — | The `Feature` trait | design session | **done** — resolved as **D29** (ARCHITECTURE **v1.8**, step-16 planning pass): §1 rewritten to the store-owned shape that shipped, the unwritten trait struck, the never-built `command` verb demoted to §9. Phase 4's gate is discharged |
-| 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **ready** — [plan](steps/step-16-bolted-check.md) |
+| 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **done** — [plan](steps/step-16-bolted-check.md) · [report](steps/step-16-report.md); the third emitter over the one parser (D25). A committed, human-readable, byte-checked `.snap` per feature — a constraint *tightening* now fails the build at the exact line and names the `STASH_SCHEMA_VERSION` duty (D27), where every existing drift check was blind to it. Composites covered via a runtime section; renderer stays pure |
 | 17+ | Verification harness (cont.) | 4 — Harness | unplanned — wasm size budget, capability coverage, `doctor`, `bolted new` |
 
 ## Phase 1 — Design validation spike
@@ -283,11 +283,14 @@ budget), `bolted new` scaffolding, `doctor`, the standard mise verb set — per 
 in-scope list. Planned after Phase 3 ships evidence about what drifts in practice.
 
 **The gate is discharged.** The `Feature`-trait design session (§9's "largest undischarged claim")
-is resolved as **D29** (ARCHITECTURE v1.8): §1 is rewritten to the store-owned shape that shipped, the
+was resolved as **D29** (ARCHITECTURE v1.8): §1 is rewritten to the store-owned shape that shipped, the
 unwritten trait is struck, and the never-built `command` verb is demoted to a §9 question. Phase 4
-therefore **opens with step 16** — `bolted-check`'s first analysis, the **constraint-surface
-snapshot** that D27 explicitly deferred here (a constraint change becomes a reviewable, committed,
+therefore **opened with step 16** — `bolted-check`'s first analysis, the **constraint-surface
+snapshot** that D27 explicitly deferred here (a constraint change is now a reviewable, committed,
 drift-checked diff that names the stash-schema-version duty, instead of one silent token inside a
-regenerated file). The later analyses stay sketched, each authored when it becomes current: the WASM
-size budget against step-04's 304 KiB baseline (its own tier — it needs `trunk`/wasm32 and cannot
-live inside host-only `mise run check`), capability coverage, `doctor`, and `bolted new` scaffolding.
+regenerated file). **Shipped:** the tightening `PersonName max 30→29` fails the build at the exact
+line while every existing drift check stays green (the bound never reaches the FFI layer they guard) —
+see the [step-16 report](steps/step-16-report.md). The later analyses stay sketched, each authored
+when it becomes current: the WASM size budget against step-04's 304 KiB baseline (**its own tier** — it
+needs `trunk`/wasm32 and cannot live inside host-only `mise run check`), capability coverage,
+`doctor`, and `bolted new` scaffolding.
