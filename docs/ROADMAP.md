@@ -27,7 +27,7 @@ work around them.
 | 11 | Migrate the shells onto the generated FFI | 3 — Extraction | **done** — [plan](steps/step-11-migrate-shells.md) · [report](steps/step-11-report.md); all four shells link `gen-profile-ffi`, `pack:*` repointed, spike kept as reference. D23 controls planted-and-watched on both platforms. Hardware "after": **0.0432 ms p50** per keystroke on the Pixel 8a (~23× under KC5); `test:apple:ui` 9/9 on generated |
 | 12 | FFI hardening | 3 — Extraction | **done** — [report](steps/step-12-report.md); D23 fix (3-layer planted-red), leak-freedom pinned (D26), **D27** envelope + **C23**, l10n coverage (Swift's first), name-collision tripwire. Codec deletion **converted** (needs step 13's foreign emitter); 5 upstream drafts. No kill criteria hit |
 | 13 | Per-language contract tests from the C-IDs | 3 — Extraction | **done** — [report](steps/step-13-report.md); **D28** shipped: Kotlin stash codec + both contract suites are committed generated source, byte-drift-checked in `check` (no Gradle/Xcode/NDK/boltffi). 22 emitted C-IDs (C10 exempt), 33 tests/language, generic over a values-only fixture (KC3 held — even C08's rule is `RuleFlip` data). `StashCodec.kt` deleted; `delete_canonical` the one accessor gap. Genericity golden caught a live Swift leak; every drift/manifest/suite check watched red. `test:android` 80/80 · `test:apple` 75+20. No kill criteria hit |
-| 14 | C# port + generator | 3 — Extraction | **ready** — [plan](steps/step-14-csharp-port.md) |
+| 14 | C# port + generator | 3 — Extraction | **stopped on kill criterion 1** — [plan](steps/step-14-csharp-port.md) · [report](steps/step-14-report.md); M0 (toolchain seam + packed artifact loads/calls) and M1 (probe, 14 tests) **done**; the emitted suite + genericity/falsification **not built** because feature 4 (callbacks) is broken on the C# backend: `run_username_check` throws (a boltffi 0.27.3 codegen bug — wrong return-marshalling on a struct-returning P/Invoke). Findings banked: §6's C# "GC never frees" row is **wrong** (a finalizer reaches store-side close — D26 revisit met), H2 looks **dead** (use-after-dispose is typed). Needs a §6/D26 design pass + an upstream fix before resuming |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
 | 15+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
 
@@ -222,21 +222,27 @@ reference the generated code is diffed against.
   Where the doc was wrong: three places, all the planner being *conservative* (exemptions
   over-predicted, Swift priced as a Kotlin mirror when only names mirror, the genericity golden priced
   as a formality that then found a bug).
-- **Step 14 — C# port + generator.** *Detailed step doc exists.* BoltFFI's C# backend carries the
-  generated Rust surface to .NET; a hand-written probe re-runs the step-02/05 due-diligence on
-  backend #3, and `bolted-ffi-gen` emits the **third contract suite** — the packed-and-run
-  genericity proof step 13 deferred. The tier is headless `dotnet test` **on this Mac** (the seam is
-  host-portable; the WinUI face waits for Windows hardware — a non-goal, the step-07 KC4 precedent).
-  The planning pass already *ran* the backend: `generate csharp` emits all four load-bearing BoltFFI
-  features idiomatically (IDisposable handles, typed exceptions, `IAsyncEnumerable` streams, callback
-  interfaces), and `pack csharp` staged a complete `net10.0`/`osx-arm64` package failing only on the
-  missing dotnet SDK (M0's one bootstrap). **The headline risk is a finding, not a gap**: the C#
-  binding ships a *finalizer* on the draft handle — the exact mechanism D26 declined to build,
-  implemented inside bindgen where D26 said it would be safe — so ARCHITECTURE §6's "the GC never
-  frees the Rust draft" row is likely wrong for C#, and use-after-dispose appears to be a typed
-  `ObjectDisposedException` rather than step 05's silent UB. M1 verifies both at runtime (with a
-  GC-probe control); the report feeds a §6/D26 design pass. The sketch's old "WinUI binding shape"
-  clause is superseded: no ViewModel layer without a real WinUI host to judge it.
+- **Step 14 — C# port + generator. Stopped on kill criterion 1 ([report](steps/step-14-report.md)).**
+  The tier is headless `dotnet test` **on this Mac** (the seam is host-portable; WinUI waits for
+  Windows hardware — a non-goal, the step-07 KC4 precedent). **M0 delivered:** the toolchain seam
+  (`pack:csharp`/`test:csharp`, dotnet task-scoped like the JDK), and the packed `net10.0`/`osx-arm64`
+  NuGet artifact **loads and calls from `dotnet test`** (kill criterion 2 cleared). **M1 delivered:**
+  the step-05 due-diligence probe (14 tests), which found that **three of the four load-bearing
+  features run, and one is broken at runtime** — the async single-flight check driver
+  `run_username_check` throws `MarshalDirectiveException` on every call, because boltffi 0.27.3's C#
+  backend stamps `[return: MarshalAs(UnmanagedType.I1)]` (bool-return marshalling) onto the one
+  `Result<bool,_>` verb, whose wire return is the `FfiBuf` struct. That is a **four-feature break**
+  (callbacks unusable → C13/C16/D10 and `fillValid`'s create-flow check all unreachable), so the
+  emitted suite, the genericity golden, and the falsification pass were **not built** — a conformance
+  tier cannot honestly skip the async-check invariants to go green. The bug is in `dist/` bindgen
+  output (kill criterion 5 — unfixable from our side); upstream draft is in the report, filing is a
+  non-goal. **Findings banked for a §6/D26 design pass:** ARCHITECTURE §6's "Kotlin / C#: the GC never
+  frees the Rust draft" is **wrong for C#** — the draft handle's finalizer reaches the store-side
+  close (proven with a still-referenced control draft), which is D26's recorded revisit condition met;
+  and step-05's H2 silent-UB hazard looks **dead** on C# — use-after-dispose is a typed
+  `ObjectDisposedException`. ARCHITECTURE was left untouched. Resuming needs an upstream fix (or a
+  pinned/patched boltffi) plus a design decision on §6/D26 and on whether C# belongs on the ladder
+  before the driver works.
 
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)
 

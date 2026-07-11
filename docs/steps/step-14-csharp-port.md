@@ -1,6 +1,10 @@
 # Step 14 — the C# port: a third backend, a third emitted language, and a finalizer that changes a table
 
-**Phase 3 — Framework extraction. Status: ready.**
+**Phase 3 — Framework extraction. Status: executed → stopped on kill criterion 1 (see
+[report](step-14-report.md)).** M0 (toolchain seam + packed artifact) and M1 (probe) delivered; the
+emitted suite and genericity/falsification were not built because feature 4 (callbacks) is broken on
+the C# backend. The plan below stands as written; the report records what ran, what broke, and where
+the plan's guesses were right or wrong.
 
 Every claim this project makes about "per language" rests on two languages whose bindings one team
 (Apple's and Android's) shaped. Step 14 adds the third: BoltFFI's **C# backend** carries the same
