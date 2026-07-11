@@ -16,4 +16,4 @@
 - [A drift check makes a mutation pass vacuous](a-drift-check-makes-a-mutation-pass-vacuous.md) — regenerate first, prove the output changed, exclude the drift test
 - [Device and UI tiers are proven on this machine](device-and-ui-tiers-are-proven-on-this-machine.md) — Pixel 8a authorized, Accessibility granted; if adb sees nothing, swap the cable
 - [test:android exit code masks failures](test-android-exit-code-masks-failures.md) — the tier exits 0 even when tests fail; trust only the JUnit XML, never the exit code or the background-task notification
-- [C# backend check driver broken](csharp-backend-check-driver-broken.md) — boltffi 0.27.3 emits wrong return-marshalling on run_*_check; killed step 14; the draft finalizer makes §6 wrong for C#
+- [C# backend check driver broken](csharp-backend-check-driver-broken.md) — boltffi 0.27.3 emits wrong return-marshalling on run_*_check; killed step 14; v1.7 amended §4/§6/D26; step 15 (ready) bumps to 0.27.5, tripwire decides resume-or-file

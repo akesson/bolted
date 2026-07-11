@@ -28,8 +28,9 @@ work around them.
 | 12 | FFI hardening | 3 — Extraction | **done** — [report](steps/step-12-report.md); D23 fix (3-layer planted-red), leak-freedom pinned (D26), **D27** envelope + **C23**, l10n coverage (Swift's first), name-collision tripwire. Codec deletion **converted** (needs step 13's foreign emitter); 5 upstream drafts. No kill criteria hit |
 | 13 | Per-language contract tests from the C-IDs | 3 — Extraction | **done** — [report](steps/step-13-report.md); **D28** shipped: Kotlin stash codec + both contract suites are committed generated source, byte-drift-checked in `check` (no Gradle/Xcode/NDK/boltffi). 22 emitted C-IDs (C10 exempt), 33 tests/language, generic over a values-only fixture (KC3 held — even C08's rule is `RuleFlip` data). `StashCodec.kt` deleted; `delete_canonical` the one accessor gap. Genericity golden caught a live Swift leak; every drift/manifest/suite check watched red. `test:android` 80/80 · `test:apple` 75+20. No kill criteria hit |
 | 14 | C# port + generator | 3 — Extraction | **stopped on kill criterion 1** — [plan](steps/step-14-csharp-port.md) · [report](steps/step-14-report.md); M0 (toolchain seam + packed artifact loads/calls) and M1 (probe, 14 tests) **done**; the emitted suite + genericity/falsification **not built** because feature 4 (callbacks) is broken on the C# backend: `run_username_check` throws (a boltffi 0.27.3 codegen bug — wrong return-marshalling on a struct-returning P/Invoke). Findings banked: §6's C# "GC never frees" row is **wrong** (a finalizer reaches store-side close — D26 revisit met), H2 looks **dead** (use-after-dispose is typed). Needs a §6/D26 design pass + an upstream fix before resuming |
+| 15 | boltffi 0.27.5 bump: resume C#, or prove why not | 3 — Extraction | **ready** — [plan](steps/step-15-boltffi-bump.md) |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
-| 15+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
+| 16+ | Verification harness | 4 — Harness | unplanned |
 
 ## Phase 1 — Design validation spike
 
@@ -244,8 +245,31 @@ reference the generated code is diffed against.
   pinned/patched boltffi) plus a design decision on §6/D26 and on whether C# belongs on the ladder
   before the driver works.
 
-## Phase 4 — Verification harness & Ring 0 (unplanned sketch)
+- **Step 15 — the boltffi 0.27.5 bump: resume C#, or prove why not.** Authored two days after step
+  14 stopped, because upstream moved: boltffi shipped 0.27.4 (Jul 9) and 0.27.5 (Jul 10). Neither
+  release note names the C# marshalling bug, but 0.27.4's #622 fixed the same *class* of defect
+  (payload/envelope confusion in export signatures) and 0.27.5's #647 plausibly retires upstream
+  draft 05 — so the question "is the driver fixed?" is now empirical and cheap: the step-14 probe
+  was built as the tripwire. The step bumps all five pins, re-proves every tier from artifacts, lets
+  `TheCheckDriverIsBrokenOnThisBackend` decide the branch — resume step-14 M2/M3 (emitted C# suite,
+  genericity, falsification incl. the dotnet planted-red debt) if fixed, bank the bump if not — and
+  in both branches builds the **upstream issue kit**: all six drafted findings re-verified at 0.27.5,
+  each retired-with-evidence or packaged with a minimal repro skeleton for the owner to file.
+  **Nothing is posted without owner approval.** The planning pass also amended ARCHITECTURE to
+  **v1.7** (§4/§6 per-backend release table, D26's revisit condition met and answered) — the
+  step-14 findings, now law rather than banked evidence.
+
+## Phase 4 — Verification harness (unplanned sketch)
+
+*(The founding ROADMAP titled this phase "Verification harness & Ring 0", citing "VISION Rings 0–2" —
+a scheme from a pre-repo VISION draft that was never committed. The fossil is struck; VISION.md's
+in-scope list is the authority.)*
 
 `bolted-check` (binding drift, capability coverage, constraint semver snapshots, WASM size
 budget), `bolted new` scaffolding, `doctor`, the standard mise verb set — per VISION.md's
-in-scope list. Planned after Phase 3 ships evidence about what drifts in practice.
+in-scope list. Planned after Phase 3 ships evidence about what drifts in practice. Gated on the
+`Feature`-trait design session (step-09 report, headline 4): §1's Elm framing has no code behind it
+after six spikes, the `command` verb of §1's triad has never been implemented either, and the name
+`Feature` is meanwhile taken by `bolted_decl::Feature` — the declaration model. Either the trait is
+designed or §1 is rewritten to describe what shipped; that session happens before any Phase-4 step
+doc is authored.

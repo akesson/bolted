@@ -1,6 +1,6 @@
 ---
 name: csharp-backend-check-driver-broken
-description: BoltFFI 0.27.3 C# backend — run_*_check throws MarshalDirectiveException (wrong return-marshalling); killed step 14; the draft finalizer makes ARCHITECTURE §6 wrong for C#
+description: BoltFFI 0.27.3 C# backend — run_*_check throws MarshalDirectiveException (wrong return-marshalling); killed step 14; §6/D26 amended (v1.7); step 15 (ready) bumps to 0.27.5 and lets the probe tripwire decide resume-or-file
 metadata:
   type: project
 ---
@@ -23,7 +23,20 @@ why step 14's M2 (emitter) + M3 (genericity/falsification) were **not built**. M
 `pack:csharp`/`test:csharp`, packed artifact loads/calls) and M1 (probe, 14 tests) **are** done and
 green. Resuming needs an upstream fix or a pinned/patched boltffi.
 
-**Lifecycle findings banked for a §6/D26 design pass (ARCHITECTURE left untouched):**
+**Update (step-15 planning, 2026-07-11):** upstream shipped **0.27.4 (Jul 9) and 0.27.5 (Jul 10)**.
+No release note names this bug and nobody has filed it (tracker searched), but 0.27.4's #622 fixed
+the same class of defect (OptionScalar f64/FfiBuf signature confusion) and 0.27.5's #647
+(`Result<Class,E>` lowered as handle) plausibly retires step-12 upstream draft 05. **Step 15**
+(`docs/steps/step-15-boltffi-bump.md`, ready) bumps the five pins to 0.27.5 and lets the probe's
+tripwire test decide: red → driver fixed → resume M2/M3; green → still broken → bank the bump and
+finalize the upstream issue kit (all six drafts re-verified, repro skeletons, **owner files — never
+post from a session**). The §6/D26 findings below are now **law**: ARCHITECTURE v1.7 amended §4/§6
+(per-backend release table; "GC never frees" is Kotlin-only) and D26 (revisit condition met; leak
+test must assert baseline before any GC). Note: crates.io API requires a User-Agent header or it
+returns a policy error.
+
+**Lifecycle findings that drove the v1.7 amendment (banked in step 14, amended in step 15's planning
+pass):**
 - **§6 is WRONG for C#.** `ProfileDraftFfi` has a finalizer (`~ProfileDraftFfi() => Dispose()`), so a
   forgotten, undisposed draft is GC-reclaimed and its finalizer reaches the store-side close (live
   count falls; proven with a still-referenced control draft). This is **D26's recorded revisit
