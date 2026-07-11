@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The C# freeze-contract probe (step 14). A headless `dotnet test` project consuming the packed
+    gen_profile_ffi NuGet package. RuntimeIdentifier is set (osx-arm64, this Mac) so the native asset
+    in the package's runtimes/<rid>/native is copied next to the test assembly and P/Invoke resolves
+    it. Not part of `mise run check`: the .NET SDK belongs to the pack:csharp/test:csharp tasks only.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="4.2.2" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+    <PackageReference Include="gen_profile_ffi" Version="0.1.0" />
+  </ItemGroup>
+
+</Project>

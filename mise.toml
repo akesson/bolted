@@ -436,6 +436,64 @@ echo "note: this suite exercises undefined behaviour on purpose; a crash is a fi
 gradle dev34DebugAndroidTest -Pbolted.hazard "$@"
 """
 
+# --- Step 14: the C# port (BoltFFI's C# backend → .NET, headless `dotnet test` on macOS). Separate
+# verbs, deliberately NOT part of `check` (which stays Rust-only: no .NET SDK). The seam is
+# host-portable even though the WinUI face is not — the step-05 move, backend #3. dotnet is pinned
+# per-task (like the Android JDK/Gradle), never in [tools], so `check` never drags a ~225 MB SDK onto
+# a box that only builds Rust. See docs/steps/step-14-csharp-port.md. ---
+
+[tasks."pack:csharp"]
+description = "Build the host dylib + generate the C# bindings and NuGet package (release, gen-profile-ffi)."
+depends = ["setup:boltffi"]
+dir = "crates/gen-profile-ffi"
+tools = { dotnet = "10.0.301" }
+env = { DOTNET_CLI_TELEMETRY_OPTOUT = "1", DOTNET_NOLOGO = "1" }
+run = """
+set -eu
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+if ! command -v boltffi >/dev/null 2>&1; then
+  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
+  exit 1
+fi
+if ! command -v dotnet >/dev/null 2>&1; then
+  echo "error: dotnet SDK not found — 'mise install' provides it (pinned per-task as dotnet@10.0.301)." >&2
+  exit 1
+fi
+# `boltffi pack csharp` builds the host dylib; a fresh toolchain may lack even the host target.
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add aarch64-apple-darwin >/dev/null 2>&1 || true
+fi
+# Pack owns dist/csharp: boltffi stages the csproj + src + runtimes and runs `dotnet pack` to emit the
+# .nupkg (the native dylib rides in it under runtimes/osx-arm64/native, the NuGet convention the .NET
+# runtime graph resolves). A stale tree makes "multiple producers" errors, exactly like pack:apple.
+rm -rf dist/csharp
+boltffi pack csharp
+"""
+
+[tasks."test:csharp"]
+description = "Run the C# probe + emitted contract suite headless via `dotnet test` (packs first)."
+depends = ["pack:csharp"]
+dir = "csharp/profile-probe"
+tools = { dotnet = "10.0.301" }
+# `en` forces a locale-stable console (the SDK localises to the system language otherwise); the
+# authoritative pass/fail is the TRX the task writes, but a readable summary helps. Telemetry off.
+env = { DOTNET_CLI_TELEMETRY_OPTOUT = "1", DOTNET_NOLOGO = "1", DOTNET_CLI_UI_LANGUAGE = "en" }
+run = """
+set -eu
+if ! command -v dotnet >/dev/null 2>&1; then
+  echo "error: dotnet SDK not found — 'mise install' provides it (pinned per-task as dotnet@10.0.301)." >&2
+  exit 1
+fi
+# The packed package version is fixed at 0.1.0 across re-packs, so a stale copy in the global NuGet
+# cache would shadow a freshly-packed one. Evict just our package (NUnit/test-sdk stay cached) so
+# every run restores the current dylib + bindings from the local feed. This is ours to evict.
+rm -rf "${NUGET_PACKAGES:-$HOME/.nuget/packages}/gen_profile_ffi"
+# TRX is the source of truth for counts (the step-13 lesson: never trust a wrapper's exit code
+# blindly). Unlike `test:android`, `dotnet test` DOES propagate a nonzero exit on failure — proven
+# once by M3's planted-red — so `set -e` above is a real gate, and the TRX is the audit trail.
+dotnet test --logger "trx;LogFileName=profile-probe.trx" "$@"
+"""
+
 [tasks."run:apple"]
 description = "Run the SwiftUI profile spike app (a GUI window; for the manual protocol)."
 depends = ["pack:apple"]

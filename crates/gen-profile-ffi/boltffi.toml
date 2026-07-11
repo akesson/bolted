@@ -103,8 +103,12 @@ enabled = false
 
 [targets.python.wheel]
 
+# Step 14 (C# port). One RID only — osx-arm64, this Mac — for the same reason the Android target
+# builds one ABI: the tier is dotnet-on-macOS (the binding seam is host-portable; the WinUI face is
+# not). Namespace `GenProfileFfi`, `net10.0` and throwing errors are boltffi's defaults and match the
+# Swift module name; nothing to override.
 [targets.csharp]
 output = "dist/csharp"
-enabled = false
+enabled = true
 
 [targets.csharp.nuget]

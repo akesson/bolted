@@ -56,3 +56,9 @@ android/profile-app/local.properties
 android/gen-profile-smoke/build/
 android/gen-profile-smoke/.gradle/
 android/gen-profile-smoke/local.properties
+
+# Step 14 — C# probe build artifacts (dotnet). The packed .nupkg rides in gen-profile-ffi/dist/,
+# already ignored above; only the hand-written + committed-generated sources are tracked.
+csharp/profile-probe/bin/
+csharp/profile-probe/obj/
+csharp/profile-probe/TestResults/
