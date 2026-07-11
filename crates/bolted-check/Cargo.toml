@@ -1,0 +1,22 @@
+# `bolted-check` — the verification harness's analyzer (Phase 4). The THIRD emitter over the one
+# parser (D25): after `bolted-macros` (the feature) and `bolted-ffi-gen` (the FFI layer), this reads
+# a parsed `bolted_decl::Feature` and renders a human-readable constraint-surface snapshot. It depends
+# on `bolted-decl` (the declaration) and `bolted-core` (the `Constraint` vocabulary) ONLY — never
+# `boltffi`, never `bolted-ffi-gen`: analyzer and emitter are different seams over the same parse
+# (step-16 kill criterion 1).
+[package]
+name = "bolted-check"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bolted-decl = { path = "../bolted-decl" }
+bolted-core = { path = "../bolted-core" }
+# Rendering a value's raw type (`syn::Type`) back to text. No parsing happens here — the caller hands
+# in an already-parsed `Feature`; `quote` only stringifies the types it holds.
+quote = "1"
+
+[dev-dependencies]
+# The renderer's unit tests parse the sample feature sources the same way the real callers do.
+syn = { version = "2", features = ["full", "parsing"] }
