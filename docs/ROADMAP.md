@@ -27,7 +27,7 @@ work around them.
 | 11 | Migrate the shells onto the generated FFI | 3 — Extraction | **done** — [plan](steps/step-11-migrate-shells.md) · [report](steps/step-11-report.md); all four shells link `gen-profile-ffi`, `pack:*` repointed, spike kept as reference. D23 controls planted-and-watched on both platforms. Hardware "after": **0.0432 ms p50** per keystroke on the Pixel 8a (~23× under KC5); `test:apple:ui` 9/9 on generated |
 | 12 | FFI hardening | 3 — Extraction | **done** — [report](steps/step-12-report.md); D23 fix (3-layer planted-red), leak-freedom pinned (D26), **D27** envelope + **C23**, l10n coverage (Swift's first), name-collision tripwire. Codec deletion **converted** (needs step 13's foreign emitter); 5 upstream drafts. No kill criteria hit |
 | 13 | Per-language contract tests from the C-IDs | 3 — Extraction | **done** — [report](steps/step-13-report.md); **D28** shipped: Kotlin stash codec + both contract suites are committed generated source, byte-drift-checked in `check` (no Gradle/Xcode/NDK/boltffi). 22 emitted C-IDs (C10 exempt), 33 tests/language, generic over a values-only fixture (KC3 held — even C08's rule is `RuleFlip` data). `StashCodec.kt` deleted; `delete_canonical` the one accessor gap. Genericity golden caught a live Swift leak; every drift/manifest/suite check watched red. `test:android` 80/80 · `test:apple` 75+20. No kill criteria hit |
-| 14 | C# port + generator | 3 — Extraction | pending |
+| 14 | C# port + generator | 3 — Extraction | **ready** — [plan](steps/step-14-csharp-port.md) |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
 | 15+ | Verification harness & Ring 0 | 4 — Harness | unplanned |
 
@@ -222,8 +222,21 @@ reference the generated code is diffed against.
   Where the doc was wrong: three places, all the planner being *conservative* (exemptions
   over-predicted, Swift priced as a Kotlin mirror when only names mirror, the genericity golden priced
   as a formality that then found a bug).
-- **Step 14 — C# port + generator.** Hand-write the C# client first (IDisposable ergonomics — C18 is
-  not optional here, WinUI binding shape), then the generator template.
+- **Step 14 — C# port + generator.** *Detailed step doc exists.* BoltFFI's C# backend carries the
+  generated Rust surface to .NET; a hand-written probe re-runs the step-02/05 due-diligence on
+  backend #3, and `bolted-ffi-gen` emits the **third contract suite** — the packed-and-run
+  genericity proof step 13 deferred. The tier is headless `dotnet test` **on this Mac** (the seam is
+  host-portable; the WinUI face waits for Windows hardware — a non-goal, the step-07 KC4 precedent).
+  The planning pass already *ran* the backend: `generate csharp` emits all four load-bearing BoltFFI
+  features idiomatically (IDisposable handles, typed exceptions, `IAsyncEnumerable` streams, callback
+  interfaces), and `pack csharp` staged a complete `net10.0`/`osx-arm64` package failing only on the
+  missing dotnet SDK (M0's one bootstrap). **The headline risk is a finding, not a gap**: the C#
+  binding ships a *finalizer* on the draft handle — the exact mechanism D26 declined to build,
+  implemented inside bindgen where D26 said it would be safe — so ARCHITECTURE §6's "the GC never
+  frees the Rust draft" row is likely wrong for C#, and use-after-dispose appears to be a typed
+  `ObjectDisposedException` rather than step 05's silent UB. M1 verifies both at runtime (with a
+  GC-probe control); the report feeds a §6/D26 design pass. The sketch's old "WinUI binding shape"
+  clause is superseded: no ViewModel layer without a real WinUI host to judge it.
 
 ## Phase 4 — Verification harness & Ring 0 (unplanned sketch)
 
