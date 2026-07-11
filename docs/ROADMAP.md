@@ -28,7 +28,7 @@ work around them.
 | 12 | FFI hardening | 3 — Extraction | **done** — [report](steps/step-12-report.md); D23 fix (3-layer planted-red), leak-freedom pinned (D26), **D27** envelope + **C23**, l10n coverage (Swift's first), name-collision tripwire. Codec deletion **converted** (needs step 13's foreign emitter); 5 upstream drafts. No kill criteria hit |
 | 13 | Per-language contract tests from the C-IDs | 3 — Extraction | **done** — [report](steps/step-13-report.md); **D28** shipped: Kotlin stash codec + both contract suites are committed generated source, byte-drift-checked in `check` (no Gradle/Xcode/NDK/boltffi). 22 emitted C-IDs (C10 exempt), 33 tests/language, generic over a values-only fixture (KC3 held — even C08's rule is `RuleFlip` data). `StashCodec.kt` deleted; `delete_canonical` the one accessor gap. Genericity golden caught a live Swift leak; every drift/manifest/suite check watched red. `test:android` 80/80 · `test:apple` 75+20. No kill criteria hit |
 | 14 | C# port + generator | 3 — Extraction | **stopped on kill criterion 1** — [plan](steps/step-14-csharp-port.md) · [report](steps/step-14-report.md); M0 (toolchain seam + packed artifact loads/calls) and M1 (probe, 14 tests) **done**; the emitted suite + genericity/falsification **not built** because feature 4 (callbacks) is broken on the C# backend: `run_username_check` throws (a boltffi 0.27.3 codegen bug — wrong return-marshalling on a struct-returning P/Invoke). Findings banked: §6's C# "GC never frees" row is **wrong** (a finalizer reaches store-side close — D26 revisit met), H2 looks **dead** (use-after-dispose is typed). Needs a §6/D26 design pass + an upstream fix before resuming |
-| 15 | boltffi 0.27.5 bump: resume C#, or prove why not | 3 — Extraction | **ready** — [plan](steps/step-15-boltffi-bump.md) |
+| 15 | boltffi 0.27.5 bump: resume C#, or prove why not | 3 — Extraction | **done (branch B)** — [plan](steps/step-15-boltffi-bump.md) · [report](steps/step-15-report.md); five pins → 0.27.5, every runnable tier green (`test:apple:ui` env-blocked, not a regression). Tripwire still green → **C# driver still broken at 0.27.5** (byte-identical `MarshalAs(I1)`-on-`FfiBuf` bug), so the emitted C# suite (M2/M3) stayed unbuilt. Upstream kit (`upstream/boltffi/`) re-verified: **01 fixed** (pack-android workaround removed), **02/03/04/06 alive → to file**, **05 not reproducible → do-not-file**; nothing posted. Churn tiny (Swift/C# byte-identical, Kotlin +26 lines JNI diagnostics); 0.27.3 CLI now needs `--locked` |
 | — | The `Feature` trait | design session | **needed before Phase 4** — see step-09 report, headline 4 |
 | 16+ | Verification harness | 4 — Harness | unplanned |
 
@@ -249,15 +249,26 @@ reference the generated code is diffed against.
   14 stopped, because upstream moved: boltffi shipped 0.27.4 (Jul 9) and 0.27.5 (Jul 10). Neither
   release note names the C# marshalling bug, but 0.27.4's #622 fixed the same *class* of defect
   (payload/envelope confusion in export signatures) and 0.27.5's #647 plausibly retires upstream
-  draft 05 — so the question "is the driver fixed?" is now empirical and cheap: the step-14 probe
-  was built as the tripwire. The step bumps all five pins, re-proves every tier from artifacts, lets
-  `TheCheckDriverIsBrokenOnThisBackend` decide the branch — resume step-14 M2/M3 (emitted C# suite,
-  genericity, falsification incl. the dotnet planted-red debt) if fixed, bank the bump if not — and
-  in both branches builds the **upstream issue kit**: all six drafted findings re-verified at 0.27.5,
-  each retired-with-evidence or packaged with a minimal repro skeleton for the owner to file.
-  **Nothing is posted without owner approval.** The planning pass also amended ARCHITECTURE to
-  **v1.7** (§4/§6 per-backend release table, D26's revisit condition met and answered) — the
-  step-14 findings, now law rather than banked evidence.
+  draft 05 — so the question "is the driver fixed?" was empirical and cheap: the step-14 probe was
+  built as the tripwire. **Outcome (branch B):** all five pins moved to 0.27.5 and every runnable
+  tier stayed green (`test:apple:ui` env-blocked, not a regression); the tripwire
+  `TheCheckDriverIsBrokenOnThisBackend` **stayed green — the C# driver is still broken at 0.27.5**
+  (the `MarshalAs(I1)`-on-`FfiBuf` bug is byte-identical, confirmed in fresh generated source), so
+  the emitted C# suite / genericity / falsification (M2/M3) were **not** built. The **upstream issue
+  kit** (`upstream/boltffi/`) re-verified all six drafts: **01** (pack-android env) is **fixed** — the
+  workaround was removed after a clean `nm` red/green control and a green `test:android` without it;
+  **02, 03, 04, 06** are **alive → to file**; **05** (Result<Handle,E>) is **not reproducible** at
+  either 0.27.3 or 0.27.5 across four faithful controls → **do-not-file** (contradicting the step-12
+  report — a footnote for planning). **Nothing was posted; the owner files.** Generated-surface churn
+  was tiny (Swift/C# byte-identical; Kotlin +26 lines of additive `JNI_OnLoad` diagnostics), but
+  `cargo install boltffi_cli --version 0.27.3` no longer builds without `--locked` (its sibling
+  `boltffi_bindgen` floated to 0.27.5) — the recorded rollback fallback is compromised. The planning
+  pass had also amended ARCHITECTURE to **v1.7** (§4/§6 per-backend release table, D26's revisit
+  condition met and answered) — the step-14 findings, now law rather than banked evidence.
+
+  When the tripwire eventually goes **red** (upstream fixes draft 06), resuming step-14's M2/M3 — the
+  emitted C# contract suite, genericity, and the dotnet planted-red failure-mode proof — is the
+  natural **step 16** candidate, still gated on that red.
 
 ## Phase 4 — Verification harness (unplanned sketch)
 

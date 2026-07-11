@@ -1,7 +1,7 @@
 # Memory index
 
 - [Fable plans, Opus implements](fable-plans-opus-implements.md) — handoff via committed repo docs (CLAUDE.md, ROADMAP, step docs/reports)
-- [askama symlinked-CARGO_HOME bug](askama-symlink-cargo-home-bug.md) — upstream state, verified mechanism, one-line fix PR opportunity at askama config.rs:403
+- [askama symlinked-CARGO_HOME bug](askama-symlink-cargo-home-bug.md) — boltffi CLI install gotchas: the symlink build failure (fix at askama config.rs:403) + installing an OLD boltffi_cli needs `--locked` (siblings float)
 - [Verify the web shell in a real browser](bolted-verify-in-a-real-browser.md) — a green suite is not evidence about a UI; drive the running app
 - [ART GC probes need a control](art-gc-probes-need-a-control.md) — WeakReference.get() in a poll loop keeps the object alive; use a ReferenceQueue
 - [Echo rule: touched, not dirty](echo-rule-predicate-is-touched-not-dirty.md) — sanitization makes a field clean while the user is still typing in it
@@ -16,4 +16,4 @@
 - [A drift check makes a mutation pass vacuous](a-drift-check-makes-a-mutation-pass-vacuous.md) — regenerate first, prove the output changed, exclude the drift test
 - [Device and UI tiers are proven on this machine](device-and-ui-tiers-are-proven-on-this-machine.md) — Pixel 8a authorized, Accessibility granted; if adb sees nothing, swap the cable
 - [test:android exit code masks failures](test-android-exit-code-masks-failures.md) — the tier exits 0 even when tests fail; trust only the JUnit XML, never the exit code or the background-task notification
-- [C# backend check driver broken](csharp-backend-check-driver-broken.md) — boltffi 0.27.3 emits wrong return-marshalling on run_*_check; killed step 14; v1.7 amended §4/§6/D26; step 15 (ready) bumps to 0.27.5, tripwire decides resume-or-file
+- [C# backend check driver broken](csharp-backend-check-driver-broken.md) — MarshalAs(I1) on an FfiBuf return breaks run_*_check; killed step 14; STILL broken at 0.27.5 (step 15 branch B); v1.7 §4/§6/D26; upstream kit filed by owner only

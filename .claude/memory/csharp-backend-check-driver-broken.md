@@ -1,6 +1,6 @@
 ---
 name: csharp-backend-check-driver-broken
-description: BoltFFI 0.27.3 C# backend — run_*_check throws MarshalDirectiveException (wrong return-marshalling); killed step 14; §6/D26 amended (v1.7); step 15 (ready) bumps to 0.27.5 and lets the probe tripwire decide resume-or-file
+description: BoltFFI C# backend — run_*_check throws MarshalDirectiveException (MarshalAs(I1) on an FfiBuf return); killed step 14; STILL BROKEN at 0.27.5 (step 15, branch B); §6/D26 amended (v1.7); upstream kit filed by owner only
 metadata:
   type: project
 ---
@@ -23,17 +23,21 @@ why step 14's M2 (emitter) + M3 (genericity/falsification) were **not built**. M
 `pack:csharp`/`test:csharp`, packed artifact loads/calls) and M1 (probe, 14 tests) **are** done and
 green. Resuming needs an upstream fix or a pinned/patched boltffi.
 
-**Update (step-15 planning, 2026-07-11):** upstream shipped **0.27.4 (Jul 9) and 0.27.5 (Jul 10)**.
-No release note names this bug and nobody has filed it (tracker searched), but 0.27.4's #622 fixed
-the same class of defect (OptionScalar f64/FfiBuf signature confusion) and 0.27.5's #647
-(`Result<Class,E>` lowered as handle) plausibly retires step-12 upstream draft 05. **Step 15**
-(`docs/steps/step-15-boltffi-bump.md`, ready) bumps the five pins to 0.27.5 and lets the probe's
-tripwire test decide: red → driver fixed → resume M2/M3; green → still broken → bank the bump and
-finalize the upstream issue kit (all six drafts re-verified, repro skeletons, **owner files — never
-post from a session**). The §6/D26 findings below are now **law**: ARCHITECTURE v1.7 amended §4/§6
-(per-backend release table; "GC never frees" is Kotlin-only) and D26 (revisit condition met; leak
-test must assert baseline before any GC). Note: crates.io API requires a User-Agent header or it
-returns a policy error.
+**Update (step-15 DONE, branch B, 2026-07-11):** bumped all five pins 0.27.3 → **0.27.5**; every
+runnable tier green (`test:apple:ui` env-blocked, not a regression). The tripwire
+`TheCheckDriverIsBrokenOnThisBackend` **stayed green — the C# driver is STILL BROKEN at 0.27.5**:
+fresh `dist/csharp/src/GenProfileFfi.cs:883-885` still stamps `[return: MarshalAs(UnmanagedType.I1)]`
+on the `FfiBuf`-returning `run_username_check` P/Invoke (byte-identical to 0.27.3; contrast `Validate`
+line 887, same FfiBuf return, no attr). 0.27.4 #622 / 0.27.5 #647 did NOT touch it. So M2/M3 (the
+emitted C# suite) stayed unbuilt — resuming is a future **step 16**, gated on the tripwire going red.
+Upstream kit at `upstream/boltffi/` (6 drafts, **nothing posted — owner files**): 01 pack-android env
+**FIXED** (workaround removed after an nm red/green control), 02/03/04/06 **alive → to file**, 05
+`Result<Handle,E>` **NOT REPRODUCIBLE** at 0.27.3 or 0.27.5 (4 faithful controls all compile) →
+do-not-file. Churn tiny: Swift/C# bindings byte-identical, Kotlin only +26 lines JNI_OnLoad
+diagnostics. **Gotcha:** `cargo install boltffi_cli --version 0.27.3` no longer compiles (sibling
+`boltffi_bindgen` floats to 0.27.5, drops `render::kmp`) — needs `--locked`; `setup:boltffi` uses no
+`--locked`, so a plain 0.27.3 rollback would fail. The §6/D26 findings below are **law** (ARCHITECTURE
+v1.7). Note: crates.io API needs a User-Agent header or returns a policy error.
 
 **Lifecycle findings that drove the v1.7 amendment (banked in step 14, amended in step 15's planning
 pass):**

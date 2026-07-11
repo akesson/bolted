@@ -34,3 +34,12 @@ Upstream (askama-rs/askama), as of 2026-07-08:
 
 Once an askama release contains the fix and boltffi picks it up, `setup:boltffi`'s `cd -P`
 workaround becomes a harmless no-op and can be simplified.
+
+**Second gotcha (step 15, 2026-07-11): installing an OLD boltffi CLI needs `--locked`.**
+`boltffi_cli` depends on its siblings (`boltffi_bindgen`, …) under a compatible range, so a plain
+`cargo install boltffi_cli --version 0.27.3` floats them to the newest 0.27.x (0.27.5), which made a
+breaking change (`boltffi_bindgen::render::kmp` symbols removed) → 0.27.3's CLI fails to compile
+(E0432). `cargo install boltffi_cli --version 0.27.3 --locked` (the crate's shipped lockfile pins the
+siblings) builds fine. **Consequence:** `setup:boltffi` installs without `--locked`, so rolling `want`
+back to an older version would fail to compile — any recorded "roll back to 0.27.3" fallback needs
+`--locked` (or a pre-built binary). Relevant to every future bump/rollback. See [[csharp-backend-check-driver-broken]].
