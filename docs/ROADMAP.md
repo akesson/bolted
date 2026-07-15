@@ -31,7 +31,7 @@ work around them.
 | 15 | boltffi 0.27.5 bump: resume C#, or prove why not | 3 — Extraction | **done (branch B)** — [plan](steps/step-15-boltffi-bump.md) · [report](steps/step-15-report.md); five pins → 0.27.5, every runnable tier green (`test:apple:ui` env-blocked, not a regression). Tripwire still green → **C# driver still broken at 0.27.5** (byte-identical `MarshalAs(I1)`-on-`FfiBuf` bug), so the emitted C# suite (M2/M3) stayed unbuilt. Upstream kit (`upstream/boltffi/`) re-verified: **01 fixed** (pack-android workaround removed), **02/03/04/06 alive → to file**, **05 not reproducible → do-not-file**; nothing posted *(since filed upstream — status lives in `upstream/boltffi/README.md`)*. Churn tiny (Swift/C# byte-identical, Kotlin +26 lines JNI diagnostics); 0.27.3 CLI now needs `--locked` |
 | — | The `Feature` trait | design session | **done** — resolved as **D29** (ARCHITECTURE **v1.8**, step-16 planning pass): §1 rewritten to the store-owned shape that shipped, the unwritten trait struck, the never-built `command` verb demoted to §9. Phase 4's gate is discharged |
 | 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **done** — [plan](steps/step-16-bolted-check.md) · [report](steps/step-16-report.md); the third emitter over the one parser (D25). A committed, human-readable, byte-checked `.snap` per feature — a constraint *tightening* now fails the build at the exact line and names the `STASH_SCHEMA_VERSION` duty (D27), where every existing drift check was blind to it. Composites covered via a runtime section; renderer stays pure |
-| 17 | Web shell onto `gen-profile` + the wasm size budget | 4 — Harness | **ready** — [plan](steps/step-17-wasm-size-budget.md) |
+| 17 | Web shell onto `gen-profile` + the wasm size budget | 4 — Harness | **done** — [plan](steps/step-17-wasm-size-budget.md) · [report](steps/step-17-report.md); the last shell leaves the spike (`profile-web` on `gen-profile`, 35+8+2 tests green **unmodified** + a real-browser pass), and a wasm size budget guards the **macro path** via a new `check:web` verb (the `wasm-budget` bin behind a `budget` feature keeps brotli out of the host graph). Macro output weighs **+475 B raw (~0.15%)** over hand-written; every budget red watched then restored green. No kill criteria hit |
 | 18+ | Verification harness (cont.) | 4 — Harness | unplanned — capability coverage, `doctor`, `bolted new`; then the OS-integration spike |
 
 ## Phase 1 — Design validation spike
@@ -295,20 +295,26 @@ regenerated file). **Shipped:** the tightening `PersonName max 30→29` fails th
 line while every existing drift check stays green (the bound never reaches the FFI layer they guard) —
 see the [step-16 report](steps/step-16-report.md).
 
-**Step 17 — the web shell onto `gen-profile` + the wasm size budget.** *Detailed step doc exists —
-ready.* Two debts, one step, one new tier. `profile-web` is the last shell still consuming the
-hand-written `spike-profile` (step 11's charter was the FFI shells; the zero-FFI shell never moved),
-so §1's "Rust shells consume the contract directly" has never been proven against *generated* code —
-and a size budget guarding the frozen spike crate would be structurally blind to macro-output bloat,
-the one place web-target size risk actually lives. So: migrate first (priced at one dependency line
-and ~7 call sites — the two step-09 documented deltas; the existing 29 host + 8 wasm tests are the
-net), then budget the framework path. A `wasm-budget` bin in `bolted-check` (feature-gated so the
-host `check` graph stays clean), a committed `wasm-budget.txt`, and a new **`check:web`** verb —
-release build + raw-wasm/brotli-wire maxima set from the migrated baseline (+10 % headroom;
-re-baselining is a deliberate reviewed edit, never automatic — the D27 precedent). The tier is its
-own because step 04 decided it: `check` stays host-only, no trunk/wasm32 inside it. The report banks
-two one-time numbers: baseline drift since step-04 (311 610 B raw / 87 437 B brotli) and the
-spike-vs-gen delta — the first measurement of what macro output *weighs*.
+**Step 17 — the web shell onto `gen-profile` + the wasm size budget. Done**
+([report](steps/step-17-report.md)). Two debts, one step, one new tier. `profile-web` was the last
+shell still consuming the hand-written `spike-profile` (step 11's charter was the FFI shells; the
+zero-FFI shell never moved), so §1's "Rust shells consume the contract directly" had never been
+proven against *generated* code — and a size budget guarding the frozen spike crate would be
+structurally blind to macro-output bloat, the one place web-target size risk actually lives. So:
+migrated first (one dependency line + the two step-09 documented deltas — the availability tuple and
+`Checked`/`ProfileCheck` for the three spike conveniences; **35 host + 8 wasm + 2 l10n tests green
+unmodified**, plus a real-browser pass), then budgeted the framework path. The `wasm-budget` bin in
+`bolted-check` (behind a `budget` cargo feature so brotli stays out of the host `check` graph), a
+committed `wasm-budget.txt`, and a new **`check:web`** verb — release build + raw-wasm/brotli-wire
+maxima at the migrated baseline × 1.10 (re-baselining a deliberate reviewed edit, never automatic —
+D27). The tier is its own because step 04 decided it: `check` stays host-only, proven **indifferent**
+to the budget's state (M4). The two one-time numbers: **drift since step-04** is +15 438 B raw wasm
+(+4.95 %) on the pre-migration app (twelve steps of core evolution + toolchain float), and the
+**spike-vs-gen delta** is **+475 B raw (~0.15 %)** — the first measurement of what macro output
+*weighs* on the web target, and it is nearly nothing (the JS glue is byte-identical). Where the plan
+was wrong: it named two import sites, but `tests/controller.rs` also imported the concrete crate, so
+three files repointed (a crate-name swap, no behavioral edit); and it estimated "29" host tests where
+there are 35.
 
 The later analyses stay sketched, each authored when it becomes current: capability coverage,
 `doctor`, and `bolted new` scaffolding.
