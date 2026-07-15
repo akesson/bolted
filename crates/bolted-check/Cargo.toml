@@ -16,6 +16,22 @@ bolted-core = { path = "../bolted-core" }
 # Rendering a value's raw type (`syn::Type`) back to text. No parsing happens here — the caller hands
 # in an already-parsed `Feature`; `quote` only stringifies the types it holds.
 quote = "1"
+# Step 17: the wasm size budget's wire number. Pure-Rust brotli at quality 11. OPTIONAL and pulled
+# ONLY by the `budget` feature: `bolted-check` is a dev-dependency of the `-ffi` crates, so a plain
+# dependency would be compiled by every `cargo test --workspace`. The `wasm-budget` bin requires the
+# feature (below), so `mise run check` never builds it and `cargo tree -p bolted-check` stays clean.
+brotli = { version = "8", optional = true }
+
+[features]
+# Gates the `dist/` walk + brotli compression (crates/bolted-check/src/budget.rs). Off in `check`;
+# on only for the `wasm-budget` bin and `mise run check:web`.
+budget = ["dep:brotli"]
+
+# The size-budget CLI: `--print <dist>` measures, `check <dist> <budget-file>` enforces. Gated so
+# the compression dep never enters a build that did not ask for it.
+[[bin]]
+name = "wasm-budget"
+required-features = ["budget"]
 
 [dev-dependencies]
 # The renderer's unit tests parse the sample feature sources the same way the real callers do.

@@ -28,6 +28,8 @@
 //!   gap.
 #![forbid(unsafe_code)]
 
+pub mod budget;
+
 use bolted_core::Constraint;
 use bolted_decl::{ErrorVariant, Feature, ParamTy, Sanitizer, Validator};
 use std::collections::BTreeSet;
