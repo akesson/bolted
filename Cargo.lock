@@ -1421,9 +1421,9 @@ version = "0.0.0"
 dependencies = [
  "bolted-core",
  "console_error_panic_hook",
+ "gen-profile",
  "gloo-timers",
  "leptos",
- "spike-profile",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

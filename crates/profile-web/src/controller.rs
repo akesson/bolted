@@ -10,11 +10,12 @@
 
 use crate::l10n;
 use bolted_core::{
-    CheckState, CheckToken, Constraint, Draft, DraftId, DraftStatus, ErrorData, Field, SubmitError,
-    ValidationReport, Validity, Value,
+    CheckState, CheckToken, Checked, Constraint, Draft, DraftId, DraftStatus, ErrorData, Field,
+    SubmitError, ValidationReport, Validity, Value,
 };
-use spike_profile::{
-    Date, DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, ProfileStore, Username,
+use gen_profile::{
+    Date, DateRange, Email, PersonName, Profile, ProfileCheck, ProfileDraft, ProfileField,
+    ProfileStore, Username,
 };
 
 /// The demo profile the store is seeded with — same values as the Swift app (`ProfileApp.swift`),
@@ -226,7 +227,8 @@ impl ProfileController {
             return Some(l10n::message(&e));
         }
         if field == ProfileField::Username
-            && let CheckState::Done { verdict: Err(e) } = d.username_check_state()
+            && let CheckState::Done { verdict: Err(e) } =
+                d.check_state(ProfileCheck::UsernameUnique)
         {
             return Some(l10n::message(e));
         }
@@ -252,7 +254,7 @@ impl ProfileController {
     /// The async check's core-owned sub-state (cloned): drives the spinner and the C13 asserts.
     pub fn username_check(&self) -> CheckState<Result<(), ErrorData>> {
         match self.store.draft(self.draft_id) {
-            Some(d) => d.username_check_state().clone(),
+            Some(d) => d.check_state(ProfileCheck::UsernameUnique).clone(),
             None => CheckState::Idle,
         }
     }
@@ -355,7 +357,7 @@ impl ProfileController {
     fn try_set_dates(&mut self) {
         if let (Some(start), Some(end)) = (parse_date(&self.start_buf), parse_date(&self.end_buf)) {
             self.edit(|d| {
-                let _ = d.try_set_availability(start, end);
+                let _ = d.try_set_availability((start, end));
             });
         }
     }
@@ -377,7 +379,10 @@ impl ProfileController {
             }
             d.username.value()?.as_str().to_string()
         };
-        let token = self.store.draft_mut(self.draft_id)?.begin_username_check();
+        let token = self
+            .store
+            .draft_mut(self.draft_id)?
+            .begin_check(ProfileCheck::UsernameUnique);
         self.check_run_count += 1;
         Some((token, name))
     }
@@ -385,7 +390,7 @@ impl ProfileController {
     /// Deliver a verdict. A stale token (superseded, or reset by a value change — C10/C13) is
     /// discarded by the core; the return says whether the verdict landed.
     pub fn complete_check(&mut self, token: CheckToken, verdict: Result<(), ErrorData>) -> bool {
-        self.edit(|d| d.complete_username_check(token, verdict))
+        self.edit(|d| d.complete_check(ProfileCheck::UsernameUnique, token, verdict))
     }
 
     // ---- conflict resolution ------------------------------------------------------------------

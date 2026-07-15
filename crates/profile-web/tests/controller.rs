@@ -10,8 +10,12 @@ use bolted_core::{CheckState, Draft, DraftStatus, ErrorData, SyncState, Validity
 use profile_web::controller::{
     ProfileController, SubmitOutcome, is_required, max_len, simulated_lookup,
 };
-use spike_profile::ProfileDraft;
-use spike_profile::ProfileField::{Availability, Email, Name, Username};
+// Step 17: repointed spike-profile -> gen-profile with the crate migration. These two `use` lines
+// are the whole test-side change — every assertion and drive call below is byte-for-byte unchanged
+// (the planning pass named only src/controller.rs + src/app.rs as importers; this test also imports
+// the concrete types directly, so it moves too — a crate-name repoint, not a behavioral edit).
+use gen_profile::ProfileDraft;
+use gen_profile::ProfileField::{Availability, Email, Name, Username};
 
 fn controller() -> ProfileController {
     ProfileController::new().expect("the seed profile validates")

@@ -15,9 +15,9 @@ use crate::controller::{
     simulated_lookup,
 };
 use crate::l10n;
+use gen_profile::ProfileField;
 use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
-use spike_profile::ProfileField;
 
 /// Shell-taste timing constants (the *when*, ARCHITECTURE §2): how long a username edit settles
 /// before the uniqueness check fires, and the simulated "server" latency of that check. The wasm
