@@ -7,7 +7,8 @@
 //!
 //! **Deliberately empty for now.** The name and the contract's home are staked out; the
 //! contract itself is designed after spike steps 02–03 produce friction evidence. Design
-//! studies live in `docs/` next to this crate: `prior-art.md` (previous cross-platform
-//! HTTP attempts and where they fail) and `platform-surfaces.md` (the native API surfaces
-//! the adapters must map).
+//! docs live in `docs/` next to this crate: `architecture.md` (the settled shape: contract
+//! crate + Bolted-shipped shell-side adapters, and what step 02 must verify), `prior-art.md`
+//! (previous cross-platform HTTP attempts and where they fail), and `platform-surfaces.md`
+//! (the native API surfaces the adapters must map).
 #![forbid(unsafe_code)]
