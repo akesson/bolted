@@ -1,0 +1,17 @@
+# Standalone spike crate — deliberately OUTSIDE the bolted workspace (own [workspace]
+# below) so the shared Cargo.lock and `mise run check` are unaffected. This is the
+# step-02 "third cluster" probe: capability adapter packaging for bolted-http
+# (see crates/bolted-http/docs/architecture.md §4).
+[package]
+name = "spike_http_ffi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+boltffi = "0.27"
+
+[workspace]

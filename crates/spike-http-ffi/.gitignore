@@ -1,0 +1,9 @@
+# Everything boltffi/cargo/swiftpm (re)generates — `boltffi pack apple --release`
+# rebuilds all of it; only hand-written sources are committed.
+/target
+/consumer/.build
+/package/.build
+/package/Package.swift
+/package/SpikeHttpFfi.xcframework
+/package/SpikeHttpFfi.xcframework.zip
+/package/Sources/SpikeHttp/BoltFFI/
