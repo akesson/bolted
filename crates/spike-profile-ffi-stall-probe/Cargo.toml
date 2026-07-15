@@ -1,0 +1,18 @@
+# Standalone spike crate — deliberately OUTSIDE the bolted workspace (own [workspace] below)
+# so the shared Cargo.lock and `mise run check` are unaffected. Package name is underscored:
+# hyphenated crate names break BoltFFI symbol generation (packaging-spike friction F1).
+[package]
+name = "spike_profile_ffi"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+boltffi = "0.27"
+bolted-core = { path = "../bolted-core" }
+spike-profile = { path = "../spike-profile" }
+
+[workspace]

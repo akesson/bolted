@@ -1,5 +1,9 @@
 # bolted-http — architecture: one contract, shipped native adapters
 
+> "step 02" throughout refers to the `design/core-evolution` branch's probe plan (now
+> [`crates/spike-profile-ffi-stall-probe/docs/probe-plan.md`](../../spike-profile-ffi-stall-probe/docs/probe-plan.md)),
+> not main's independently-run `docs/steps/step-02-boltffi-probe.md`.
+
 **Status:** shape settled in a design session (2026-07-09); the §4 packaging cluster **ran
 the same day as a standalone spike and passed** — see
 [spike-packaging-report.md](spike-packaging-report.md) (one-package packaging confirmed,
