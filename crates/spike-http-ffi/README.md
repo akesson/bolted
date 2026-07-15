@@ -1,6 +1,8 @@
 # spike-http-ffi
 
-Standalone probe for the step-02 **third cluster** — capability adapter packaging
+Standalone probe for the **third cluster** of the `design/core-evolution` branch's
+step-02 plan (now [`crates/spike-profile-ffi-stall-probe/docs/probe-plan.md`](../spike-profile-ffi-stall-probe/docs/probe-plan.md);
+not main's step 02) — capability adapter packaging
 (`crates/bolted-http/docs/architecture.md` §4). Findings:
 [`crates/bolted-http/docs/spike-packaging-report.md`](../bolted-http/docs/spike-packaging-report.md).
 

@@ -1,0 +1,6 @@
+# Everything boltffi/cargo/swiftpm (re)generates — `boltffi pack apple --release`
+# rebuilds all of it. Unlike spike-http-ffi there is no hand-written Swift here,
+# so the whole package/ tree is generated output.
+/target
+/consumer/.build
+/package/

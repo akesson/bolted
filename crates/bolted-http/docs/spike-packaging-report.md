@@ -1,5 +1,9 @@
 # Spike report — capability adapter packaging (step-02 third cluster, run early)
 
+> "step-02" throughout refers to the `design/core-evolution` branch's probe plan (now
+> [`crates/spike-profile-ffi-stall-probe/docs/probe-plan.md`](../../spike-profile-ffi-stall-probe/docs/probe-plan.md)),
+> not main's independently-run `docs/steps/step-02-boltffi-probe.md`.
+
 **Date:** 2026-07-09 · **Where:** `crates/spike-http-ffi/` (standalone crate, outside the
 workspace) · **Toolchain:** boltffi 0.27.3 CLI / 0.27.4 crates, Rust 1.95, Swift 6.3.3,
 arm64 macOS host. All probes from [architecture.md §4](architecture.md) ran; **both step-02
