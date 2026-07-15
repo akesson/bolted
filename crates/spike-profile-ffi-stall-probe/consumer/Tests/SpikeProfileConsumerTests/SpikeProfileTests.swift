@@ -128,6 +128,9 @@ final class C1FeatureTests: XCTestCase {
         let facet = ProfileFacet()
         let draft = facet.checkout()
         try draft.trySetUsername(raw: "corp_bob")
+        // The evolved core (C16) demands a uniqueness verdict once username is dirty;
+        // satisfy it so the report isolates the corporate_email rule below.
+        XCTAssertTrue(draft.completeUsernameCheck(token: draft.beginUsernameCheck(), unique: true))
         try draft.trySetName(raw: "Bob")
         try draft.trySetEmail(raw: "bob@example.com") // violates corporate_email
         try draft.trySetAvailability(start: date(2026, 7, 1), end: date(2026, 7, 2))
@@ -207,6 +210,7 @@ final class C1FeatureTests: XCTestCase {
 
         let draft = facet.checkout()
         try draft.trySetUsername(raw: "corp_alice") // valid set, but rule now fails
+        XCTAssertTrue(draft.completeUsernameCheck(token: draft.beginUsernameCheck(), unique: true))
         do {
             try facet.submit(draft: draft)
             XCTFail("expected validation")

@@ -6,11 +6,19 @@
 > ([plan](../../../docs/steps/step-02-boltffi-probe.md) ·
 > [report](../../../docs/steps/step-02-report.md), `crates/spike-profile-ffi/`) which
 > confirmed all four features and did **not** observe the push-mode stall this run found.
-> The two reports describe **different generated stream machinery**: main saw an eager
-> background poll loop draining the ring in batches into an unbounded `AsyncStream`; this
-> run saw a single-shot wake handshake (`handlePoll` + `processing` CAS) that drops Ready
-> signals under concurrency. Whether that is a version, configuration, or probe-design
-> difference is unresolved and needs a design-session read before either verdict is trusted.
+>
+> **Contradiction resolved on re-run (2026-07-15, during the rebase).** The stall lived in
+> the stream template the **0.27.3 CLI** generated: a single-shot wake handshake
+> (`handlePoll` + `processing` CAS) that drops Ready signals under concurrency. The
+> **0.27.5 CLI** (what main pins) generates entirely different machinery — an eager
+> background poll loop draining the ring via `popBatch` (batchSize 16) into an unbounded
+> `AsyncStream`, exactly what main's report describes. Repacking THIS crate with 0.27.5 and
+> re-running the probes: `incremental cap=256: converged=true revivedAfterNewPush=true`,
+> `wake-and-read cap=1: finalRead=100 converged=true revived=true` — **the stall is gone;
+> the kill criterion below is moot at boltffi ≥ 0.27.5.** §1 remains accurate for the
+> 0.27.3-generated code and as the record of why push delivery was distrusted. All 15
+> consumer tests pass after the re-run (two updated for the evolved core's C16
+> username-check gate).
 > Moved here on rebase so the parallel runs stay clearly separated; step references below
 > are to the `design/core-evolution` roadmap of 2026-07-09, not main's current one.
 
