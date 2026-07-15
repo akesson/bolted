@@ -24,3 +24,15 @@ Kill criteria and §9 questions are decided by observed behaviour.
 a browser; use `MutationObserver` (not `setTimeout` polling, which Chrome clamps to ~4 ms) for
 latency numbers. Record what you saw in `docs/steps/step-XX-report.md`. See
 [[fable-plans-opus-implements]].
+
+**Catching transient UI states through the MCP tools (step 17).** The browser-automation tools
+have multi-second round-trips — *longer* than the app's own debounce+latency (profile-web: 400 ms
+debounce + 1000 ms simulated check = 1.4 s). So a naive "type in one call, read in the next" always
+misses a transient state like the `Pending` "checking…" spinner: it appears and vanishes between the
+two calls. Catch it by dispatching the event and polling the DOM inside **one** `browser_evaluate`:
+`el.value = …; el.dispatchEvent(new Event('input', {bubbles:true}))` drives Leptos's `on:input`
+exactly like typing, then a `for` loop with `await new Promise(r=>setTimeout(r,30))` samples the DOM
+and records the Idle→Pending→Done transitions with timestamps. Also: `serve:web` uses port 8080,
+which a sibling `dx` (Dioxus) dev server may already hold — `trunk serve` then logs a *successful
+build* but fails to bind, and the HTTP 200 you get is the *other* server; grep the served index for
+your own wasm hash before trusting it, and serve on a free port.
