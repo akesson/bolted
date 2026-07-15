@@ -1,7 +1,10 @@
 # bolted-http — architecture: one contract, shipped native adapters
 
-**Status:** shape settled in a design session (2026-07-09); **pending verification by the
-step-02 packaging cluster** before any contract freeze. Evidence base:
+**Status:** shape settled in a design session (2026-07-09); the §4 packaging cluster **ran
+the same day as a standalone spike and passed** — see
+[spike-packaging-report.md](spike-packaging-report.md) (one-package packaging confirmed,
+round-trip + error taxonomy verified, overhead measured at nanoseconds). The contract
+sketch in §2 remains unfrozen pending the rest of step 02 (streaming, §5). Evidence base:
 [prior-art.md](prior-art.md) (why every alternative shape fails) and
 [platform-surfaces.md](platform-surfaces.md) (what each native stack can honor).
 
