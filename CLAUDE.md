@@ -2,8 +2,10 @@
 
 Bolted is a compile-time-verified application framework around BoltFFI (boltffi.dev): one Rust
 core, native shells (SwiftUI / Compose / WinUI / Linux), plus a Rust-web target (Leptos/Dioxus,
-browser only, zero FFI). Currently **pre-implementation**: design done, validation spike
-starting.
+browser only, zero FFI). Phases 1–3 are **done** (validation spike → design freeze → framework
+extraction; ARCHITECTURE frozen, currently v1.8); Phase 4 — the verification harness — is in
+progress. The C# leg waits on an upstream boltffi fix; status lives in
+`upstream/boltffi/README.md`.
 
 ## Read order (do this before any work)
 
