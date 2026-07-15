@@ -13,8 +13,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
  *
  * `viewModel()` scopes the VM to this Activity's `ViewModelStore`, which **survives a configuration
  * change** and is cleared on a real finish. Since step 05 that is a correctness requirement, not an
- * ergonomic one: on ART the GC never runs a Rust `Drop`, so `onCleared()` is the only place the
- * draft's `close()` can be called (C18).
+ * ergonomic one: on ART the GC never runs a Rust `Drop`, so the closeable the VM registers with
+ * `addCloseable` at checkout is the only thing that ever `close()`s the draft (C18).
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

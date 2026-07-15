@@ -52,9 +52,11 @@ import kotlinx.coroutines.withContext
  *
  * Three things this shell has that the other two do not, and which step 07 exists to exercise:
  *
- *  1. **`onCleared()` closes the draft.** On ART the GC *never* runs a Rust `Drop` (step 05, H1), so
- *     an abandoned draft is an unreachable zombie the store rebases forever. `close()` is the only
- *     free path (C18). Apple's ARC does it for you; Kotlin does not.
+ *  1. **The close is registered at acquisition.** On ART the GC *never* runs a Rust `Drop` (step 05,
+ *     H1), so an abandoned draft is an unreachable zombie the store rebases forever; `close()` is the
+ *     only free path (C18). Apple's ARC does it for you; Kotlin does not — so `init` hands the
+ *     teardown to [addCloseable] the moment the session exists, instead of trusting a hand-written
+ *     `onCleared()` override to remember it at the other end of the lifecycle.
  *  2. **The draft outlives the Activity.** A rotation destroys the Activity and keeps the
  *     `ViewModelStore`, so the edit session — and the core-side handle — simply survive.
  *  3. **The draft does *not* outlive the process.** Everything above dies when Android kills us, so
@@ -155,6 +157,23 @@ class ProfileViewModel(
         draft = if (accepted != null) store.restore(accepted) else store.checkout()
         draft.setUsernameChecker(makeChecker())
 
+        // The teardown, registered AT the acquisition — not remembered in an `onCleared()` override
+        // at the other end of the lifecycle. On ART this closeable is the ONLY thing that frees the
+        // Rust draft (C18, step-05 H1). `ViewModel.clear()` cancels `viewModelScope` first (key-tagged
+        // closeables close before plain ones), so no collector can touch a closed handle — which
+        // matters, because use-after-close is silent UB today (§9, step 10 must make it a typed error).
+        addCloseable(
+            AutoCloseable {
+                draft.close()
+                // Read between the two closes, because there is no safe moment afterwards: querying
+                // a closed store is itself use-after-close. C18 says this must be 0 — the assertion
+                // has nowhere else to live, and a `bolted-ffi` that raised `DraftClosed` would let
+                // it live outside the VM.
+                liveDraftsAfterClose = store.liveDraftCount().toInt()
+                store.close()
+            }
+        )
+
         // The OS asks for this lazily, exactly when it is about to kill us — so the stash is built
         // once, at save time, not on every keystroke.
         savedState.setSavedStateProvider(STASH_KEY) {
@@ -173,21 +192,7 @@ class ProfileViewModel(
         }
     }
 
-    /**
-     * On ART this is the ONLY thing that frees the Rust draft (C18, step-05 H1). `viewModelScope` is
-     * cancelled before this runs, so no collector can touch a closed handle — which matters, because
-     * use-after-close is silent UB today (§9, step 10 must make it a typed error).
-     */
-    override fun onCleared() {
-        draft.close()
-        // Read between the two closes, because there is no safe moment afterwards: querying a closed
-        // store is itself use-after-close. C18 says this must be 0 — the assertion has nowhere else
-        // to live, and a `bolted-ffi` that raised `DraftClosed` would let it live outside the VM.
-        liveDraftsAfterClose = store.liveDraftCount().toInt()
-        store.close()
-    }
-
-    /** C18's observable: live drafts remaining after `onCleared()` closed ours. Must be 0. */
+    /** C18's observable: live drafts remaining after the registered closeable closed ours. Must be 0. */
     @Volatile var liveDraftsAfterClose: Int? = null
         private set
 
@@ -423,6 +428,11 @@ class ProfileViewModel(
     }
 
     private fun recheckout() {
+        // The tombstone is not free: until its release shim runs, the Rust handle keeps its producer
+        // registration and its checker Box (which pins the Kotlin checker in the bindings' strong
+        // map) — and on ART only `close()` runs it. Swapping without closing leaked one handle per
+        // successful submit.
+        draft.close()
         draft = store.checkout()
         draft.setUsernameChecker(makeChecker())
         focused = null

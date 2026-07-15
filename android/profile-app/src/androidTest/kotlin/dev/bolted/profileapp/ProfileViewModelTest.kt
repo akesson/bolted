@@ -265,14 +265,16 @@ class ProfileViewModelTest {
     /**
      * C18 on a real lifecycle, and **D26 leak-freedom, the Kotlin half.** On ART the GC never runs a
      * Rust `Drop`, so a `ViewModel` that forgets `close()` leaks a draft the store rebases forever
-     * (step-05 H1). `onCleared()` is the only place it can happen — which is *why* the step-12 design
-     * pass (D26) declined a `Cleaner` backstop and made this test the enforcement instead: a Cleaner
-     * would free the draft at some later GC and let a forgotten `close()` pass every test that does
-     * not provoke one. Here, tearing down the ViewModel must return the count to its baseline (0 for
-     * the VM's private, single-draft store) inside `onCleared()`, the one deterministic moment.
+     * (step-05 H1). The VM registers its teardown with `addCloseable` at the checkout itself, so the
+     * close is part of acquiring the session rather than a call remembered at the other end of the
+     * lifecycle — and *this test* stays the enforcement, which is *why* the step-12 design pass (D26)
+     * declined a `Cleaner` backstop: a Cleaner would free the draft at some later GC and let a
+     * forgotten close pass every test that does not provoke one. Tearing down the ViewModel must
+     * return the count to its baseline (0 for the VM's private, single-draft store) inside `clear()`,
+     * the one deterministic moment.
      */
     @Test
-    fun onClearedClosesTheDraft() {
+    fun clearingTheViewModelClosesTheDraft() {
         val host = VmHost()
         val vm = host.create()
         onMain { vm.editName("My Name") }
@@ -280,7 +282,7 @@ class ProfileViewModelTest {
 
         host.clear() // what a finishing Activity does
 
-        assertNotNull("onCleared() must have run", vm.liveDraftsAfterClose)
+        assertNotNull("the closeable registered at checkout must have run", vm.liveDraftsAfterClose)
         assertEquals("teardown must return to baseline (C18/D26)", 0, vm.liveDraftsAfterClose)
         record("c18.live_drafts_after_close", vm.liveDraftsAfterClose.toString())
     }

@@ -18,10 +18,11 @@ fun record(label: String, value: String) {
 }
 
 /**
- * A `ViewModel` is owned by a `ViewModelStore`, and `onCleared()` is `protected` — so the only honest
- * way for a test to end a ViewModel's life is to clear its store, exactly as a finishing Activity
- * does. That matters here more than usual: `onCleared()` is where the Rust draft is `close()`d, and
- * on ART that is the only path that ever frees it (C18).
+ * A `ViewModel` is owned by a `ViewModelStore`, and its teardown hooks are `protected` — so the only
+ * honest way for a test to end a ViewModel's life is to clear its store, exactly as a finishing
+ * Activity does. That matters here more than usual: clearing runs the closeable the VM registered
+ * with `addCloseable` at checkout, and on ART that is the only path that ever frees the Rust draft
+ * (C18).
  */
 class VmHost(
     private val timing: ProfileViewModel.Timing = ProfileViewModel.Timing(debounceMs = 10, checkLatencyMs = 0),
@@ -38,7 +39,7 @@ class VmHost(
         ViewModelProvider(store, factory)[ProfileViewModel::class.java]
     }
 
-    /** What a finishing Activity does. Triggers `onCleared()`. */
+    /** What a finishing Activity does. Runs the VM's registered closeables, then `onCleared()`. */
     fun clear() = onMain { store.clear() }
 }
 

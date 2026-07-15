@@ -296,3 +296,23 @@ see the [step-16 report](steps/step-16-report.md). The later analyses stay sketc
 when it becomes current: the WASM size budget against step-04's 304 KiB baseline (**its own tier** — it
 needs `trunk`/wasm32 and cannot live inside host-only `mise run check`), capability coverage,
 `doctor`, and `bolted new` scaffolding.
+
+**Sketched lint candidate — counter unit drift.** `LenChars` is defined in Unicode scalar values
+(`chars().count()` in the macro expansion), but the shells' char counters count differently: Kotlin
+`value.length` is UTF-16 code units, Swift `text.count` is grapheme clusters, only Leptos matches the
+core. ASCII hides it; an emoji makes the counter disagree with the verdict (`"🇸🇪"` = 2 core / 4
+Kotlin / 1 Swift). "What is a character" is a constraint semantic that leaked back into the shells
+even though the numeric bound didn't. Fix direction: document scalar-values as part of the
+`Constraint` contract and lint shell counters for `.length`/`.count` on a constrained field
+(Kotlin wants `codePointCount`-style counting, Swift `unicodeScalars.count`).
+
+**Sketched lint candidate — Kotlin draft-handle ownership.** On ART the GC never runs a Rust `Drop`
+(step-05 H1), so a draft handle nobody `close()`s is a zombie the store rebases forever — and it pins
+the whole `FfiState` graph plus the shell's checker object (often a captured Context: an Activity
+leak, not just Rust bytes). D26 keeps close deterministic (no `Cleaner` backstop), which makes this an
+invariant the host language cannot express — exactly the lint family above. Rule: every
+`checkout()`/`restore()` result must flow into `use {}`, `ViewModel.addCloseable(...)`, or a field a
+reachable teardown closes; a handle *reassignment* must close the previous handle (the profile VM's
+`recheckout()` leaked one FFI handle per successful submit until the addCloseable pass fixed it —
+proof the miss is easy even in the reference shell). The adopted idiom, applied to the profile VM:
+register the teardown with `addCloseable` at the checkout itself, never in an `onCleared()` override.
