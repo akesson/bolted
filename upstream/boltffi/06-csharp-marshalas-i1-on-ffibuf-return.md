@@ -3,6 +3,14 @@
 **Reported against:** boltffi 0.27.3, **still present at 0.27.5** · **Severity:** high (a whole feature
 — callbacks — is unusable on the C# backend) · **Disposition at 0.27.5: ALIVE (reproduces).**
 
+> **Upstream status (2026-07-15):** filed as fix PR
+> [boltffi/boltffi#662](https://github.com/boltffi/boltffi/pull/662), **closed without merge —
+> resolved**. The C# backend is being rewritten on the IR pipeline (#654), which derives
+> `return_marshal_i1` alongside the native return type and does not have the bug (verified by
+> generating our demo through #654 and calling it from .NET). Maintainer (mhedgpeth) confirmed it
+> works on #654 and pulled our demo tests in there; the fix ships when #654 merges. Our tripwire
+> (`mise run test:csharp`) tells us when a release actually clears it.
+
 ## Summary
 
 For an `#[export]` method returning `Result<bool, E>` (error_style = throwing), the C# backend emits a

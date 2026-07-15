@@ -3,6 +3,11 @@
 **Reported against:** boltffi 0.27.3 · **Severity:** medium (ergonomics; forces a hand-written codec
 per DTO) · **Disposition at 0.27.5: ALIVE.**
 
+> **Upstream status (2026-07-15):** filed as
+> [boltffi/boltffi#666](https://github.com/boltffi/boltffi/issues/666) (open, no maintainer
+> response yet). The as-filed text — reworked from this draft into an opt-in-visibility proposal,
+> re-verified against the IR-backend templates on `main` — is `04-issue.md` in this directory.
+
 ## Summary
 
 Every emitted DTO already carries a complete binary wire ser/de — Kotlin `wireSize()` / `writeTo()` /

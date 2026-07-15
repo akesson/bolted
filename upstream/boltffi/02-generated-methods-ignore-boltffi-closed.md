@@ -3,6 +3,13 @@
 **Reported against:** boltffi 0.27.3 · **Severity:** high (memory-safety hole) · **Disposition at
 0.27.5: ALIVE.**
 
+> **Upstream status (2026-07-15):** fixed on `main` by our PR
+> [boltffi/boltffi#663](https://github.com/boltffi/boltffi/pull/663) ("Guard JVM handle reads
+> against use-after-close"), **merged 2026-07-14** — not yet in a release (latest is 0.27.5).
+> The residual *concurrent* use-after-close race (close() racing an in-flight call) is filed as
+> [#664](https://github.com/boltffi/boltffi/issues/664) (open), with a prior-art comment on the
+> atomic in-flight-counter design.
+
 ## Summary
 
 A generated handle class (Kotlin `AutoCloseable`) holds a `__boltffi_closed` flag set by `close()`,

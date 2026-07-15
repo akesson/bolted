@@ -3,6 +3,12 @@
 **Reported against:** boltffi 0.27.3 · **Severity:** medium (silent — the worst failure mode) ·
 **Disposition at 0.27.5: ALIVE.**
 
+> **Upstream status (2026-07-15):** not filed standalone. Folded into RFC
+> [boltffi/boltffi#665](https://github.com/boltffi/boltffi/issues/665) (per-invocation metadata
+> capture), which attacks the root cause — the whole-crate source re-scan — and lists this
+> symptom in its bug-family table as "(unfiled, repro to follow)". **TODO: file the standalone
+> repro issue** (this repo's `probe.sh` is the repro) and link it back to #665.
+
 ## Summary
 
 BoltFFI discovers its FFI surface by reading **source files off disk** and parsing them with `syn`

@@ -1,27 +1,33 @@
-# BoltFFI upstream issue kit — re-verified at 0.27.5
-
-**These are DRAFTS for the owner to file. Nothing here has been posted, filed, or sent anywhere —
-no `gh issue create`, no pull request, no comment, no API write. Filing is the owner's action,
-after review.** (Step 15, deliverable 5; the owner's explicit gate.)
+# BoltFFI upstream issue kit — filed upstream (status as of 2026-07-15)
 
 Step 12 drafted five findings against boltffi 0.27.3; step 14 added a sixth (the C# check-driver
-marshalling bug). BoltFFI then shipped 0.27.4 (2026-07-09) and 0.27.5 (2026-07-10). Step 15 bumped
-the pin to 0.27.5 and **re-verified every draft against it**. Each draft below carries a
-`## Re-verification at 0.27.5` section with the disposition and the evidence.
+marshalling bug). Step 15 bumped the pin to 0.27.5 and re-verified every draft against it (each
+draft carries a `## Re-verification at 0.27.5` section with the evidence). **The owner has since
+filed the surviving findings on boltffi/boltffi** — as fix PRs where we had the fix, as issues
+where the design is upstream's call. This README now tracks upstream status.
 
-## Dispositions
+## Upstream status
 
-| # | Title | at 0.27.3 | **at 0.27.5** | Repro / evidence |
-|---|-------|-----------|---------------|------------------|
-| 01 | `pack android` omits binding-expansion env → undefined JNI symbols | broken | **RETIRED — fixed** | `nm` red/green control; `test:android` green with no workaround |
-| 02 | Generated methods ignore `__boltffi_closed` → Kotlin use-after-close UB | UB | **ALIVE** | `test:android:hazard` logcat: `id()` after close returns stale/aliased silently |
-| 03 | bindgen silently ignores macro-generated FFI items | silent drop, exit 0 | **ALIVE** | `step-10-boltffi-visibility/probe.sh` — table unchanged |
-| 04 | DTO wire ser/de is `internal` — unreachable from a shell | internal | **ALIVE** | every generated DTO codec still `internal` |
-| 05 | A throwing method cannot return a class handle | reported broken | **NOT REPRODUCIBLE — do not file** | 4 faithful controls all compile at 0.27.3 **and** 0.27.5 |
-| 06 | C# `[MarshalAs(I1)]` on an `FfiBuf` return → `run_*_check` throws | broken | **ALIVE (reproduces at 0.27.5)** | tripwire green; fresh generated source |
+| # | Title | at 0.27.5 | Upstream | Status (2026-07-15) |
+|---|-------|-----------|----------|---------------------|
+| 01 | `pack android` omits binding-expansion env → undefined JNI symbols | RETIRED — fixed | not filed | closed here with evidence (`nm` red/green; `test:android` green) |
+| 02 | Generated methods ignore `__boltffi_closed` → Kotlin use-after-close UB | ALIVE | PR [#663](https://github.com/boltffi/boltffi/pull/663) + issue [#664](https://github.com/boltffi/boltffi/issues/664) | **#663 MERGED** 2026-07-14 (guards JVM handle reads; on `main`, not yet in a release — latest is 0.27.5). Residual concurrent close-race filed as #664 (open; prior-art comment added) |
+| 03 | bindgen silently ignores macro-generated FFI items | ALIVE | RFC [#665](https://github.com/boltffi/boltffi/issues/665) | folded into the RFC's source-re-scan bug family (listed there as "unfiled, repro to follow"); **standalone repro issue still to file** |
+| 04 | DTO wire ser/de is `internal` — unreachable from a shell | ALIVE | issue [#666](https://github.com/boltffi/boltffi/issues/666) | open, no maintainer response yet. As-filed text: `04-issue.md` |
+| 05 | A throwing method cannot return a class handle | NOT REPRODUCIBLE | not filed | correctly withheld — 4 faithful controls compile at 0.27.3 and 0.27.5 |
+| 06 | C# `[MarshalAs(I1)]` on an `FfiBuf` return → `run_*_check` throws | ALIVE | PR [#662](https://github.com/boltffi/boltffi/pull/662) | **closed without merge, resolved**: the new IR backend (#654) derives `return_marshal_i1` correctly, so the bug dies with the old backend; maintainer confirmed on #654 and pulled in our demo tests. Fix lands when #654 merges |
 
-**To file (owner's call): 02, 03, 04, 06.** Retired with evidence: **01**. Do **not** file: **05**
-(cannot be reproduced at the version it was reported against — filing it would waste maintainer time).
+Also filed, beyond the drafts:
+
+- PR [#657](https://github.com/boltffi/boltffi/pull/657) — emit `fun interface` for single-method
+  Kotlin callbacks. Open, **approved** (engali94), awaiting merge.
+- RFC [#665](https://github.com/boltffi/boltffi/issues/665) — per-invocation metadata capture,
+  retiring the source re-scan inside the metadata build. Open; this is the root-cause umbrella
+  over draft 03 and the cfg-eval family (#630/#618).
+
+**Watch list:** #654 merging (unblocks 06 for real), next release after 0.27.5 (picks up #663),
+maintainer response on #664/#665/#666, merge of #657. Remaining TODO on our side: the standalone
+macro-items repro issue promised in #665 for draft 03.
 
 ## What the bump itself proved (context for filing)
 
