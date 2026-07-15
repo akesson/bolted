@@ -1,0 +1,11 @@
+[package]
+name = "bolted-http"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Sans-io contract crate: capability traits + typed request/response/error data only.
+# No reqwest, no tokio, no TLS stack — executors live in the platform adapters.
+[dependencies]
+
+[dev-dependencies]

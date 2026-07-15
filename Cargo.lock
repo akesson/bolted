@@ -177,6 +177,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolted-http"
+version = "0.0.0"
+
+[[package]]
 name = "bolted-macros"
 version = "0.0.0"
 dependencies = [

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/bolted-core",
     "crates/bolted-decl",
+    "crates/bolted-http",
     "crates/bolted-macros",
     "crates/bolted-check",
     "crates/bolted-conformance",
