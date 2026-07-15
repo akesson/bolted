@@ -258,6 +258,30 @@ fi
 wasm-pack test --headless --chrome --test web
 """
 
+# Step 17: the wasm size budget. A release build + a byte-budget assertion, in its OWN verb because
+# `mise run check` is host-only (no trunk, no wasm32 — step 04's tier boundary). The `budget` feature
+# pulls the brotli compression dep, scoped to THIS verb — it never enters the `check` graph.
+# Re-baselining `wasm-budget.txt` is a deliberate human edit; this verb only enforces it.
+[tasks."check:web"]
+description = "Release-build the web app and assert it against the committed wasm size budget."
+dir = "crates/profile-web"
+run = """
+set -eu
+if ! command -v trunk >/dev/null 2>&1; then
+  echo "error: trunk not found — run 'mise install' (pinned as github:trunk-rs/trunk)." >&2
+  exit 1
+fi
+# A fresh toolchain has only the host target; self-heal like build:web does.
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
+fi
+trunk build --release
+# --manifest-path names bolted-check unambiguously, so `--features budget` applies to it (not to the
+# profile-web dir we run from); the bin's cwd is this dir, so `dist` and `wasm-budget.txt` resolve here.
+cargo run --release --quiet --manifest-path ../bolted-check/Cargo.toml --features budget \\
+  --bin wasm-budget -- check dist wasm-budget.txt
+"""
+
 # --- Step 05: Android headless probe (JNI + ART). Separate verbs, deliberately NOT part of `check`
 # (which stays Rust-only: no JDK, no Android SDK, no emulator). See docs/steps/step-05-android-probe.md. ---
 

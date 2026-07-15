@@ -1,0 +1,35 @@
+# wasm size budget — crates/profile-web (the Rust-web shell, on gen-profile since step 17)
+#
+# Guards the release web build's size against silent bloat — in particular macro-output bloat,
+# the one place web-target size risk lives (step 09 caught emitted code doing per-keystroke work
+# no test saw; size is another axis tests are blind on). Enforced by `mise run check:web`
+# (trunk build --release + `wasm-budget check`), NOT by `mise run check`, which stays host-only
+# (no trunk, no wasm32 — step 04's tier boundary). The analyzer is the `wasm-budget` bin in
+# bolted-check, behind its `budget` cargo feature so the compression dep never enters the host graph.
+#
+# POLICY. Maxima = the measured post-migration baseline x 1.10, rounded UP to a whole KiB. The floor
+# is half the baseline raw wasm, rounded DOWN — a stub-catcher, so an empty or truncated artifact can
+# never read as "comfortably under the maximum". Re-baselining is a DELIBERATE, reviewed human edit of
+# this file, never automatic (the D27 precedent: a budget you silence by reflex guards nothing, and a
+# version auto-derived from the build was D27's own rejected alternative).
+#
+#   - A maximum breached: review what grew. If the growth is intended, raise the number HERE, in the
+#     same change — deliberately. Otherwise, find what bloated.
+#   - The floor breached: the build is broken (empty/stub wasm). Fix the build — do NOT lower the floor.
+#
+# BASELINE (step 17, milestone M3), measured by `wasm-budget --print`:
+#   date:      2026-07-15
+#   toolchain: leptos 0.8.20, wasm-bindgen 0.2.126, wasm-bindgen-futures 0.4.76,
+#              trunk 0.21.14, rust 1.95.0; brotli = `brotli` crate q11, window 22
+#   wasm  raw 327523   brotli 92353
+#   glue  raw 30326    brotli 5350
+#   wire  raw 357849   brotli 97703   <- wire brotli is the number wire_brotli_max_bytes guards
+#
+# Brotli note: the pure-Rust `brotli` crate at q11/window22 measures ~0.1% under the C `brotli -q11`
+# CLI step 04 used (here wasm 92353; the CLI would report ~111 B more; glue is byte-identical). This
+# is internally consistent — the same bin measures every rebuild — so the tripwire is stable; only a
+# comparison to step-04's CLI numbers carries the ~0.1% method delta.
+
+wasm_raw_max_bytes    = 360448
+wire_brotli_max_bytes = 107520
+wasm_raw_min_bytes    = 162816
