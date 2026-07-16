@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The extension: App Sandbox is mandatory for appexes; one app group is the whole
+	     transport story (step-18 row C, now with the OS as the spawner — row G3). Deliberately
+	     nothing else, so whichever entitlement makes the socket reachable stays unambiguous. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>TKBX3BV5K6.dev.bolted.os-spike</string>
+	</array>
+</dict>
+</plist>

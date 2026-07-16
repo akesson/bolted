@@ -10,6 +10,10 @@ import FinderSync
 import SyncWireKit
 
 class FinderSyncHandler: FIFinderSync {
+    /// Held open so the connection outlives init — the probe script verifies from outside
+    /// (lsof) that the socket's peer is THIS process, not the host app.
+    var client: LineClient?
+
     override init() {
         super.init()
         // Watch nothing yet (M4 re-points this at the canonical folder).
@@ -23,6 +27,7 @@ class FinderSyncHandler: FIFinderSync {
         // beyond spawning us.
         switch GroupSocket.connect() {
         case .connected(let client, let path):
+            self.client = client
             let pong = client.request(.ping)
             Probe.log("G3 connect-ok path=\(path) ping=\(pong?.t ?? "NO-RESPONSE")")
         case .noGroup:
