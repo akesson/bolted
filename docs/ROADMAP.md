@@ -375,11 +375,16 @@ retro-move is churn without payoff.
   the `command`-verb evidence (tier-2 rules are NOT free for session-less mutations), the
   wire-generator requirements (token registry, closed verdicts, tuple shapes), and the priced
   sandbox ceremony (incl. the `__info_plist` bundle-identity trap). Step 19 is now unblocked.
-- **Step 19 — the Finder-citizen spike app
-  ([ready](steps/step-19-finder-citizen-app.md)).** Step 03's analog on step 18's seam: a
-  real menu-bar app (SMAppService registration) + a real FinderSync extension drawing badge state
-  and issuing the session-less command from a context menu — the first OS-spawned sandboxed
-  process on the wire. Authored 2026-07-16, after 18 reported.
+- **Step 19 — the Finder-citizen spike app. DONE — no kill criterion hit; every scripted row
+  green** ([doc](steps/step-19-finder-citizen-app.md) · [report](steps/step-19-report.md)).
+  The OS-spawned verdict cleared: a hand-assembled (no Xcode) Developer-ID .app/.appex is
+  pluginkit-accepted, Finder-spawned into its own sandbox, and reaches the group socket (G3 +
+  EPERM control). SMAppService registers the bundled socket-activated daemon with ZERO approval
+  ceremony (R3); the SwiftUI editor runs the whole contract over the wire at ~100 µs/keystroke
+  vs the 16 ms bar, incl. stash-restore across a real daemon kill -9 (C20 visible in a UI).
+  Banked: connect(2) ≠ liveness under socket activation (open-then-verify), the two-client-shapes
+  requirement, the continuous-stash idiom, the $HOME-in-SockPathName packaging wrinkle, and the
+  idle-exit-vs-persistent-surfaces steady-state question. Step 20 is next.
 - **Step 20 — Linux/systemd re-confirmation probe (sketched).** The step-05 move: the same
   topology on the second, structurally different backend — systemd socket activation, zero-FFI
   client, no sandbox pressure — before any design freezes. Cheap, and it keeps the transport
