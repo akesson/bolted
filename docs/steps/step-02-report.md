@@ -7,6 +7,12 @@ The four features the whole architecture rests on — (1) classes with methods, 
 step-01 `spike-profile` feature through BoltFFI and driven from Swift XCTests on the macOS slice.
 All 23 probe tests pass. `bolted-core` and `spike-profile` are unchanged (`git diff` clean).
 
+> **Parallel run.** An independent step-02 probe with a different wrapper design ran on the
+> `design/core-evolution` branch at the same boltffi version (0.27.3) and reached a different
+> stream verdict there — its push-mode delivery stalled permanently under concurrent load
+> (a 0.27.3-CLI codegen issue, moot at ≥ 0.27.5). Plan, report, and re-run live at
+> [`crates/spike-profile-ffi-stall-probe/`](../../crates/spike-profile-ffi-stall-probe/README.md).
+
 ## Environment (VISION risk 5 — record the versions)
 
 | Tool | Version |
