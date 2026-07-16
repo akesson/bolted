@@ -12,6 +12,9 @@ enum Entry {
         if args.count >= 3, args[1] == "--daemon" {
             exit(DaemonService.runCommand(args[2]))
         }
+        if args.count >= 3, args[1] == "--drive" {
+            exit(DriveCLI.run(Array(args.dropFirst(2))))
+        }
         BoltedSyncApp.main()
     }
 }
