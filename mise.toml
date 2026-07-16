@@ -567,3 +567,12 @@ if ! command -v swift >/dev/null 2>&1; then
 fi
 swift run --package-path apple/profile-app ProfileApp
 """
+
+# Step 20: machine-bound and docker-gated — needs Docker Desktop. Never inside `check`.
+[tasks."test:os:linux"]
+description = "Step 20 M1: the contract on Linux (rows P1 + D1-D4) in a Docker container."
+run = "sh spikes/os-integration/scripts/test-os-linux.sh"
+
+[tasks."test:os:systemd"]
+description = "Step 20 M2: systemd lifecycle rows L1-L5 in a systemd PID-1 container (privileged)."
+run = "sh spikes/os-integration/scripts/test-os-systemd.sh"
