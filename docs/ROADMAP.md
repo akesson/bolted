@@ -33,7 +33,9 @@ work around them.
 | 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **done** — [plan](steps/step-16-bolted-check.md) · [report](steps/step-16-report.md); the third emitter over the one parser (D25). A committed, human-readable, byte-checked `.snap` per feature — a constraint *tightening* now fails the build at the exact line and names the `STASH_SCHEMA_VERSION` duty (D27), where every existing drift check was blind to it. Composites covered via a runtime section; renderer stays pure |
 | 17 | Web shell onto `gen-profile` + the wasm size budget | 4 — Harness | **done** — [plan](steps/step-17-wasm-size-budget.md) · [report](steps/step-17-report.md); the last shell leaves the spike (`profile-web` on `gen-profile`, 35+8+2 tests green **unmodified** + a real-browser pass), and a wasm size budget guards the **macro path** via a new `check:web` verb (the `wasm-budget` bin behind a `budget` feature keeps brotli out of the host graph). Macro output weighs **+475 B raw (~0.15%)** over hand-written; every budget red watched then restored green. No kill criteria hit |
 | 18 | OS-integration spike I: macOS process-topology probe | 5 — OS spike | **done** — [plan](steps/step-18-os-topology-probe.md) · [report](steps/step-18-report.md) |
-| 19+ | OS spike II (Finder-citizen app) · Linux/systemd probe · topology design pass · harness cont. (capability coverage, `doctor`, `bolted new`) · C# resume (tripwire-gated) | — | sketched — see Phase 5 |
+| 19 | OS-integration spike II: the Finder-citizen app | 5 — OS spike | **done** — [plan](steps/step-19-finder-citizen-app.md) · [report](steps/step-19-report.md) |
+| 20 | OS-integration spike III: Linux/systemd re-confirmation probe | 5 — OS spike | **ready** — [plan](steps/step-20-linux-systemd-probe.md) |
+| 21+ | Topology design pass · harness cont. (capability coverage, `doctor`, `bolted new`) · C# resume (tripwire-gated) | — | sketched — see Phase 5 |
 
 ## Phase 1 — Design validation spike
 
@@ -385,10 +387,14 @@ retro-move is churn without payoff.
   Banked: connect(2) ≠ liveness under socket activation (open-then-verify), the two-client-shapes
   requirement, the continuous-stash idiom, the $HOME-in-SockPathName packaging wrinkle, and the
   idle-exit-vs-persistent-surfaces steady-state question. Step 20 is next.
-- **Step 20 — Linux/systemd re-confirmation probe (sketched).** The step-05 move: the same
-  topology on the second, structurally different backend — systemd socket activation, zero-FFI
-  client, no sandbox pressure — before any design freezes. Cheap, and it keeps the transport
-  answer honest about portability.
+- **Step 20 — Linux/systemd re-confirmation probe. READY**
+  ([plan](steps/step-20-linux-systemd-probe.md)). The step-05 move: the same topology on the
+  second, structurally different backend — systemd socket activation (the `LISTEN_FDS` env
+  protocol vs launchd's one C call: the activation adapters are asymmetric *in kind*), the
+  step-18 probe matrix re-run on Linux unmodified, no sandbox pressure — before any design
+  freezes. The headline re-check: does step 19's open-then-verify finding (connect ≠ liveness)
+  generalize to systemd's socket units, or is it launchd lore? Environment is a systemd-PID-1
+  Docker container; if that refuses, the portability tier (M1) still stands alone.
 - **Then: the topology design pass.** Resolves §9's process-topology bullet into D-decisions
   (ARCHITECTURE amendment), decides whether the `command` verb graduates from its §9 demotion on
   the evidence banked, and prices what `bolted-ffi-gen` would emit for the wire (the D22/D28
