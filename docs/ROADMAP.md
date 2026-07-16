@@ -32,7 +32,8 @@ work around them.
 | — | The `Feature` trait | design session | **done** — resolved as **D29** (ARCHITECTURE **v1.8**, step-16 planning pass): §1 rewritten to the store-owned shape that shipped, the unwritten trait struck, the never-built `command` verb demoted to §9. Phase 4's gate is discharged |
 | 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **done** — [plan](steps/step-16-bolted-check.md) · [report](steps/step-16-report.md); the third emitter over the one parser (D25). A committed, human-readable, byte-checked `.snap` per feature — a constraint *tightening* now fails the build at the exact line and names the `STASH_SCHEMA_VERSION` duty (D27), where every existing drift check was blind to it. Composites covered via a runtime section; renderer stays pure |
 | 17 | Web shell onto `gen-profile` + the wasm size budget | 4 — Harness | **done** — [plan](steps/step-17-wasm-size-budget.md) · [report](steps/step-17-report.md); the last shell leaves the spike (`profile-web` on `gen-profile`, 35+8+2 tests green **unmodified** + a real-browser pass), and a wasm size budget guards the **macro path** via a new `check:web` verb (the `wasm-budget` bin behind a `budget` feature keeps brotli out of the host graph). Macro output weighs **+475 B raw (~0.15%)** over hand-written; every budget red watched then restored green. No kill criteria hit |
-| 18+ | Verification harness (cont.) | 4 — Harness | unplanned — capability coverage, `doctor`, `bolted new`; then the OS-integration spike |
+| 18 | OS-integration spike I: macOS process-topology probe | 5 — OS spike | **ready** — [plan](steps/step-18-os-topology-probe.md) |
+| 19+ | OS spike II (Finder-citizen app) · Linux/systemd probe · topology design pass · harness cont. (capability coverage, `doctor`, `bolted new`) · C# resume (tripwire-gated) | — | sketched — see Phase 5 |
 
 ## Phase 1 — Design validation spike
 
@@ -317,7 +318,10 @@ three files repointed (a crate-name swap, no behavioral edit); and it estimated 
 there are 35.
 
 The later analyses stay sketched, each authored when it becomes current: capability coverage,
-`doctor`, and `bolted new` scaffolding.
+`doctor`, and `bolted new` scaffolding. *(The Phase-4 sketch originally queued these before the
+OS-integration spike; the spike was pulled forward as Phase 5 — see below — because capability
+coverage cannot be designed honestly before the spike shows what OS surfaces demand of
+capabilities.)*
 
 **Sketched lint candidate — counter unit drift.** `LenChars` is defined in Unicode scalar values
 (`chars().count()` in the macro expansion), but the shells' char counters count differently: Kotlin
@@ -338,3 +342,49 @@ reachable teardown closes; a handle *reassignment* must close the previous handl
 `recheckout()` leaked one FFI handle per successful submit until the addCloseable pass fixed it —
 proof the miss is easy even in the reference shell). The adopted idiom, applied to the profile VM:
 register the teardown with `addCloseable` at the checkout itself, never in an `onCleared()` override.
+
+## Phase 5 — OS-integration spike (campaign sketch)
+
+The project's **second Phase-1-style campaign**, against VISION risk 2 — *"deep OS integration is
+the roughest terrain … it must be spiked, not assumed"* — and ARCHITECTURE §9's process-topology
+bullet: where the core runs (embedded vs daemon), whether the contract crosses a process boundary
+(a sandboxed file-manager extension reaching a daemon-owned store), and single-instance ownership.
+Phases 1–4 assume the core is in-process everywhere; VISION's product promise (daemon + tray +
+file-manager badges over **one** core) breaks that assumption the day it is kept. The campaign's
+deliverable is knowledge: hand-written probes, kill criteria, friction logs, then a design pass
+amending ARCHITECTURE — packaging/installer chores fall out afterwards, they are not the question.
+
+**Why before the remaining Phase-4 sketches:** capability coverage cannot be designed until the
+spike shows what OS surfaces demand of capabilities; `doctor`/`bolted new` are independent and slot
+in anywhere; the C# resume stays gated on its upstream tripwire regardless.
+
+**Organization (decided in the step-18 planning pass, forward-only):** spike campaigns live under a
+top-level `spikes/` root — `spikes/os-integration/` holds this campaign's crates (workspace
+members), its Swift probe bits, and a README with charter + disposal criteria; everything in it is
+deletable once its findings land in ARCHITECTURE. Campaign-1 crates (`spike-*`, `gen-*`,
+`profile-web`) stay where they are: they graduated into harness fixtures (golden references, drift
+subjects), and 17+ files including byte-checked generated fixtures hard-code their paths — a
+retro-move is churn without payoff.
+
+- **Step 18 — macOS process-topology probe.** *Detailed step doc exists — ready.* Headless, no UI.
+  A macro-declared `sync-settings` vehicle feature; `syncd`, a pure-Rust zero-FFI daemon (std
+  threads, no tokio) owning the store; `sync-wire`, a hand-written as-if-generated protocol
+  (D27-style versioned envelope, values-only, connection-scoped draft ownership); a Swift probe
+  client, then the same client sandboxed + app-group — the campaign's riskiest unknown, probed
+  early. launchd tier: socket activation, single-instance, crash-respawn, and D27 stash/restore
+  across a daemon `kill -9`. Kill bars: sandbox unreachable by any rung; keystroke pair over the
+  socket > 1.0 ms p50; the wire forced to make validity judgements; launchd unable to own
+  single-instance. Also banks the first real evidence for §9's demoted `command` verb
+  (`toggle_paused` — a session-less mutation, hand-written, not designed).
+- **Step 19 — the Finder-citizen spike app (sketched).** Step 03's analog on step 18's seam: a
+  real menu-bar app (SMAppService registration) + a real FinderSync extension drawing badge state
+  and issuing the session-less command from a context menu — the first OS-spawned sandboxed
+  process on the wire. Authored only after 18 reports.
+- **Step 20 — Linux/systemd re-confirmation probe (sketched).** The step-05 move: the same
+  topology on the second, structurally different backend — systemd socket activation, zero-FFI
+  client, no sandbox pressure — before any design freezes. Cheap, and it keeps the transport
+  answer honest about portability.
+- **Then: the topology design pass.** Resolves §9's process-topology bullet into D-decisions
+  (ARCHITECTURE amendment), decides whether the `command` verb graduates from its §9 demotion on
+  the evidence banked, and prices what `bolted-ffi-gen` would emit for the wire (the D22/D28
+  road). Only after all three probes report.
