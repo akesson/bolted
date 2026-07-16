@@ -70,6 +70,13 @@ public final class SyncViewModel {
             connectionState = .failed("cannot connect to \(path)")
             return
         }
+        // Under socket activation, connect(2) success is not daemon liveness (the M4c finding):
+        // verify the session with a round-trip before believing it.
+        guard conn.request(.ping, timeoutSeconds: 5) != nil else {
+            conn.close()
+            connectionState = .failed("connected but no pong from \(path)")
+            return
+        }
         wire(conn)
         connectionState = .connected
         refetchCanonical()

@@ -19,6 +19,14 @@ APPEX_ID="dev.bolted.sync.finderbadges"
 OUT="${TMPDIR:-/tmp}/bolted-finder-citizen"
 mkdir -p "$OUT"
 
+# Start from a clean session: a previous (possibly failed) run may have left the agent
+# registered or the extension enabled — this script owns both states for its duration.
+[ -x "$APP/Contents/MacOS/BoltedSyncApp" ] \
+  && "$APP/Contents/MacOS/BoltedSyncApp" --daemon unregister >/dev/null 2>&1 || true
+launchctl bootout "gui/$(id -u)/dev.bolted.sync.daemon" 2>/dev/null || true
+pluginkit -e ignore -i "$APPEX_ID" 2>/dev/null || true
+pkill -f "FinderBadges.appex" 2>/dev/null || true
+
 echo "== assemble =="
 sh "$ROOT/spikes/os-integration/scripts/assemble-app.sh"
 
@@ -217,7 +225,58 @@ fi
 echo "S3 ok: unregister removed the agent from the domain"
 
 echo
+echo "== M4 rows: the integrated citizen (launchd-owned daemon + live appex) =="
+# Re-register: from here the daemon exists only on demand, and the appex's 2 s reconnect loop
+# is what summons it (connect -> socket activation -> spawn).
+"$APPBIN" --daemon register >/dev/null
+wait_for_line() { # $1=pattern $2=timeout-secs — matches only lines newer than $MARK
+  i=0
+  while [ "$i" -lt "$2" ]; do
+    if tail -c +"$MARK" "$LOG" 2>/dev/null | grep -q "$1"; then return 0; fi
+    i=$((i+1)); sleep 1
+  done
+  echo "M4 FAILED waiting for: $1" >&2
+  tail -c +"$MARK" "$LOG" >&2 || true
+  return 1
+}
+MARK="$(($(wc -c < "$LOG") + 1))"
+wait_for_line "live-wire connected" 15
+wait_for_line "watching folder=" 5
+echo "M4 ok: the appex reconnected THROUGH socket activation (its connect spawned the daemon)"
+
+echo "== M4/G4a: paused flips the badge state over the wire =="
+MARK="$(($(wc -c < "$LOG") + 1))"
+"$APPBIN" --drive toggle | tee "$OUT/m4-toggle.log"
+grep -q "drive-toggle=toggled" "$OUT/m4-toggle.log" || { echo "G4a FAILED: toggle refused" >&2; exit 1; }
+wait_for_line "paused=true" 10
+echo "G4a ok: the appex observed the toggle (tick-then-fetch) and re-badges as paused"
+
+echo "== M4/G4b: a canonical folder change re-points the watched directory =="
+NEWDIR="$HOME/Library/Group Containers/$GROUP/watched-m4"
+mkdir -p "$NEWDIR"
+MARK="$(($(wc -c < "$LOG") + 1))"
+"$APPBIN" --drive set-folder "$NEWDIR" | tee "$OUT/m4-folder.log"
+grep -q "drive-set-folder=submitted" "$OUT/m4-folder.log" \
+  || { echo "G4b FAILED: the driver's submit was refused" >&2; exit 1; }
+wait_for_line "watching folder=$NEWDIR" 10
+echo "G4b ok: observe-over-wire re-pointed FIFinderSyncController.directoryURLs"
+
+echo "== M4c: kill -9 under attached surfaces — the topology self-heals =="
+DPID="$(daemon_pid)"
+[ -n "$DPID" ] || { echo "M4c FAILED: no daemon pid before the kill" >&2; exit 1; }
+MARK="$(($(wc -c < "$LOG") + 1))"
+kill -9 "$DPID"
+wait_for_line "live-wire disconnected" 10
+wait_for_line "live-wire connected" 15
+NPID="$(daemon_pid)"
+[ -n "$NPID" ] && [ "$NPID" != "$DPID" ] \
+  || { echo "M4c FAILED: no respawned daemon behind the healed wire" >&2; exit 1; }
+echo "M4c ok: kill -9 (pid $DPID) -> appex reconnect respawned the daemon (pid $NPID), badges live"
+
+echo
 echo "FINDER-CITIZEN VERDICT:"
 echo "  G1 registered / G2 spawned / G3 reached + control refused."
 echo "  U rows green (see the XCTest tally above)."
 echo "  S1 register(enabled) / S2 socket-activated bundled daemon / S4 respawn+single / S3 unregister."
+echo "  M4: reconnect-through-activation / G4 badge+folder follow canonical / kill -9 self-heal."
+echo "(manual rows remaining: badge visuals + the G5 context-menu command — see the step-19 report protocol)"
