@@ -536,6 +536,26 @@ run = "sh spikes/os-integration/scripts/test-launchd.sh"
 description = "Step 19: the Finder-citizen rows (G1-G3 …) — needs Xcode + a Developer ID identity + a GUI session."
 run = "sh spikes/os-integration/scripts/test-os-app.sh"
 
+[tasks."run:os:app"]
+description = "Step 19 dev tier: the menu-bar app unbundled (swift run) against a manually-started syncd."
+run = """
+set -eu
+if ! command -v swift >/dev/null 2>&1; then
+  echo "error: swift toolchain not found — the app needs Xcode (VISION risk 5)." >&2
+  exit 1
+fi
+IDENTITY="${BOLTED_SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
+  | sed -n 's/.*\"\\(Developer ID Application: [^\"]*\\)\".*/\\1/p' | head -1)}"
+TEAM_ID="$(printf '%s' "$IDENTITY" | sed -n 's/.*(\\([A-Z0-9]*\\))$/\\1/p')"
+GROUP="${BOLTED_GROUP:-$TEAM_ID.dev.bolted.os-spike}"
+SOCK="$HOME/Library/Group Containers/$GROUP/syncd.sock"
+if [ ! -S "$SOCK" ]; then
+  echo "note: no daemon at $SOCK — start one first:" >&2
+  echo "  cargo build -p syncd && mkdir -p \"$(dirname "$SOCK")\" && target/debug/syncd --socket \"$SOCK\"" >&2
+fi
+BOLTED_GROUP="$GROUP" swift run --package-path spikes/os-integration/apple/finder-citizen BoltedSyncApp
+"""
+
 [tasks."run:apple"]
 description = "Run the SwiftUI profile spike app (a GUI window; for the manual protocol)."
 depends = ["pack:apple"]

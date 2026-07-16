@@ -63,6 +63,33 @@ GROUP_PID="$(start_daemon "$GDIR/syncd.sock")"
 # The control daemon: alive and answering, so a refusal can only be the extension sandbox.
 CONTROL_PID="$(start_daemon "/tmp/bolted-g3-control.sock")"
 
+echo "== U rows: headless VM tests over the wire (each test spawns its own daemon) =="
+BOLTED_SYNCD="$SYNCD" swift test --package-path "$PKG" 2>&1 | tee "$OUT/swift-test.log" | tail -5
+# The exit-code trap: read the actual XCTest tally, not the wrapper's status.
+grep -Eq "Executed [0-9]+ tests?, with 0 failures" "$OUT/swift-test.log" || {
+  echo "U rows FAILED: XCTest tally missing or nonzero failures (see $OUT/swift-test.log)" >&2
+  exit 1
+}
+grep -q "keystroke-to-state" "$OUT/swift-test.log" && grep "keystroke-to-state" "$OUT/swift-test.log"
+
+echo "== the greppable rule: no constraint literals in Sources/ (planted control first) =="
+# The vehicle's constraint numbers must never appear in shell source (they arrive as wire
+# params). Bounded so timing constants (300ms) and decimals (0.15 opacity) don't false-positive.
+LITERALS='(^|[^0-9_.])(30|120|1440|15)([^0-9_.]|$)'
+PLANT="$PKG/Sources/BoltedSyncCore/PlantedControl.swift"
+echo 'let plantedMaxLabel = 30' > "$PLANT"
+if ! grep -rE "$LITERALS" "$PKG/Sources" >/dev/null; then
+  rm -f "$PLANT"
+  echo "grep control FAILED: the matcher missed a planted constraint literal" >&2
+  exit 1
+fi
+rm -f "$PLANT"
+if grep -rE "$LITERALS" "$PKG/Sources"; then
+  echo "FAILED: a constraint literal appears in shell source (see matches above)" >&2
+  exit 1
+fi
+echo "no-literals ok (matcher proven by the planted control)"
+
 echo "== fresh log =="
 rm -f "$LOG"
 pkill -f "FinderBadges.appex" 2>/dev/null || true
