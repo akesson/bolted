@@ -11,3 +11,8 @@ sync-wire = { path = "../sync-wire" }
 # syncctl's F1 verbs print/parse a StashWire as a bare JSON blob (no envelope — it is a file the
 # client keeps, not a frame the daemon reads unversioned; restore travels inside the envelope).
 serde_json = "1"
+
+[dev-dependencies]
+# tests/systemd_activation.rs stages the sd_listen_fds protocol by hand: dup2 in pre_exec is the
+# one call std cannot express. Test-only; the daemon itself stays libc-free.
+libc = "0.2"
