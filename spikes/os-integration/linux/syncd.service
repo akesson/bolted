@@ -1,0 +1,11 @@
+# Step 20 — spawned on demand by syncd.socket; never enabled, never started by boot. No
+# Restart= on purpose: respawn-on-next-connect through the socket unit is the on-demand
+# bargain being probed (launchd parity), not Restart=always. SYNCD_ARGS exists so the L4 row
+# can inject --idle-exit-secs via a drop-in without editing this unit.
+[Unit]
+Description=Bolted step-20 probe daemon
+Requires=syncd.socket
+
+[Service]
+Environment=SYNCD_ARGS=
+ExecStart=/usr/local/bin/syncd --systemd $SYNCD_ARGS

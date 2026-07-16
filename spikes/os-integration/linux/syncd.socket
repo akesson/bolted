@@ -1,0 +1,12 @@
+# Step 20 — the socket unit owns the listener (the launchd `Sockets` plist key analog):
+# systemd binds /run/syncd.sock when this unit starts, spawns syncd.service on the first
+# connect, and keeps listening across service death — probe row L3 observes what that does
+# to a client's connect(2) in the respawn window.
+[Unit]
+Description=Bolted step-20 probe daemon socket
+
+[Socket]
+ListenStream=/run/syncd.sock
+
+[Install]
+WantedBy=sockets.target

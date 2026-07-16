@@ -67,3 +67,6 @@ csharp/profile-probe/TestResults/
 spikes/os-integration/apple/sync-probe/.build/
 spikes/os-integration/apple/finder-citizen/.build/
 spikes/os-integration/apple/finder-citizen/dist/
+
+# Step 20: the Linux container writes its build artifacts here (host target/ stays host-only).
+target-linux/
