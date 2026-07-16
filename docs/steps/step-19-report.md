@@ -166,8 +166,18 @@ pause badges).
    `dist/BoltedSync.app/Contents/MacOS/BoltedSyncApp --daemon unregister && pluginkit -e ignore -i dev.bolted.sync.finderbadges && killall BoltedSyncApp`
    (from `spikes/os-integration/apple/finder-citizen/`; the demo folder is `~/BoltedSpikeDemo`.)
 
-Screen-recording permission wasn't available to the probe session, so these two rows could not be
+Screen-recording permission wasn't available to the probe session, so these rows could not be
 screenshot-verified mechanically; every non-pixel aspect of both paths is asserted by log/script.
+
+**Manual execution record (Henrik, 2026-07-16):**
+- **Badge pixels: CONFIRMED** — screenshot of the Finder list view shows all three files carrying
+  the checkmark badge drawn by the extension from canonical `paused=false`.
+- **Menu-bar surface: CONFIRMED** — screenshot shows canonical rendered live (label, folder,
+  interval, active state) plus `Daemon: enabled` (SMAppService status); a human-driven toggle
+  from this menu propagated to the extension (`watching … paused=false v=3` in the appex log) —
+  the app→daemon→extension fan-out under a real hand.
+- **G5 (the command from Finder's context menu): still pending a right-click** — the code path
+  ships and logs (`G5 context-menu toggle`); no click had landed at report time.
 
 ## Deviations (smallest-reversible, recorded)
 
