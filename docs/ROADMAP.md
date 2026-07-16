@@ -375,10 +375,11 @@ retro-move is churn without payoff.
   the `command`-verb evidence (tier-2 rules are NOT free for session-less mutations), the
   wire-generator requirements (token registry, closed verdicts, tuple shapes), and the priced
   sandbox ceremony (incl. the `__info_plist` bundle-identity trap). Step 19 is now unblocked.
-- **Step 19 — the Finder-citizen spike app (sketched, next to author).** Step 03's analog on step 18's seam: a
+- **Step 19 — the Finder-citizen spike app
+  ([ready](steps/step-19-finder-citizen-app.md)).** Step 03's analog on step 18's seam: a
   real menu-bar app (SMAppService registration) + a real FinderSync extension drawing badge state
   and issuing the session-less command from a context menu — the first OS-spawned sandboxed
-  process on the wire. Authored only after 18 reports.
+  process on the wire. Authored 2026-07-16, after 18 reported.
 - **Step 20 — Linux/systemd re-confirmation probe (sketched).** The step-05 move: the same
   topology on the second, structurally different backend — systemd socket activation, zero-FFI
   client, no sandbox pressure — before any design freezes. Cheap, and it keeps the transport
