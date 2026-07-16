@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The host app is deliberately UNsandboxed (Developer ID posture — like the daemon, it
+	     owns its group container by filesystem permission; the sandbox pressure in this step
+	     is on the appex, which has no choice). App group declared for containerURL(). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>TKBX3BV5K6.dev.bolted.os-spike</string>
+	</array>
+</dict>
+</plist>

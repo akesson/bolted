@@ -530,6 +530,12 @@ run = "sh spikes/os-integration/scripts/test-sandbox.sh"
 description = "Step 18 M4: launchd lifecycle (A1-A4) + stash across a real daemon kill -9 (F1)."
 run = "sh spikes/os-integration/scripts/test-launchd.sh"
 
+# Step 19: machine-bound AND session-bound — registers a Finder extension into this user's
+# session (booted out on exit) and may relaunch Finder. Never inside `check`.
+[tasks."test:os:app"]
+description = "Step 19: the Finder-citizen rows (G1-G3 …) — needs Xcode + a Developer ID identity + a GUI session."
+run = "sh spikes/os-integration/scripts/test-os-app.sh"
+
 [tasks."run:apple"]
 description = "Run the SwiftUI profile spike app (a GUI window; for the manual protocol)."
 depends = ["pack:apple"]

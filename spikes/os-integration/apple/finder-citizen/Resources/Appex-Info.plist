@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The FinderSync extension bundle. CFBundlePackageType XPC! is the appex bundle type;
+	     NSExtensionPrincipalClass is module-qualified (SPM target name = module name). -->
+	<key>CFBundleIdentifier</key>
+	<string>dev.bolted.sync.finderbadges</string>
+	<key>CFBundleName</key>
+	<string>FinderBadges</string>
+	<key>CFBundleDisplayName</key>
+	<string>Bolted Sync Finder Badges</string>
+	<key>CFBundleExecutable</key>
+	<string>FinderBadges</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>BoltedAppGroup</key>
+	<string>TKBX3BV5K6.dev.bolted.os-spike</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.FinderSync</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>FinderBadges.FinderSyncHandler</string>
+	</dict>
+</dict>
+</plist>
