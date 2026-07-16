@@ -109,6 +109,8 @@ fn main() -> ExitCode {
 
             if let Some(secs) = idle_secs {
                 let shared = std::sync::Arc::clone(&shared);
+                // Wall-clock is legitimate here: idle-exit is daemon lifecycle, not core state.
+                #[allow(clippy::disallowed_methods)]
                 std::thread::spawn(move || {
                     let mut idle_since = Instant::now();
                     loop {
