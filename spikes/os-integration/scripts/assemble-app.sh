@@ -35,11 +35,13 @@ echo "app group: $GROUP"
 
 echo "== build (release) =="
 swift build -c release --package-path "$PKG" >/dev/null
+cargo build -q --release -p syncd
 BIN="$PKG/.build/release"
 
 echo "== layout =="
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" \
+         "$APP/Contents/Library/LaunchAgents" \
          "$APP/Contents/PlugIns/FinderBadges.appex/Contents/MacOS"
 
 # The committed plists/entitlements pin the owner's team id; re-stamp to the discovered one.
@@ -52,6 +54,13 @@ APPEX="$APP/Contents/PlugIns/FinderBadges.appex"
 cp "$BIN/FinderBadges" "$APPEX/Contents/MacOS/FinderBadges"
 stamp "$RES/Appex-Info.plist" "$APPEX/Contents/Info.plist"
 
+# The bundled daemon + its SMAppService agent plist. launchd does not expand $HOME in
+# SockPathName, so the per-user socket path is baked at assembly time (recorded friction).
+cp "$ROOT/target/release/syncd" "$APP/Contents/MacOS/syncd"
+sed "s|@SOCKET@|$HOME/Library/Group Containers/$GROUP/syncd.sock|" \
+  "$RES/dev.bolted.sync.daemon.plist" \
+  > "$APP/Contents/Library/LaunchAgents/dev.bolted.sync.daemon.plist"
+
 echo "== sign (inside-out: appex, then app — never --deep) =="
 APP_ENT="$DIST/app.entitlements"
 APPEX_ENT="$DIST/appex.entitlements"
@@ -60,6 +69,8 @@ stamp "$RES/appex.entitlements" "$APPEX_ENT"
 
 codesign --force --options runtime \
   --entitlements "$APPEX_ENT" --sign "$IDENTITY" "$APPEX"
+codesign --force --options runtime --identifier dev.bolted.sync.syncd \
+  --sign "$IDENTITY" "$APP/Contents/MacOS/syncd"
 codesign --force --options runtime \
   --entitlements "$APP_ENT" --sign "$IDENTITY" "$APP"
 
