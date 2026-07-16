@@ -43,6 +43,10 @@ cleanup() {
   pkill -f "FinderBadges.appex" 2>/dev/null || true
   [ -n "$GROUP_PID" ] && kill "$GROUP_PID" 2>/dev/null || true
   [ -n "$CONTROL_PID" ] && kill "$CONTROL_PID" 2>/dev/null || true
+  # And the SMAppService agent (S rows), if it got as far as registering.
+  [ -x "$APP/Contents/MacOS/BoltedSyncApp" ] \
+    && "$APP/Contents/MacOS/BoltedSyncApp" --daemon unregister >/dev/null 2>&1 || true
+  launchctl bootout "gui/$(id -u)/dev.bolted.sync.daemon" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -144,4 +148,76 @@ grep -q "syncd.sock" "$OUT/g3-lsof.log" \
 echo "G3 ok: OS-spawned + OS-sandboxed, and the wire is reachable"
 
 echo
-echo "FINDER-CITIZEN M1 VERDICT: G1 registered / G2 spawned / G3 reached + control refused."
+echo "== S rows: SMAppService owns the bundled daemon =="
+# The manual group daemon yields the socket path to launchd.
+kill "$GROUP_PID" 2>/dev/null || true
+GROUP_PID=""
+rm -f "$GDIR/syncd.sock"
+
+APPBIN="$APP/Contents/MacOS/BoltedSyncApp"
+LABEL="dev.bolted.sync.daemon"
+DOMAIN="gui/$(id -u)"
+daemon_pid() {
+  launchctl print "$DOMAIN/$LABEL" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9]*\)$/\1/p'
+}
+
+echo "== S1: the app registers its own agent (ceremony recorded verbatim) =="
+"$APPBIN" --daemon register | tee "$OUT/s1.log"
+if grep -q "daemon-status=requires_approval" "$OUT/s1.log"; then
+  echo "S1 CEREMONY: the OS demands a Login Items approval before the agent may run." >&2
+  echo "Approve 'Bolted Sync' under System Settings > General > Login Items, rerun." >&2
+  exit 2
+fi
+grep -q "daemon-register=ok daemon-status=enabled" "$OUT/s1.log" \
+  || { echo "S1 FAILED: register did not reach enabled (see above, verbatim)" >&2; exit 1; }
+launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 \
+  || { echo "S1 FAILED: launchd does not know the label after register" >&2; exit 1; }
+echo "S1 ok: SMAppService registered the bundled agent (status=enabled)"
+
+echo "== S2: socket activation through the bundled plist =="
+"$SYNCCTL" "$GDIR/syncd.sock" ping | tee "$OUT/s2.log"
+grep -q "Pong" "$OUT/s2.log" || { echo "S2 FAILED: no pong via the launchd socket" >&2; exit 1; }
+SPID="$(daemon_pid)"
+[ -n "$SPID" ] || { echo "S2 FAILED: no daemon pid under the label" >&2; exit 1; }
+# argv[0] is ProgramArguments[0] ("syncd"), so ps args can't prove WHICH binary launchd ran;
+# the executable's txt descriptor can.
+lsof -a -p "$SPID" -d txt 2>/dev/null | tee "$OUT/s2-ps.log"
+grep -q "BoltedSync.app/Contents/MacOS/syncd" "$OUT/s2-ps.log" \
+  || { echo "S2 FAILED: the spawned daemon is not the BUNDLED syncd" >&2; exit 1; }
+echo "S2 ok: first connect spawned the bundled syncd (pid $SPID) via launchd"
+
+echo "== S4a: crash-respawn under SMAppService ownership (A3 spot-check) =="
+kill -9 "$SPID"
+sleep 1
+"$SYNCCTL" "$GDIR/syncd.sock" version | tee "$OUT/s4.log"
+grep -q "Version { version: 0 }" "$OUT/s4.log" \
+  || { echo "S4a FAILED: no fresh daemon after kill -9 (or state survived)" >&2; exit 1; }
+RPID="$(daemon_pid)"
+[ -n "$RPID" ] && [ "$RPID" != "$SPID" ] \
+  || { echo "S4a FAILED: no distinct respawned pid" >&2; exit 1; }
+echo "S4a ok: kill -9 -> next connect respawned (pid $SPID -> $RPID), state reset to v0"
+
+echo "== S4b: single instance — a second manual bootstrap of the label, refusal verbatim =="
+S4B_EXIT=0
+launchctl bootstrap "$DOMAIN" "$APP/Contents/Library/LaunchAgents/$LABEL.plist" \
+  > "$OUT/s4b.log" 2>&1 || S4B_EXIT=$?
+cat "$OUT/s4b.log"
+[ "$S4B_EXIT" -ne 0 ] \
+  || { echo "S4b FAILED: a second bootstrap of the label was ACCEPTED" >&2; exit 1; }
+echo "S4b ok: the label refused a second bootstrap (exit $S4B_EXIT)"
+
+echo "== S3: unregister boots the agent out =="
+"$APPBIN" --daemon unregister | tee "$OUT/s3.log"
+grep -q "daemon-unregister=ok" "$OUT/s3.log" \
+  || { echo "S3 FAILED: unregister refused (see above)" >&2; exit 1; }
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  echo "S3 FAILED: the label survives unregister" >&2
+  exit 1
+fi
+echo "S3 ok: unregister removed the agent from the domain"
+
+echo
+echo "FINDER-CITIZEN VERDICT:"
+echo "  G1 registered / G2 spawned / G3 reached + control refused."
+echo "  U rows green (see the XCTest tally above)."
+echo "  S1 register(enabled) / S2 socket-activated bundled daemon / S4 respawn+single / S3 unregister."

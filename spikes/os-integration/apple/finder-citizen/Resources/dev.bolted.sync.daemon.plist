@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Step 19 M3: the step-18 agent plist, SMAppService flavor — BundleProgram (relative to
+	     the .app root) instead of an absolute Program, registered by the app itself instead of
+	     a hand-run launchctl bootstrap. Socket activation + idle-exit as in step 18.
+
+	     @SOCKET@ is stamped by assemble-app.sh with THIS user's group-container path — a real
+	     friction finding: launchd does not expand $HOME in SockPathName, so a socket-activated
+	     agent inside a signed bundle bakes a per-user absolute path into a sealed resource.
+	     Recorded for the design pass; fine for a single-machine spike artifact. -->
+	<key>Label</key>
+	<string>dev.bolted.sync.daemon</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/syncd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>syncd</string>
+		<string>--launchd</string>
+		<string>--idle-exit-secs</string>
+		<string>4</string>
+	</array>
+	<key>Sockets</key>
+	<dict>
+		<key>Listener</key>
+		<dict>
+			<key>SockPathName</key>
+			<string>@SOCKET@</string>
+			<key>SockFamily</key>
+			<string>Unix</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

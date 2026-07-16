@@ -5,6 +5,17 @@ import BoltedSyncCore
 import SwiftUI
 
 @main
+enum Entry {
+    static func main() {
+        // The probe CLI (S rows): `BoltedSyncApp --daemon <verb>` — no scenes, no GUI.
+        let args = CommandLine.arguments
+        if args.count >= 3, args[1] == "--daemon" {
+            exit(DaemonService.runCommand(args[2]))
+        }
+        BoltedSyncApp.main()
+    }
+}
+
 struct BoltedSyncApp: App {
     @State private var vm = SyncViewModel()
     @Environment(\.openWindow) private var openWindow
@@ -70,6 +81,11 @@ struct MenuContent: View {
             Text("Not connected")
             Button("Connect") { reconnect() }
         }
+        Divider()
+        // S1 from the GUI: the same SMAppService ceremony the probe drives via the CLI.
+        Text("Daemon: \(DaemonService.statusString)")
+        Button("Install Daemon") { _ = DaemonService.runCommand("register") }
+        Button("Uninstall Daemon") { _ = DaemonService.runCommand("unregister") }
         Divider()
         Button("Quit") { NSApp.terminate(nil) }
     }
