@@ -47,3 +47,8 @@ outside it, that is a finding to report, not a state to accept.
 Delete after: the topology design pass has resolved §9's process-topology questions into
 D-decisions, and any code worth keeping has been **re-derived** in framework crates through a
 normal step (evidence first, extraction later — the D22/D28 road).
+
+**Status (2026-07-16): the design pass has run** — findings are law as ARCHITECTURE v1.9
+(D30–D33), with the wire priced in `docs/steps/artifacts/topology-wire-pricing.md`. The first
+condition is met; this directory is disposal-eligible whenever the owner calls it (the future
+wire-emitter step re-derives from the declaration, not from this code).
