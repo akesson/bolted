@@ -34,7 +34,7 @@ work around them.
 | 17 | Web shell onto `gen-profile` + the wasm size budget | 4 — Harness | **done** — [plan](steps/step-17-wasm-size-budget.md) · [report](steps/step-17-report.md); the last shell leaves the spike (`profile-web` on `gen-profile`, 35+8+2 tests green **unmodified** + a real-browser pass), and a wasm size budget guards the **macro path** via a new `check:web` verb (the `wasm-budget` bin behind a `budget` feature keeps brotli out of the host graph). Macro output weighs **+475 B raw (~0.15%)** over hand-written; every budget red watched then restored green. No kill criteria hit |
 | 18 | OS-integration spike I: macOS process-topology probe | 5 — OS spike | **done** — [plan](steps/step-18-os-topology-probe.md) · [report](steps/step-18-report.md) |
 | 19 | OS-integration spike II: the Finder-citizen app | 5 — OS spike | **done** — [plan](steps/step-19-finder-citizen-app.md) · [report](steps/step-19-report.md) |
-| 20 | OS-integration spike III: Linux/systemd re-confirmation probe | 5 — OS spike | **ready** — [plan](steps/step-20-linux-systemd-probe.md) |
+| 20 | OS-integration spike III: Linux/systemd re-confirmation probe | 5 — OS spike | **done** — [plan](steps/step-20-linux-systemd-probe.md) · [report](steps/step-20-report.md) |
 | 21+ | Topology design pass · harness cont. (capability coverage, `doctor`, `bolted new`) · C# resume (tripwire-gated) | — | sketched — see Phase 5 |
 
 ## Phase 1 — Design validation spike
@@ -387,15 +387,23 @@ retro-move is churn without payoff.
   Banked: connect(2) ≠ liveness under socket activation (open-then-verify), the two-client-shapes
   requirement, the continuous-stash idiom, the $HOME-in-SockPathName packaging wrinkle, and the
   idle-exit-vs-persistent-surfaces steady-state question. Step 20 is next.
-- **Step 20 — Linux/systemd re-confirmation probe. READY**
-  ([plan](steps/step-20-linux-systemd-probe.md)). The step-05 move: the same topology on the
-  second, structurally different backend — systemd socket activation (the `LISTEN_FDS` env
-  protocol vs launchd's one C call: the activation adapters are asymmetric *in kind*), the
-  step-18 probe matrix re-run on Linux unmodified, no sandbox pressure — before any design
-  freezes. The headline re-check: does step 19's open-then-verify finding (connect ≠ liveness)
-  generalize to systemd's socket units, or is it launchd lore? Environment is a systemd-PID-1
-  Docker container; if that refuses, the portability tier (M1) still stands alone.
-- **Then: the topology design pass.** Resolves §9's process-topology bullet into D-decisions
-  (ARCHITECTURE amendment), decides whether the `command` verb graduates from its §9 demotion on
-  the evidence banked, and prices what `bolted-ffi-gen` would emit for the wire (the D22/D28
-  road). Only after all three probes report.
+- **Step 20 — Linux/systemd re-confirmation probe. DONE — no kill criterion hit; every row
+  executed** ([plan](steps/step-20-linux-systemd-probe.md) ·
+  [report](steps/step-20-report.md)). The topology stands on the second backend: the spike
+  sources crossed **byte-unmodified** (13 suites / 32 tests on linux/arm64, incl. step 18's
+  whole contract matrix), and the activation seam got *cheaper* — systemd's `LISTEN_FDS` env
+  protocol needs zero foreign calls where launchd needed one; the adapters are asymmetric in
+  kind, identical in shape (~40 lines/OS). Lifecycle rows L1–L5 all green in a systemd-PID-1
+  container (activation, unit-identity single-instance, kill -9 respawn, idle-exit ⇄
+  reactivation, H6 stash-restore). The headline verdict: **open-then-verify is portable**
+  (connect ≠ liveness on either OS), but systemd accepted the queued post-kill connect in
+  ~45 ms — the unaccepted-limbo pathology has only ever been seen under launchd. D4 keystroke
+  pair 120.5 µs in-container vs the 1000 µs bar. Banked: the stale socket *file* survives
+  socket-unit stop (`RemoveOnStop=` off by default); the user-unit posture priced on paper
+  (zero approval ceremony, matching SMAppService's 0 prompts).
+- **Then: the topology design pass — now unblocked (all three probes have reported).** Resolves
+  §9's process-topology bullet into D-decisions (ARCHITECTURE amendment), decides whether the
+  `command` verb graduates from its §9 demotion on the evidence banked, and prices what
+  `bolted-ffi-gen` would emit for the wire (the D22/D28 road): the two client shapes, the
+  open-then-verify handshake, the continuous-stash idiom, the per-OS activation shims, and the
+  steady-state (idle-exit vs persistent surfaces) question.
