@@ -17,6 +17,11 @@ members = [
     "crates/gen-profile-ffi",
     "crates/spike-profile-ffi",
     "crates/profile-web",
+    # Step 18+ (Phase 5): the OS-integration spike campaign. Disposable — deleting the campaign is
+    # `rm -rf spikes/os-integration` plus these three lines (spikes/os-integration/README.md).
+    "spikes/os-integration/crates/sync-settings",
+    "spikes/os-integration/crates/sync-wire",
+    "spikes/os-integration/crates/syncd",
 ]
 
 [workspace.package]

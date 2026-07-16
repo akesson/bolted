@@ -1,0 +1,10 @@
+[package]
+name = "syncd"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bolted-core = { path = "../../../../crates/bolted-core" }
+sync-settings = { path = "../sync-settings" }
+sync-wire = { path = "../sync-wire" }

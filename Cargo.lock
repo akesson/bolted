@@ -1920,6 +1920,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync-settings"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "bolted-macros",
+]
+
+[[package]]
+name = "sync-wire"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "syncd"
+version = "0.0.0"
+dependencies = [
+ "bolted-core",
+ "sync-settings",
+ "sync-wire",
+]
+
+[[package]]
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
