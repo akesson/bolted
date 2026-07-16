@@ -35,7 +35,8 @@ work around them.
 | 18 | OS-integration spike I: macOS process-topology probe | 5 — OS spike | **done** — [plan](steps/step-18-os-topology-probe.md) · [report](steps/step-18-report.md) |
 | 19 | OS-integration spike II: the Finder-citizen app | 5 — OS spike | **done** — [plan](steps/step-19-finder-citizen-app.md) · [report](steps/step-19-report.md) |
 | 20 | OS-integration spike III: Linux/systemd re-confirmation probe | 5 — OS spike | **done** — [plan](steps/step-20-linux-systemd-probe.md) · [report](steps/step-20-report.md) |
-| 21+ | Topology design pass · harness cont. (capability coverage, `doctor`, `bolted new`) · C# resume (tripwire-gated) | — | sketched — see Phase 5 |
+| — | Topology design pass | design session | **done** — resolved as **D30–D33** (ARCHITECTURE **v1.9**): the daemon-owned topology is blessed (one store, one owner, every surface attaches; hybrids rejected as two canonicals), the wire is a generated values-only artifact — priced in [topology-wire-pricing.md](steps/artifacts/topology-wire-pricing.md), emitted later — lifecycle is OS-owned with "**on while any surface lives**" as the named steady state, and the `command` verb **graduates** as a scratch-draft transaction (DSL/core packaging wait for the first framework consumer). §9's process-topology and `command` bullets are closed; Phase 5's campaign is complete and `spikes/os-integration/` is **disposal-eligible** |
+| 21+ | Harness cont. (capability coverage — **now unblocked**, `doctor`, `bolted new`) · the wire emitter (D31, gated on a product feature needing the daemon topology) · `command` in core/macros (D33, with its first framework consumer) · C# resume (tripwire-gated) | — | sketched — see Phases 4–5 |
 
 ## Phase 1 — Design validation spike
 
@@ -401,9 +402,20 @@ retro-move is churn without payoff.
   pair 120.5 µs in-container vs the 1000 µs bar. Banked: the stale socket *file* survives
   socket-unit stop (`RemoveOnStop=` off by default); the user-unit posture priced on paper
   (zero approval ceremony, matching SMAppService's 0 prompts).
-- **Then: the topology design pass — now unblocked (all three probes have reported).** Resolves
-  §9's process-topology bullet into D-decisions (ARCHITECTURE amendment), decides whether the
-  `command` verb graduates from its §9 demotion on the evidence banked, and prices what
-  `bolted-ffi-gen` would emit for the wire (the D22/D28 road): the two client shapes, the
-  open-then-verify handshake, the continuous-stash idiom, the per-OS activation shims, and the
-  steady-state (idle-exit vs persistent surfaces) question.
+- **The topology design pass — DONE (ARCHITECTURE v1.9, D30–D33).** The campaign's capstone, run
+  on the three reports' banked evidence. **D30**: one store, one owner — the daemon-owned topology
+  is the second blessed deployment shape; when any surface leaves the app process, *every* surface
+  attaches over the wire (a hybrid is two canonicals, i.e. a merge protocol, i.e. the perimeter).
+  **D31**: the wire is a generated values-only artifact on the D22/D28 road — two client shapes,
+  open-then-verify and continuous-stash mandatory in the generated client library; priced from the
+  spike's measured line counts in
+  [topology-wire-pricing.md](steps/artifacts/topology-wire-pricing.md), emitted as its own step
+  when a product feature first needs the topology. **D32**: lifecycle is OS-owned at rung 3
+  (socket activation, label/unit identity, idle-exit; no KeepAlive/Restart=always), with the
+  steady state named: **on while any surface lives**. **D33**: the `command` verb graduates as a
+  scratch-draft transaction (checkout → mutate → commit → close), closing the tier-2-bypass hazard
+  by construction; macro/DSL support waits for the first framework consumer. With the findings now
+  law, `spikes/os-integration/` meets its README's disposal criteria — deletable whenever the
+  owner wants the ~7 s of `check` time back (the wire emitter step will *re-derive*, not rescue,
+  anything it needs). Capability coverage (Phase 4) is unblocked: the spike has shown what OS
+  surfaces demand of capabilities.

@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.8, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes).** Phase 1 validated this design against
+**Status: FROZEN (v1.9, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes and the topology design pass).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -31,7 +31,11 @@ revisit condition arrived, the decline stands sharpened, and the per-language le
 **v1.8** carries the step-16 planning pass's one: **D29** discharges §9's largest open claim by
 rewriting §1 to the store-owned shape the spikes actually shipped — the unwritten
 `Feature (State/Msg/Caps/update)` trait is struck and the never-built `command` verb is demoted to §9
-— which opens Phase 4. A
+— which opens Phase 4. **v1.9** carries the topology design pass's four, closing Phase 5's probe
+campaign (steps 18–20): **D30** blesses the daemon-owned store as the second topology — one store,
+one owner, every surface attaches; **D31** makes the wire a generated, values-only artifact (priced,
+not yet built); **D32** hands daemon lifecycle to the OS and names the steady state — on while any
+surface lives; **D33** graduates the `command` verb as a scratch-draft transaction. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -66,19 +70,32 @@ A "view" is any native surface, not just a window: a tray/menu-bar icon, a file-
 extension, a widget, a CLI — each is just another (often tiny) observer of a feature's state,
 driving it back through the same verbs. The main app window has no privileged status in the contract.
 
-The contract a feature exposes has two shipped verbs (a third, `command`, is designed but unbuilt —
-see below):
+Surfaces need not share a process (D30). The default topology embeds the store in the app process —
+everything Phases 1–4 built. The moment a product needs surfaces the OS spawns on its own schedule
+(a daemon, a file-manager extension, a tray that outlives the window), the store moves into an
+OS-managed daemon and **every** surface — the main window included — attaches as a wire client: the
+contract crosses the boundary values-only over a generated wire (D31), and the OS owns the daemon's
+lifecycle (D32). One store, one owner, always — two live stores over one feature would be two
+canonicals, and reconciling them is a merge protocol beyond the field-level keep/take ceiling (§4),
+i.e. the perimeter.
+
+The contract a feature exposes has two shipped verbs, plus a third — `command` — designed but not
+yet built (D33, see below):
 
 | Verb | Surface | Semantics |
 |------|---------|-----------|
 | **observe** | read-only, always-valid current state | *how* it is delivered is per-target: a `snapshots()` stream across FFI, a direct read plus a change tick in a Rust shell (§8) |
 | **draft** | `checkout() -> FeatureDraft` | multi-field edit session: checkout → edit → validate → submit |
 
-A **third verb, `command`** — a session-less `toggle_x() -> Result<(), CmdError>` single-action
-mutation — completed the original CQRS triad but was **implemented zero times** across six spikes and
-four shells: every mutation the spike features want is a draft. D29 struck it from the shipped
-contract and demoted it to a §9 question, to be designed when a real feature needs it and not from
-zero examples (the D20/D21 precedent).
+A **third verb, `command`** — a session-less single-action mutation (`toggle_paused()`), for
+surfaces that structurally cannot host an edit session: a file-manager context menu, a tray toggle.
+D29 had demoted it to §9 after six spikes implemented it zero times; the OS-integration campaign
+then produced the first real one (steps 18–19), and D33 graduates it with the shape the spike
+proved: **a command is a scratch-draft transaction** — checkout → mutate → commit (which
+re-validates everything) → close — so tier 3's floor binds session-less mutations by construction,
+never by discipline. Its refusals are `CommitError`; `apply_canonical` remains store plumbing for
+the canonical-source path (server/sync) and is never a shell-reachable mutation. Macro/DSL stamping
+and core packaging wait for the first framework consumer (D33).
 
 **Canonical core state is never mid-edit.** All editing happens inside drafts; `submit` applies one
 fully-validated result to the store in a single transition (§4), so the canonical entity only ever
@@ -391,6 +408,17 @@ structural rather than aspirational.
   `SavedStateHandle`; nothing else has to.
 - **Rust shells** (web, Linux-native): consume `bolted-core` + feature crates directly; zero
   FFI; the web target also enforces `wasm32-unknown-unknown` discipline on the whole core.
+- **Daemon topology (D30–D32)**: activation is per-OS in mechanism, identical in shape — launchd is
+  one C call (`launch_activate_socket`, no env protocol), systemd is one env protocol
+  (`LISTEN_PID`/`LISTEN_FDS`, fds from 3, no call); both hand a shared serve loop its
+  `Vec<UnixListener>` (~40 lines per OS, measured in step 20). Single instance is the launchd label
+  / systemd unit identity — never a lock file. `connect(2)` success is **not** daemon liveness under
+  socket activation, on either OS: clients open-then-verify (ping before believing). Path wrinkles,
+  priced: launchd does not expand `$HOME` in `SockPathName` (a signed bundle must bake a per-user
+  absolute path at assembly time); systemd leaves the socket *file* behind on socket-unit stop
+  unless `RemoveOnStop=yes`; user units get `%t` (`$XDG_RUNTIME_DIR`) expansion for free. Peer
+  authentication beyond same-user filesystem permission on a user-private directory is out of v1's
+  scope (D30).
 - **BoltFFI's bindgen reads source text, not expanded Rust.** It `read_to_string`s the crate's files
   and parses them with `syn`, walking `mod` declarations. A `#[data]` emitted by a proc macro, or
   `include!`d from `OUT_DIR`, is **silently absent** from the generated bindings — `boltffi generate`
@@ -471,6 +499,10 @@ what, and why it was worth it.
 | **D27** — the stash envelope is **versioned, parse-don't-validate data**: the schema version is stamped into the *generated* stash DTO from the declaration; an envelope that fails the version/shape gate is refused **wholesale and typed**; inside a parsed envelope, restore salvages **per field** (step 07's degradation stands) and never refuses; constraint *tightening* is a **build-time** event — `bolted-check`'s constraint-semver snapshot (Phase 4) fails the build until the team makes a version decision | Refuse the whole stash whenever any field is stale; or bump the version on every constraint change so old stashes die at the gate; or the status quo — a hand-written shell codec owning an ad-hoc `FORMAT_VERSION` | Step-12 design pass. The raws inside a stash are the user's own keystrokes, and C06 already gives an unparseable raw a home (`Invalid { raw }`) — refusing them all because *one* field's constraints tightened is data loss as policy, the bug live-rebase exists to prevent; so the semantic case keeps per-field degradation (`base` → `None`). The degraded field is then *dirty from unset*, so the next rebase against live canonical must surface it as a **conflict** the UI already renders — a claim step 12 tests (C23) rather than assumes. The *structural* case is different: an envelope that cannot be parsed has nothing to salvage, and refusing it wholesale is just tier 1 applied to the envelope. The deciding fact is where today's only version gate lives: `StashCodec.kt`, a hand-written shell file that step 12's codec-deletion item would otherwise silently delete — the version therefore moves into the generated stash DTO, and the gate travels with the generated codec. What no runtime path can do is *warn the team* that a tightening happened; that is the build-time rung, and it is `bolted-check`'s (Phase 4). Costs nothing in the core: `Stashable::from_stash` stays infallible — the gate is at the DTO boundary, where the untrusted bytes are |
 | **D28** — foreign-language artifacts (the stash codec, the per-language contract tests) are **committed generated source** — D22, one language out. `bolted-ffi-gen` grows per-language emitters over `bolted-decl::Feature` (D25: one parser, another emitter); the emitted Kotlin/Swift lives at a source path the platform build already compiles, carries the `@generated` banner, and is **byte-compared** by the drift check inside `mise run check`. Emission is string-building in plain Rust — no template engine | Generate at platform build time (a Gradle task / SPM build-tool plugin writing into `build/`); a template engine over `.kt.jinja` files; wait for upstream filing 04 (public DTO wire ser/de) to land; keep hand-writing the foreign files | Step-13 design pass. Step 12 proved the need three ways at once: the codec deletion, the checker helper and the Sendable extension all converted for the *single* reason that the generator emits only Rust. Build-time generation loses everything D22 was chosen for — the output escapes review, no compiler judges it inside `check`, and the generator moves behind Gradle/Xcode, so the one verb every machine runs stops seeing drift. Byte-comparison is honest here in a way it could not be for Rust *because nothing else owns these files*: no formatter rewrites them (rustfmt forced D22 to compare code, not bytes), and the check environment has no Kotlin/Swift parser — pretending to normalise would mean maintaining a second grammar. A template engine is a second source of truth with no compiler on it, and the askama-class tooling already cost this repo a CLI-install workaround (step 02). Waiting on filing 04 blocks Phase 3 on someone else's release — D22 rejected that once — and it retires only the codec, never the contract tests |
 | **D29** — §1 is rewritten to the **store-owned** shape that shipped; the unwritten `Feature (State / Msg / Caps / update)` trait is **struck**, and the never-implemented `command` verb is demoted to §9 | Design `State`/`Msg`/`Caps`/`update` now so a Phase-4 harness has a trait to sit on; or leave §1 as aspiration and reconcile it after Phase 4 | Step-16 planning pass, discharging §9's "largest undischarged claim in the architecture". Six spikes and four shells drive `Store` and `Draft` directly and pass C01–C23 — the code has *been* the design since step 01, and §1's Elm core was the drift. Designing the trait now would make the spikes retroactively wrong and would design `State`/`Msg`/`update` from **zero examples**, the D20/D21 error twice-affirmed; the name `Feature` is meanwhile taken by `bolted_decl::Feature` (D25). Effects-as-data survives — it is what the sans-io row proved (`spawn_local` → a bare `CheckToken`) — so what is struck is the update-loop trait nothing ever implemented, not the effect model. The `command` verb goes to §9 for the same reason: zero of six spikes needed a session-less mutation, and a shape justified by no example is a guess (D20). D21's row stands as the historical record that first flagged this; this row closes it |
+| **D30** — the store has **one owner**; the **daemon-owned** topology is blessed as the second deployment shape. When any surface lives outside the app process, the store moves into an OS-managed daemon and *every* surface — the main window included — attaches over the wire; the embedded topology stays the default for single-process products. Single instance is the OS's (launchd label / systemd unit identity), never a lock file; the socket is guarded by same-user filesystem permission on a user-private directory, and authenticated/hostile-peer surfaces are out of v1's scope | A hybrid — the UI embeds the core while a daemon owns a second store for background surfaces; or always-daemon, even for plain windowed apps; or per-surface embedded cores reconciled through storage | Topology design pass, closing §9's process-topology bullet on the Phase-5 evidence (steps 18–20). The daemon arm is priced and cheap: the contract crossed a Unix socket **values-only** with no framework crate touched (H1), a sandboxed Developer-ID Finder extension reached the group-container socket with **zero prompts** (R2/G3, EPERM controls run first), a full SwiftUI editor ran the whole contract — echo rule, conflicts, async check, stash-restore across a real `kill -9` — at ~100 µs/keystroke against a 16 ms bar (U1–U5), and the same topology re-confirmed **byte-unmodified** under systemd (P1, L1–L5). Every hybrid is two canonicals: "canonical is never mid-edit" is a statement about *the* store, and reconciling two of them is a merge protocol — the perimeter §4 already refuses. Always-daemon inverts the cost: a plain windowed product would pay a process boundary for nothing, and Phases 1–4 prove embedded needs no wire. The latency numbers say either topology is affordable (26–150× headroom everywhere measured), so the decision is about state ownership, exactly as step 18 framed it. Single-instance refusals were recorded verbatim on both OSes (A2/S4, L2); peer auth beyond same-user was priced in step 18 (audit-token → code-signing pushes toward XPC for authenticated surfaces) and deliberately deferred |
+| **D31** — the contract crosses process boundaries **values-only over a generated wire**: `bolted-ffi-gen` grows wire emitters (the D22/D28 road) — per feature a Rust wire crate + daemon plumbing, per language a mirror + **two client shapes** (blocking, push-demultiplexer), all committed generated source; the generated client library owes **open-then-verify** and the **continuous-stash idiom** unconditionally. Priced now ([the price list](steps/artifacts/topology-wire-pricing.md)), emitted as its own step when the first product feature needs the daemon topology | Hand-written wire per product; a generic RPC/reflection layer shared across features; or building the emitter in this pass | Topology design pass. The spike's hand-written wire is the existence proof *and* the price list: 486 lines of Rust protocol + 672 of daemon body per feature, ~600 per foreign language, **zero bolted dependencies** — values-only held to the end (kill criterion 3 never approached): tier-1 refusals crossed with params intact, tier-2/check verdicts crossed as the same `validate()` report an in-process shell reads, single-flight held with the driver in another process (B2, watched red first). Hand-writing that per product is exactly the glue-fails-at-runtime VISION forbids; a generic RPC layer must either serialize judgements (kill criterion 3) or reflect (rung 4, out permanently). Building the emitter now would design it against one consumer that is a disposable spike — the D20 discipline — so the requirements are banked instead: `CheckToken` never crosses (correlation-id registry), verdicts as closed data (declared `failed_key`), object shapes not serde tuples, tick versions make un-serialized push ordering safe, `AlreadySubmitted` flattening to `UnknownDraft` at the connection-ownership gate ruled an acceptable *transport* refusal, the stash blob client-kept and re-entering through D27's gate |
+| **D32** — daemon lifecycle is **OS-owned at rung 3**: socket activation (launchd `Sockets` / systemd socket units) + label/unit identity + idle-exit, from generated plists/units; no `KeepAlive`, no `Restart=always`. The steady state has a name — **on while any surface lives**: a persistent surface holding a connection keeps the daemon resident, a crashed daemon is resurrected by the next connect (surfaces run reconnect loops over open-then-verify), and a product with no live surface pays nothing | `KeepAlive`/`Restart=always` (an unconditionally resident daemon); client-managed spawn with lock files; or forcing idle-exit under persistent surfaces | Topology design pass. All three probes bought the same bargain at the same price: activation, single-instance and respawn-on-next-connect came from ~20 lines of configuration per OS, exercised as A1–A4, S1–S4 (SMAppService: **zero** approval steps) and L1–L4 (systemd; the user-unit posture priced at zero ceremony too). Step 19's M4 finding is the heart of the naming: with a FinderSync extension holding a connection, idle-exit never fires — that is the *intended* semantics, not a defect, because a surface that exists is expressing demand; forcing idle-exit under it would churn kill/respawn for nothing. `Restart=always` hides crash loops and pays residency with zero surfaces; hand-rolled lock files are the rung-4 single-instance the OS already owns (the verbatim A2/L2 refusals are the evidence). The reconnect loop healed the topology in the probe — kill -9 → the observing extension's next connect respawned the daemon through the socket unit — and step 20 bounded the good case (~45 ms queued-connect accept) while keeping the launchd limbo as the case the client library must survive |
+| **D33** — the `command` verb graduates: **a command is a scratch-draft transaction** — checkout → mutate → commit (re-validates everything) → close — with refusals typed as `CommitError`; `apply_canonical` is never a shell-reachable mutation path. The contract rule is law now; macro/DSL stamping and core packaging wait for the first framework consumer (the composite-value posture, D20) | Keep it demoted to §9; a bespoke validate-then-apply path that skips the draft; or a full DSL + core helper designed now | Topology design pass, on the reopening condition §9 itself set ("when a real feature needs a session-less mutation"): the campaign produced one — `toggle_paused`, driven from a Finder context menu (G5, human-executed) and a tray, surfaces that structurally cannot host an edit session. The hand-written shape taught the hazard that decides the design: tier-1 validity is free for a canonical-to-canonical mutation, but **`apply_canonical` runs no tier-2 rules** — a command that skips the scratch checkout can write a canonical no draft could ever submit, and today only discipline prevents it: a rung-4 mechanic, which the founding rule forbids. Routing commands through `commit` makes "submit re-validates everything, always" bind session-less mutations *by construction* and re-derives nothing (§5's rule: the gates live in `commit_gates`, once — a bespoke validate-then-apply path is precisely that re-derivation). Designing the DSL now from one example would repeat D20's error; the blessed shape is not a guess — it is the one the spike shipped and probed (B3 fan-out to open drafts, G5 end-to-end) |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -478,16 +510,6 @@ Each names the step that owns it. Nothing below blocks Phase 3.
 
 - **One-shot effects** (focus-first-invalid-field, toasts, **navigation**) — *its own session.*
   Likely `Option<(Request, Generation)>` state + ack, but navigation deserves the session.
-- **Process topology for OS-integration surfaces** (daemons, tray, file-manager extensions) — *its own
-  spike, after Phase 2.* Where the core runs (embedded vs daemon), how sandboxed extension processes
-  reach it (the contract over IPC?), single-instance ownership. Nothing in Phases 1–3 depends on it.
-- **The `command` verb** — *reopens when a real feature needs a session-less mutation.* §1's original
-  CQRS triad included `command` (`toggle_x() -> Result<(), CmdError>`, a one-field validate-or-reject
-  with no edit session); six spikes and four shells implemented it **zero times** — every mutation is
-  a draft. D29 struck it from the shipped contract rather than design it from no examples (the D20
-  precedent). When a feature genuinely wants a session-less mutation, this question owns its design;
-  until then the shape would be a guess. *(This is the residue of §9's former "the `Feature` trait is
-  unwritten" question — the trait itself is closed by D29 below.)*
 - **Composite value objects in `#[bolted::value]`** — *whenever a second one exists.* D20 scopes the
   macro to newtypes, so `DateRange` (raw `(Date, Date)`, invariant across two parts) stays
   hand-written. A composite needs struct-shaped parts, a tuple raw, and a cross-field invariant — a
@@ -509,8 +531,14 @@ to `snapshot()` is not, and no split `begin`/`complete` across FFI is needed to 
 C22's count; the use-after-close half stays an upstream filing) · *stash schema evolution* → **D27**
 (versioned envelope, wholesale refusal only at the parse gate, per-field salvage inside it; tightening
 becomes a build-time `bolted-check` event in Phase 4) · *the `Feature` trait / §1's Elm framing* →
-**D29** (struck: §1 rewritten to the store-owned shape that shipped; the never-built `command` verb is
-all that remains, demoted to the open question above).
+**D29** (struck: §1 rewritten to the store-owned shape that shipped; the never-built `command` verb
+was demoted to §9 — and has since graduated, D33) · *process topology* → **D30** (one store, one
+owner; the daemon-owned topology blessed, every surface attaches), with the wire as **D31**
+(generated, values-only, priced in
+[topology-wire-pricing.md](steps/artifacts/topology-wire-pricing.md)) and lifecycle as **D32**
+(OS-owned; steady state "on while any surface lives") — the Phase-5 campaign, steps 18–20, is the
+evidence · *the `command` verb* → **D33** (a scratch-draft transaction; DSL/core packaging wait for
+the first framework consumer).
 
 ## 10. Prior art
 
