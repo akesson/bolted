@@ -29,9 +29,18 @@ fn adopts_a_staged_listener_and_serves() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     unsafe {
-        // SAFETY: only async-signal-safe calls after fork; dup2 qualifies.
+        // SAFETY: only async-signal-safe calls after fork; dup2/fcntl qualify.
         cmd.pre_exec(move || {
-            if libc::dup2(fd, 3) == -1 {
+            if fd == 3 {
+                // dup2(3,3) is a no-op that would LEAVE CLOEXEC SET and kill the fd on exec
+                // (whether the listener lands on 3 depends on which parallel test bound
+                // first — this was a real flake). Clear the flag instead, the same dance
+                // systemd's own fd staging does.
+                let flags = libc::fcntl(3, libc::F_GETFD);
+                if flags == -1 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(fd, 3) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

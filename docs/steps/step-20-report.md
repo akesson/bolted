@@ -136,6 +136,12 @@ native ping), i.e. it is virtualization overhead on the syscall path, not core w
 - `syncctl` prints `Pong` (Debug formatting); the harness grepped `pong`. Case bit once.
 - `docker exec` without `-i` has **no stdin** — the L5 blob initially piped into a `read` that
   got instant EOF. Passed as argv instead. (Second organic red — the harness caught both.)
+- **`dup2(3,3)` is a no-op that leaves CLOEXEC set** — when the staged listener happened to
+  already *be* fd 3 (parallel-test fd layout), the exec killed it and the daemon silently
+  served nothing; the ping timed out 10 s later. A real intermittent red (2-in-8), caught by
+  `mise run check` post-M3 and fixed with the same clear-the-flag dance systemd's own fd
+  staging does. The subtlety is inherent to the protocol's "fds start at 3" contract — worth
+  remembering if a generated shim ever *stages* (not just adopts) these fds, e.g. in its tests.
 - The launchd module having *never been compilable on Linux* went unnoticed through steps 18–19
   because nothing ever built the spike for Linux — exactly the kind of latent breakage a
   re-confirmation step exists to surface.
