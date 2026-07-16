@@ -176,8 +176,10 @@ screenshot-verified mechanically; every non-pixel aspect of both paths is assert
   interval, active state) plus `Daemon: enabled` (SMAppService status); a human-driven toggle
   from this menu propagated to the extension (`watching … paused=false v=3` in the appex log) —
   the app→daemon→extension fan-out under a real hand.
-- **G5 (the command from Finder's context menu): still pending a right-click** — the code path
-  ships and logs (`G5 context-menu toggle`); no click had landed at report time.
+- **G5 (the command from Finder's context menu): CONFIRMED** — two human right-clicks in the
+  Finder window round-tripped the session-less command (appex log: `G5 context-menu toggle ->
+  toggled paused=false` at v=5, then `toggled paused=true` at v=6), each followed by the
+  fan-out tick re-watching (`watching … v=5` / `v=6`). Every manual row is now closed.
 
 ## Deviations (smallest-reversible, recorded)
 
