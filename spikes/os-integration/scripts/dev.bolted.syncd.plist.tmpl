@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Step 18 M4: the user LaunchAgent, socket-activated (recon R1). The label is the
+	     single-instance authority: one label, one service, per GUI domain. launchd owns the
+	     socket file and holds the listener; syncd is spawned on first connect and adopts the
+	     fd via launch_activate_socket. No RunAtLoad, no KeepAlive: on-demand is the point.
+	     @SYNCD@ and @SOCKET@ are stamped by test-launchd.sh (rung 3: a plist the build emits). -->
+	<key>Label</key>
+	<string>dev.bolted.syncd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@SYNCD@</string>
+		<string>--launchd</string>
+		<string>--idle-exit-secs</string>
+		<string>4</string>
+	</array>
+	<key>Sockets</key>
+	<dict>
+		<key>Listener</key>
+		<dict>
+			<key>SockPathName</key>
+			<string>@SOCKET@</string>
+			<key>SockFamily</key>
+			<string>Unix</string>
+		</dict>
+	</dict>
+	<key>StandardErrorPath</key>
+	<string>@LOG@</string>
+</dict>
+</plist>
