@@ -8,3 +8,6 @@ publish.workspace = true
 bolted-core = { path = "../../../../crates/bolted-core" }
 sync-settings = { path = "../sync-settings" }
 sync-wire = { path = "../sync-wire" }
+# syncctl's F1 verbs print/parse a StashWire as a bare JSON blob (no envelope — it is a file the
+# client keeps, not a frame the daemon reads unversioned; restore travels inside the envelope).
+serde_json = "1"

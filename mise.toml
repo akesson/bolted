@@ -524,6 +524,12 @@ dotnet test --logger "trx;LogFileName=profile-probe.trx" "$@"
 description = "Step 18 M3: the sandbox verdict (C1/C2/C3) — needs Xcode + a Developer ID identity."
 run = "sh spikes/os-integration/scripts/test-sandbox.sh"
 
+# Machine-bound AND session-bound: bootstraps a LaunchAgent into this user's GUI domain (and
+# boots it out again on exit). Like bench:android:device, this can never ride inside `check`.
+[tasks."test:os:launchd"]
+description = "Step 18 M4: launchd lifecycle (A1-A4) + stash across a real daemon kill -9 (F1)."
+run = "sh spikes/os-integration/scripts/test-launchd.sh"
+
 [tasks."run:apple"]
 description = "Run the SwiftUI profile spike app (a GUI window; for the manual protocol)."
 depends = ["pack:apple"]

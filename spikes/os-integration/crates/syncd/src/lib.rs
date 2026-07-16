@@ -79,6 +79,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// How many connections are live — the bin's idle-exit sweeper polls this (A4). The lifecycle
+/// judgement (when to exit) stays in the bin; the library only reports the number.
+pub fn connection_count(shared: &Arc<Mutex<Shared>>) -> usize {
+    lock(shared).conns.len()
+}
+
 // =================================================================================================
 // Serving
 // =================================================================================================
