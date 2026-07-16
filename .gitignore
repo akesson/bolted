@@ -62,3 +62,6 @@ android/gen-profile-smoke/local.properties
 csharp/profile-probe/bin/
 csharp/profile-probe/obj/
 csharp/profile-probe/TestResults/
+
+# Step 18 — OS-integration spike: the Swift probe's build output (mise run test:os:sandbox).
+spikes/os-integration/apple/sync-probe/.build/

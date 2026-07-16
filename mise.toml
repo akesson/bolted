@@ -515,6 +515,15 @@ rm -rf "${NUGET_PACKAGES:-$HOME/.nuget/packages}/gen_profile_ffi"
 dotnet test --logger "trx;LogFileName=profile-probe.trx" "$@"
 """
 
+# --- Step 18: the OS-integration spike (spikes/os-integration). Separate machine-bound verbs,
+# deliberately NOT part of `check` (which stays host-only: no Xcode, no codesign, no launchctl).
+# The spike's Rust crates ARE workspace members, so `check` builds and tests them like everything
+# else; only the OS-facing tiers live behind these verbs. ---
+
+[tasks."test:os:sandbox"]
+description = "Step 18 M3: the sandbox verdict (C1/C2/C3) — needs Xcode + a Developer ID identity."
+run = "sh spikes/os-integration/scripts/test-sandbox.sh"
+
 [tasks."run:apple"]
 description = "Run the SwiftUI profile spike app (a GUI window; for the manual protocol)."
 depends = ["pack:apple"]
