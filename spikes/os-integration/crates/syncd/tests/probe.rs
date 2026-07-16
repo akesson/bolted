@@ -422,6 +422,8 @@ fn e1_live_rebase_and_conflict_across_processes() {
 }
 
 #[test]
+// Wall-clock is the point here: a real deadline on the daemon's async cleanup, not core state.
+#[allow(clippy::disallowed_methods)]
 fn e2_disconnect_prunes_the_connections_drafts() {
     let path = start_daemon();
     let mut b = Client::connect(&path).expect("connect b");

@@ -85,6 +85,8 @@ fn percentiles(label: &str, mut samples: Vec<u128>) {
     );
 }
 
+// Wall-clock is the measurement itself here (probe row D latencies), not core state.
+#[allow(clippy::disallowed_methods)]
 fn measure(n: usize, mut op: impl FnMut(usize) -> bool) -> Result<Vec<u128>, ()> {
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
