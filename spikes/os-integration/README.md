@@ -29,6 +29,9 @@ the evidence ARCHITECTURE §9 reserved for exactly this:
   draft ownership, push ticks on canonical change.
 - `apple/` — the Swift probe clients (M3+): envelope proof unsandboxed, then the sandboxed
   app-group variant for probe row C.
+- `linux/` — step 20: the Docker image (pinned Rust + systemd) and the `syncd.socket` /
+  `syncd.service` units; driven by `mise run test:os:linux` (contract + numbers) and
+  `test:os:systemd` (lifecycle rows in a systemd-PID-1 container).
 
 The spike crates are workspace members so `mise run check` compiles, clippys and tests them like
 everything else. `check` gains no new external requirement from this directory.
