@@ -32,7 +32,7 @@ work around them.
 | — | The `Feature` trait | design session | **done** — resolved as **D29** (ARCHITECTURE **v1.8**, step-16 planning pass): §1 rewritten to the store-owned shape that shipped, the unwritten trait struck, the never-built `command` verb demoted to §9. Phase 4's gate is discharged |
 | 16 | `bolted-check`: the constraint-surface snapshot | 4 — Harness | **done** — [plan](steps/step-16-bolted-check.md) · [report](steps/step-16-report.md); the third emitter over the one parser (D25). A committed, human-readable, byte-checked `.snap` per feature — a constraint *tightening* now fails the build at the exact line and names the `STASH_SCHEMA_VERSION` duty (D27), where every existing drift check was blind to it. Composites covered via a runtime section; renderer stays pure |
 | 17 | Web shell onto `gen-profile` + the wasm size budget | 4 — Harness | **done** — [plan](steps/step-17-wasm-size-budget.md) · [report](steps/step-17-report.md); the last shell leaves the spike (`profile-web` on `gen-profile`, 35+8+2 tests green **unmodified** + a real-browser pass), and a wasm size budget guards the **macro path** via a new `check:web` verb (the `wasm-budget` bin behind a `budget` feature keeps brotli out of the host graph). Macro output weighs **+475 B raw (~0.15%)** over hand-written; every budget red watched then restored green. No kill criteria hit |
-| 18 | OS-integration spike I: macOS process-topology probe | 5 — OS spike | **ready** — [plan](steps/step-18-os-topology-probe.md) |
+| 18 | OS-integration spike I: macOS process-topology probe | 5 — OS spike | **done** — [plan](steps/step-18-os-topology-probe.md) · [report](steps/step-18-report.md) |
 | 19+ | OS spike II (Finder-citizen app) · Linux/systemd probe · topology design pass · harness cont. (capability coverage, `doctor`, `bolted new`) · C# resume (tripwire-gated) | — | sketched — see Phase 5 |
 
 ## Phase 1 — Design validation spike
@@ -366,17 +366,16 @@ deletable once its findings land in ARCHITECTURE. Campaign-1 crates (`spike-*`, 
 subjects), and 17+ files including byte-checked generated fixtures hard-code their paths — a
 retro-move is churn without payoff.
 
-- **Step 18 — macOS process-topology probe.** *Detailed step doc exists — ready.* Headless, no UI.
-  A macro-declared `sync-settings` vehicle feature; `syncd`, a pure-Rust zero-FFI daemon (std
-  threads, no tokio) owning the store; `sync-wire`, a hand-written as-if-generated protocol
-  (D27-style versioned envelope, values-only, connection-scoped draft ownership); a Swift probe
-  client, then the same client sandboxed + app-group — the campaign's riskiest unknown, probed
-  early. launchd tier: socket activation, single-instance, crash-respawn, and D27 stash/restore
-  across a daemon `kill -9`. Kill bars: sandbox unreachable by any rung; keystroke pair over the
-  socket > 1.0 ms p50; the wire forced to make validity judgements; launchd unable to own
-  single-instance. Also banks the first real evidence for §9's demoted `command` verb
-  (`toggle_paused` — a session-less mutation, hand-written, not designed).
-- **Step 19 — the Finder-citizen spike app (sketched).** Step 03's analog on step 18's seam: a
+- **Step 18 — macOS process-topology probe. DONE — no kill criterion hit; every probe row
+  executed** ([report](steps/step-18-report.md)). The daemon-owned topology is viable as drawn:
+  the contract crossed the wire values-only (H1), the sandboxed Developer-ID client reached the
+  app-group socket with zero prompts (R2 — the campaign's riskiest unknown, cleared), launchd
+  owns activation/single-instance/respawn at rung 3 (R1), the stash survived a real daemon
+  `kill -9` (H6), and the keystroke pair measured 26–45 µs against the 1.0 ms kill bar. Banked:
+  the `command`-verb evidence (tier-2 rules are NOT free for session-less mutations), the
+  wire-generator requirements (token registry, closed verdicts, tuple shapes), and the priced
+  sandbox ceremony (incl. the `__info_plist` bundle-identity trap). Step 19 is now unblocked.
+- **Step 19 — the Finder-citizen spike app (sketched, next to author).** Step 03's analog on step 18's seam: a
   real menu-bar app (SMAppService registration) + a real FinderSync extension drawing badge state
   and issuing the session-less command from a context menu — the first OS-spawned sandboxed
   process on the wire. Authored only after 18 reports.
