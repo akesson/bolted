@@ -19,3 +19,4 @@
 - [C# backend check driver broken](csharp-backend-check-driver-broken.md) — MarshalAs(I1) on an FfiBuf return breaks run_*_check; killed step 14; STILL broken at 0.27.5 (step 15 branch B); v1.7 §4/§6/D26; upstream kit filed by owner only
 - [bolted-check analyses split on runtime facts](bolted-check-analyses-split-on-runtime-facts.md) — step 16: a snapshot needing composites/schema-version can't be a pure bin (generator lives in the -ffi crate as an example); constraint bounds are invisible to the FFI drift layer, so the snapshot reads runtime constraints()
 - [Artifact SVGs must not use theme tokens](artifact-svg-must-not-use-theme-tokens.md) — the viewer's dark transform inverts HTML colors but not SVG fills; use currentColor + alpha fills, and screenshot each figure to verify
+- [PR-based workflow](pr-based-workflow.md) — branch + PR since 2026-07-16; never commit/push main directly
