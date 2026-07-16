@@ -14,6 +14,9 @@
 >
 > The branch's ROADMAP edits were dropped outright as superseded by main's roadmap; the
 > branch's step-02 findings live at `crates/spike-profile-ffi-stall-probe/docs/`.
+>
+> **Per-delta merge triage against v1.8: [core-evolution-triage.md](core-evolution-triage.md)**
+> — the design session's input; read it instead of diffing this snapshot by hand.
 
 # Bolted — Architecture
 
