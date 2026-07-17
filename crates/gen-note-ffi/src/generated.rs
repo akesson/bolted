@@ -388,6 +388,10 @@ impl NoteStoreFfi {
     }
     /// Check out a draft. Existing-canonical checkouts register for live rebase; create-flow
     /// checkouts do not (C12).
+    ///
+    /// Every declared capability is an explicit argument (D34): forgetting one is a compile
+    /// error at the call site, and `None` is a *declared* absence — the check then never
+    /// runs, and C16 refuses a dirty pinned field at commit.
     pub fn checkout(&self) -> NoteDraftFfi {
         let mut g = lock(&self.core);
         let id = g.store.checkout();
@@ -422,7 +426,8 @@ impl NoteStoreFfi {
     /// was dead comes back **conflicted**, not silently dirty over a base it never saw.
     ///
     /// Takes only a #accepted, so a stash that never passed `accept_stash`'s version gate
-    /// cannot reach here — parse-don't-validate carried in the type (D27).
+    /// cannot reach here — parse-don't-validate carried in the type (D27). Capabilities are
+    /// explicit arguments here exactly as on `checkout` (D34): a restored draft is a draft.
     pub fn restore(&self, accepted: NoteStashAcceptedFfi) -> NoteDraftFfi {
         let mut g = lock(&self.core);
         let id = g.store.restore(&to_core_stash(&accepted.stash));

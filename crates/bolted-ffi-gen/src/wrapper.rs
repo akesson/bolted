@@ -234,6 +234,7 @@ pub fn store_class(feature: &Feature) -> TokenStream2 {
     let field_id = suffixed(entity, "FieldId");
 
     let checker_slots = checker_slots(feature);
+    let checker_params = checker_params(feature);
 
     quote! {
         pub struct #store_ffi {
@@ -292,7 +293,11 @@ pub fn store_class(feature: &Feature) -> TokenStream2 {
 
             /// Check out a draft. Existing-canonical checkouts register for live rebase; create-flow
             /// checkouts do not (C12).
-            pub fn checkout(&self) -> #draft_ffi {
+            ///
+            /// Every declared capability is an explicit argument (D34): forgetting one is a compile
+            /// error at the call site, and `None` is a *declared* absence — the check then never
+            /// runs, and C16 refuses a dirty pinned field at commit.
+            pub fn checkout(&self #checker_params) -> #draft_ffi {
                 let mut g = lock(&self.core);
                 let id = g.store.checkout();
                 let producer = register_producer(&mut g, id);
@@ -324,8 +329,9 @@ pub fn store_class(feature: &Feature) -> TokenStream2 {
             /// was dead comes back **conflicted**, not silently dirty over a base it never saw.
             ///
             /// Takes only a #accepted, so a stash that never passed `accept_stash`'s version gate
-            /// cannot reach here — parse-don't-validate carried in the type (D27).
-            pub fn restore(&self, accepted: #accepted) -> #draft_ffi {
+            /// cannot reach here — parse-don't-validate carried in the type (D27). Capabilities are
+            /// explicit arguments here exactly as on `checkout` (D34): a restored draft is a draft.
+            pub fn restore(&self, accepted: #accepted #checker_params) -> #draft_ffi {
                 let mut g = lock(&self.core);
                 let id = g.store.restore(&to_core_stash(&accepted.stash));
                 let producer = register_producer(&mut g, id);
@@ -376,7 +382,9 @@ pub fn store_class(feature: &Feature) -> TokenStream2 {
     }
 }
 
-/// `username_checker: Mutex::new(None), ` — the struct-literal tail shared by `checkout`/`restore`.
+/// `username_checker: Mutex::new(username_checker), ` — the struct-literal tail shared by
+/// `checkout`/`restore`. The slot is filled from the entry point's own parameter (D34); `None`
+/// can only be a *declared* absence, never a forgotten wiring.
 fn checker_slots(feature: &Feature) -> TokenStream2 {
     let slots = feature
         .entity
@@ -385,9 +393,26 @@ fn checker_slots(feature: &Feature) -> TokenStream2 {
         .filter(|f| f.check.is_some())
         .map(|f| {
             let slot = format_ident!("{}_checker", f.ident);
-            quote!(#slot: Mutex::new(None))
+            quote!(#slot: Mutex::new(#slot))
         });
     quote!(#(#slots),*)
+}
+
+/// `, username_checker: Option<Box<dyn UsernameChecker>>` — the parameter tail `checkout` and
+/// `restore` share (D34: the capability is an explicit optional argument; there is no setter).
+/// Empty for a feature with no `#[check(..)]`, so `gen-note`'s surface does not move.
+fn checker_params(feature: &Feature) -> TokenStream2 {
+    let params = feature
+        .entity
+        .fields
+        .iter()
+        .filter(|f| f.check.is_some())
+        .map(|f| {
+            let param = format_ident!("{}_checker", f.ident);
+            let trait_name = format_ident!("{}Checker", bolted_decl::naming::upper_camel(&f.ident));
+            quote!(, #param: Option<Box<dyn #trait_name>>)
+        });
+    quote!(#(#params)*)
 }
 
 pub fn draft_class(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 {
@@ -434,32 +459,28 @@ pub fn draft_class(feature: &Feature, fields: &[FieldProj<'_>]) -> TokenStream2 
     let check_drivers = fields.iter().filter_map(|p| {
         let check = p.field.check.as_ref()?;
         let id = p.ident();
-        let (setter, runner) = (
-            format_ident!("set_{}_checker", id),
-            format_ident!("run_{}_check", id),
-        );
-        let (slot, trait_name) = (format_ident!("{}_checker", id), checker_trait_name(p));
+        let runner = format_ident!("run_{}_check", id);
+        let slot = format_ident!("{}_checker", id);
         let variant = &check.variant;
         let failed_key = &check.failed_key;
         // The checked field's text, for the foreign call. Only `Raw = String` checks are generated
         // this way; a custom checked field would need its own `text_of`, and no feature has one.
         let text = quote!(bolted_ffi::text_of(&draft.#id));
         Some(quote! {
-            pub fn #setter(&self, checker: Box<dyn #trait_name>) {
-                *lock(&self.#slot) = Some(checker);
-            }
-
             /// Drive one single-flight check: begin (emit a `Pending` snapshot), call the foreign
-            /// checker with **no lock held**, complete (emit the verdict). `Ok(false)` means no
-            /// checker is set on a *live* draft; a released draft refuses (D23), checker or not.
+            /// checker with **no lock held**, complete (emit the verdict). `Ok(false)` means the
+            /// capability was a *declared* absence at checkout/restore (D34) — or this is a
+            /// reentrant call while the outcall below holds the checker. A released draft refuses
+            /// (D23), capability or not.
             ///
             /// The core discards a superseded token, so a verdict that lands after the value moved is
             /// dropped rather than applied (C13).
             pub fn #runner(&self) -> ::core::result::Result<bool, DraftClosedFfi> {
                 // D23: a released draft refuses unconditionally. This gate runs BEFORE the
-                // no-checker short-circuit, so a dead draft with no checker still refuses (typed)
-                // instead of answering `Ok(false)` -- which is reserved for a live draft with no
-                // checker. Its own lock scope: the checker outcall below must hold no lock.
+                // no-capability short-circuit, so a dead draft with a declared-absent capability
+                // still refuses (typed) instead of answering `Ok(false)` -- which is reserved for
+                // a live draft whose capability is absent (or momentarily taken by a reentrant
+                // outcall). Its own lock scope: the checker outcall below must hold no lock.
                 if lock(&self.core).store.draft_mut(self.id).is_none() {
                     return Err(DraftClosedFfi::DraftClosed);
                 }

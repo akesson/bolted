@@ -252,6 +252,12 @@ fn a_feature_without_checks_or_composites_pays_for_neither() {
     assert!(src.contains("pub fn try_set_title"));
     assert!(src.contains("pub fn submit"));
     assert!(src.contains("enum NoteFieldId"));
+    // D34's parameter tail is per declared check, so a check-less feature's entry points do not
+    // move: no capability, no argument.
+    assert!(
+        src.contains("pub fn checkout(&self)"),
+        "gen-note's checkout grew a parameter"
+    );
 }
 
 /// Declaration order is observable: `dirty_fields()` walks it, and a shell focusing the first invalid
@@ -314,6 +320,35 @@ fn the_foreign_checker_is_called_outside_every_lock() {
         closes > opens,
         "the store lock is still held when the foreign checker is called: a reentrant checker \
          deadlocks, and step 02 paid for that lesson once already"
+    );
+}
+
+/// D34: the capability is an explicit optional argument of BOTH draft entry points, and the
+/// settable slot is gone. Pinned from both sides (step 10's lesson — a forbidding assertion can
+/// forbid nothing): the positive needles are read out of the parameter lists via `between`, so a
+/// prettyplease re-wrap cannot green them vacuously, and the negative needle is the setter name.
+#[test]
+fn the_capability_is_a_checkout_argument_and_nothing_else() {
+    let src = gnarly();
+    let checkout_params = between(&src, "pub fn checkout(", ")");
+    assert!(
+        checkout_params.contains("username_checker: Option<Box<dyn UsernameChecker>>"),
+        "checkout does not take the declared capability: `{checkout_params}`"
+    );
+    let restore_params = between(&src, "pub fn restore(", ")");
+    assert!(
+        restore_params.contains("username_checker: Option<Box<dyn UsernameChecker>>"),
+        "restore does not take the declared capability: `{restore_params}`"
+    );
+    assert!(
+        !src.contains("set_username_checker"),
+        "the settable slot survived: a shell can once again forget the capability silently"
+    );
+
+    // And the declared-absence path still exists: the runner's no-capability return.
+    assert!(
+        src.contains("return Ok(false);"),
+        "the declared-absence return is gone"
     );
 }
 

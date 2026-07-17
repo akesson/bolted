@@ -468,7 +468,11 @@ impl ProfileStoreFfi {
     }
     /// Check out a draft. Existing-canonical checkouts register for live rebase; create-flow
     /// checkouts do not (C12).
-    pub fn checkout(&self) -> ProfileDraftFfi {
+    ///
+    /// Every declared capability is an explicit argument (D34): forgetting one is a compile
+    /// error at the call site, and `None` is a *declared* absence — the check then never
+    /// runs, and C16 refuses a dirty pinned field at commit.
+    pub fn checkout(&self, username_checker: Option<Box<dyn UsernameChecker>>) -> ProfileDraftFfi {
         let mut g = lock(&self.core);
         let id = g.store.checkout();
         let producer = register_producer(&mut g, id);
@@ -476,7 +480,7 @@ impl ProfileStoreFfi {
             id,
             core: Arc::clone(&self.core),
             producer,
-            username_checker: Mutex::new(None),
+            username_checker: Mutex::new(username_checker),
         }
     }
     /// D27, the parse gate. A stash is the first untrusted input in the system (bytes the OS
@@ -503,8 +507,13 @@ impl ProfileStoreFfi {
     /// was dead comes back **conflicted**, not silently dirty over a base it never saw.
     ///
     /// Takes only a #accepted, so a stash that never passed `accept_stash`'s version gate
-    /// cannot reach here — parse-don't-validate carried in the type (D27).
-    pub fn restore(&self, accepted: ProfileStashAcceptedFfi) -> ProfileDraftFfi {
+    /// cannot reach here — parse-don't-validate carried in the type (D27). Capabilities are
+    /// explicit arguments here exactly as on `checkout` (D34): a restored draft is a draft.
+    pub fn restore(
+        &self,
+        accepted: ProfileStashAcceptedFfi,
+        username_checker: Option<Box<dyn UsernameChecker>>,
+    ) -> ProfileDraftFfi {
         let mut g = lock(&self.core);
         let id = g.store.restore(&to_core_stash(&accepted.stash));
         let producer = register_producer(&mut g, id);
@@ -512,7 +521,7 @@ impl ProfileStoreFfi {
             id,
             core: Arc::clone(&self.core),
             producer,
-            username_checker: Mutex::new(None),
+            username_checker: Mutex::new(username_checker),
         }
     }
     /// Declared constraints for a field. Pure metadata, so it takes no lock. A shell derives
@@ -638,12 +647,11 @@ impl ProfileDraftFfi {
     ) -> ::core::result::Result<(), DraftClosedFfi> {
         self.resolve(field, false)
     }
-    pub fn set_username_checker(&self, checker: Box<dyn UsernameChecker>) {
-        *lock(&self.username_checker) = Some(checker);
-    }
     /// Drive one single-flight check: begin (emit a `Pending` snapshot), call the foreign
-    /// checker with **no lock held**, complete (emit the verdict). `Ok(false)` means no
-    /// checker is set on a *live* draft; a released draft refuses (D23), checker or not.
+    /// checker with **no lock held**, complete (emit the verdict). `Ok(false)` means the
+    /// capability was a *declared* absence at checkout/restore (D34) — or this is a
+    /// reentrant call while the outcall below holds the checker. A released draft refuses
+    /// (D23), capability or not.
     ///
     /// The core discards a superseded token, so a verdict that lands after the value moved is
     /// dropped rather than applied (C13).
