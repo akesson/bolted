@@ -113,6 +113,17 @@ run = [
   "cargo test --workspace",
 ]
 
+# Step 22: the environment report for what mise CANNOT pin (VISION risk 5 — Xcode, the Android
+# SDK/NDK/system image, Chrome, the cargo-installed boltffi CLI). Read-only; warns, never fails
+# (always exit 0) — a machine that deliberately lacks a tier is not broken. The judgements live in
+# crates/bolted-check/src/doctor.rs, and two tests inside `check` keep them honest: every task here
+# must map to a doctor row or a recorded exemption (both directions), and doctor's boltffi version
+# literal must equal setup:boltffi's want= (tests/doctor_manifest.rs). Not to be confused with
+# `mise doctor`, mise's own health check — the two are complementary.
+[tasks.doctor]
+description = "Report the machine's un-pinnable environment per verb tier (warns, never fails)."
+run = "cargo run -q -p bolted-check --bin doctor"
+
 # --- Step 02: Apple probe (separate verbs; deliberately NOT part of `check`, so a box without
 # Xcode/the boltffi CLI still runs `check` green). See docs/steps/step-02-boltffi-probe.md. ---
 
