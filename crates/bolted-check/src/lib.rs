@@ -29,6 +29,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod doctor;
 
 use bolted_core::Constraint;
 use bolted_decl::{ErrorVariant, Feature, ParamTy, Sanitizer, Validator};
