@@ -41,7 +41,7 @@ class FreezeContractProbe {
     /** C14 (was F6): editing a conflicted field to `theirs` resolves the conflict. */
     @Test
     fun c14_editingAConflictedFieldToTheirsAutoConverges() {
-        store.checkout().use { draft ->
+        store.checkout(null).use { draft ->
             draft.trySetName("My Name")
             store.applyCanonical(SEED.copy(name = "Server Name"))
             assertTrue(draft.snapshot().name.sync is TextFieldSync.Conflicted)
@@ -65,7 +65,7 @@ class FreezeContractProbe {
      */
     @Test
     fun c15_rebaseAdvancesTheDraftBaseVersion() {
-        store.checkout().use { draft ->
+        store.checkout(null).use { draft ->
             val atCheckout = draft.snapshot().version
             store.applyCanonical(SEED.copy(name = "Server Name"))
             val afterRebase = draft.snapshot().version
@@ -81,7 +81,8 @@ class FreezeContractProbe {
     /** C16 (was F2): a dirty username whose check never ran cannot submit. */
     @Test
     fun c16_anUnrunCheckOnADirtyUsernameBlocksSubmit() {
-        store.checkout().use { draft ->
+        // The capability is present from checkout (D34): C16 binds on UNRUN, not on absent.
+        store.checkout(uniqueChecker()).use { draft ->
             draft.trySetUsername("alice2")
             assertEquals(CheckStateFfi.Unchecked, draft.snapshot().usernameCheck)
 
@@ -96,7 +97,6 @@ class FreezeContractProbe {
             }
 
             // A passing verdict unblocks it.
-            draft.setUsernameChecker(uniqueChecker())
             assertTrue(draft.runUsernameCheck())
             assertEquals(CheckStateFfi.Passed, draft.snapshot().usernameCheck)
             draft.submit()
@@ -107,7 +107,7 @@ class FreezeContractProbe {
     /** ...and the other half: a clean username needs no check, or an email edit could never submit. */
     @Test
     fun c16_aCleanUsernameNeedsNoCheckToSubmit() {
-        store.checkout().use { draft ->
+        store.checkout(null).use { draft ->
             draft.trySetEmail("bob@example.com")
             assertEquals(CheckStateFfi.Unchecked, draft.snapshot().usernameCheck)
             assertFalse(draft.snapshot().username.dirty)
@@ -123,7 +123,7 @@ class FreezeContractProbe {
      */
     @Test
     fun c17_aRefusedSubmitLeavesTheDraftAliveAndEditable() {
-        store.checkout().use { draft ->
+        store.checkout(null).use { draft ->
             draft.trySetName("My Name")
             store.applyCanonical(SEED.copy(name = "Server Name"))
 
@@ -153,11 +153,10 @@ class FreezeContractProbe {
      */
     @Test
     fun d23_aMutatorOnASubmittedDraftThrowsDraftClosed() {
-        store.checkout().use { draft ->
-            // A checker is installed here so this test exercises the corpse-WITH-checker cell; the
-            // corpse-with-NO-checker cell is its own control below (before step 12 that cell answered
-            // `false` rather than refusing — the no-checker short-circuit ran ahead of the gate).
-            draft.setUsernameChecker(uniqueChecker())
+        // A checker is supplied at checkout (D34) so this test exercises the corpse-WITH-checker
+        // cell; the corpse-with-declared-absence cell is its own control below (before step 12 that
+        // cell answered `false` rather than refusing — the short-circuit ran ahead of the gate).
+        store.checkout(uniqueChecker()).use { draft ->
             draft.submit() // C17: the store releases the draft
             assertFalse(draft.isLive())
 
@@ -190,7 +189,7 @@ class FreezeContractProbe {
      */
     @Test
     fun d23_runCheckRefusesAReleasedDraftWithNoCheckerInstalled() {
-        store.checkout().use { draft ->
+        store.checkout(null).use { draft ->
             draft.submit() // released, and NO checker was ever set
             assertFalse(draft.isLive())
 
@@ -213,7 +212,7 @@ class FreezeContractProbe {
      */
     @Test
     fun c19_aDirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() {
-        store.checkout().use { draft ->
+        store.checkout(null).use { draft ->
             draft.trySetName("My Name")
             store.applyCanonical(SEED.copy(email = "team@corp.example")) // email, and only email
 
@@ -239,12 +238,12 @@ class FreezeContractProbe {
     @Test
     fun c22_draftCountAndRebasingDraftCountAreDifferentQuestions() {
         ProfileStoreFfi().use { empty ->
-            empty.checkout().use { _ ->
+            empty.checkout(null).use { _ ->
                 assertEquals("a create-flow draft exists", 1u, empty.liveDraftCount())
                 assertEquals("and is never rebased (C12)", 0u, empty.rebasingDraftCount())
 
                 empty.applyCanonical(SEED)
-                empty.checkout().use { _ ->
+                empty.checkout(null).use { _ ->
                     assertEquals("an entity-backed checkout is both", 2u, empty.liveDraftCount())
                     assertEquals(1u, empty.rebasingDraftCount())
                 }

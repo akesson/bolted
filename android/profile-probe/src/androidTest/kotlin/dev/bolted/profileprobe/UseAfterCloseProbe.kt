@@ -29,7 +29,7 @@ class UseAfterCloseProbe {
     @Test
     fun readingAFieldAfterCloseIsUnsoundEvenWhenItAppearsToWork() {
         val store = seededStore()
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         val idWhileLive = draft.id()
         draft.close()
         assertEquals("close() must deregister the draft", 0u, store.liveDraftCount())
@@ -40,7 +40,7 @@ class UseAfterCloseProbe {
         record("h2.id_after_close", idAfterClose.map { it.toString() }.getOrElse { "threw: $it" })
 
         // Encourage the allocator to reuse the freed block, then read the dangling handle again.
-        val churn = List(64) { store.checkout() }
+        val churn = List(64) { store.checkout(null) }
         val idAfterChurn = runCatching { draft.id() }
         record("h2.id_after_churn", idAfterChurn.map { it.toString() }.getOrElse { "threw: $it" })
 
@@ -64,7 +64,7 @@ class UseAfterCloseProbe {
     @Test
     fun mutatingAfterCloseFollowsAPointerOutOfFreedMemory() {
         val store = seededStore()
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         draft.close()
 
         val outcome = runCatching { draft.trySetUsername("after_close") }
@@ -80,7 +80,7 @@ class UseAfterCloseProbe {
     @Test
     fun doubleCloseDoesNotDoubleFree() {
         val store = seededStore()
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         draft.close()
         draft.close()
         assertEquals(0u, store.liveDraftCount())

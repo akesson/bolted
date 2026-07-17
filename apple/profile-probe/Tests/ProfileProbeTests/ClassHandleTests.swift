@@ -6,7 +6,7 @@ final class ClassHandleTests: XCTestCase {
     /// Methods on a returned draft object work, and mutate observable state.
     func testMethodsOnReturnedDraftWork() throws {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetUsername(raw: "  alice  ") // value type trims
         let snap = draft.snapshot()
         XCTAssertEqual(snap.username.validity, .valid(value: "alice"))
@@ -17,7 +17,7 @@ final class ClassHandleTests: XCTestCase {
     /// object (BoltFFI forwards the handle), so ids-not-instances is NOT forced onto the contract.
     func testHandleRoundTripIdentity() {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertEqual(store.sameDraft(other: draft), draft.id())
     }
 
@@ -34,7 +34,7 @@ final class ClassHandleTests: XCTestCase {
         let store = ProfileStoreFfi()
         let baseline = store.liveDraftCount()
         do {
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             XCTAssertEqual(store.liveDraftCount(), baseline + 1)
             _ = draft.id()
         } // draft leaves scope → ARC deinit → boltffi release → Rust Drop → deregister
@@ -44,9 +44,9 @@ final class ClassHandleTests: XCTestCase {
     /// Two live drafts each register; dropping one leaves the other.
     func testMultipleDraftsCountIndependently() {
         let store = ProfileStoreFfi()
-        let keep = store.checkout()
+        let keep = store.checkout(usernameChecker: nil)
         do {
-            let temp = store.checkout()
+            let temp = store.checkout(usernameChecker: nil)
             XCTAssertEqual(store.liveDraftCount(), 2)
             _ = temp.id()
         }
@@ -62,7 +62,7 @@ final class ClassHandleTests: XCTestCase {
     func testPostSubmitTombstone() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertTrue(draft.isLive())
 
         try draft.submit()

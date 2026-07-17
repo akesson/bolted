@@ -22,7 +22,7 @@ final class FreezeContractTests: XCTestCase {
     /// convergent rebase does when the canonical change arrives second (C04).
     func testC14EditingToTheirsAutoConverges() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
 
         try draft.trySetName(raw: "My Name")
         var theirs = validValues()
@@ -50,7 +50,7 @@ final class FreezeContractTests: XCTestCase {
     /// draft stream. It fires now.
     func testC15RebaseAdvancesTheDraftBaseVersion() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let atCheckout = draft.snapshot().version
 
         var theirs = validValues()
@@ -68,7 +68,8 @@ final class FreezeContractTests: XCTestCase {
     /// straight through submit. Now the core refuses, typed and pinned.
     func testC16UnrunCheckOnADirtyUsernameBlocksSubmit() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        // The capability is present from checkout (D34): C16 binds on UNRUN, not on absent.
+        let draft = store.checkout(usernameChecker: StubChecker(.pass))
         try draft.trySetUsername(raw: "alice2")
 
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
@@ -83,7 +84,6 @@ final class FreezeContractTests: XCTestCase {
         }
 
         // Run the check; a passing verdict unblocks the submit.
-        draft.setUsernameChecker(checker: StubChecker(.pass))
         XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
         XCTAssertNoThrow(try draft.submit())
@@ -95,7 +95,7 @@ final class FreezeContractTests: XCTestCase {
     /// require a uniqueness lookup on a username nobody touched.
     func testC16CleanUsernameNeedsNoCheckToSubmit() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetEmail(raw: "bob@example.com")
 
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
@@ -108,7 +108,7 @@ final class FreezeContractTests: XCTestCase {
     /// the demand for a check goes away with it.
     func testC16RevertingTheUsernameWithdrawsTheDemandForACheck() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetUsername(raw: "alice2")
         try draft.trySetUsername(raw: "alice") // back to canonical
 
@@ -124,7 +124,7 @@ final class FreezeContractTests: XCTestCase {
     /// goes straight back, so a rejected submit never destroys an edit session (F3).
     func testC17RefusedSubmitLeavesTheDraftAliveAndEditable() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
 
         try draft.trySetName(raw: "My Name")
         var theirs = validValues()
@@ -150,7 +150,7 @@ final class FreezeContractTests: XCTestCase {
 
     func testC17SecondSubmitIsAlreadySubmitted() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertNoThrow(try draft.submit())
         XCTAssertFalse(draft.isLive())
 
@@ -169,11 +169,10 @@ final class FreezeContractTests: XCTestCase {
     /// has never failed is a needle that has never fired.
     func testD23MutatorOnASubmittedDraftThrowsDraftClosed() throws {
         let store = try seededStore()
-        let draft = store.checkout()
-        // A checker is installed here so this test exercises the corpse-WITH-checker cell; the
-        // corpse-with-NO-checker cell is its own control below (before step 12 that cell answered
-        // `false` instead of refusing — the no-checker short-circuit ran ahead of the liveness gate).
-        draft.setUsernameChecker(checker: StubChecker(.pass))
+        // A checker is supplied at checkout (D34) so this test exercises the corpse-WITH-checker
+        // cell; the corpse-with-declared-absence cell is its own control below (before step 12 that
+        // cell answered `false` instead of refusing — the short-circuit ran ahead of the liveness gate).
+        let draft = store.checkout(usernameChecker: StubChecker(.pass))
         try draft.submit() // C17: the store releases the draft
         XCTAssertFalse(draft.isLive())
 
@@ -194,7 +193,7 @@ final class FreezeContractTests: XCTestCase {
     /// generator (the liveness gate reverted, regenerated, watched fail, restored).
     func testD23RunCheckRefusesAReleasedDraftWithNoCheckerInstalled() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.submit() // released, and NO checker was ever set
         XCTAssertFalse(draft.isLive())
 
@@ -211,7 +210,7 @@ final class FreezeContractTests: XCTestCase {
     /// store rebases the whole draft, so `name` is rebased onto its own ancestor.
     func testC19ADirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
 
         try draft.trySetName(raw: "My Name")
         var moved = validValues()
@@ -236,7 +235,7 @@ final class FreezeContractTests: XCTestCase {
         let store = try seededStore()
         let stash: ProfileStashFfi
         do {
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetName(raw: "My Name")
             try draft.trySetEmail(raw: "mine@other.com")
             stash = draft.stash()
@@ -250,7 +249,7 @@ final class FreezeContractTests: XCTestCase {
         moved.email = "server@corp.example"
         try fresh.applyCanonical(values: moved)
 
-        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash), usernameChecker: nil)
         let snap = restored.snapshot()
 
         XCTAssertEqual(snap.conflicts, [.email])
@@ -275,12 +274,12 @@ final class FreezeContractTests: XCTestCase {
     /// not quietly commit and resurrect it.
     func testC21RestoreIntoADeletedCanonicalOrphansTheDraft() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: "My Name")
         let stash = draft.stash()
 
         let empty = ProfileStoreFfi() // no canonical: the server 404s
-        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash))
+        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash), usernameChecker: nil)
 
         XCTAssertEqual(restored.snapshot().status, .orphaned)
         XCTAssertEqual(empty.liveDraftCount(), 1) // it exists...
@@ -305,7 +304,7 @@ final class FreezeContractTests: XCTestCase {
     /// questions under two names, and this test asserts the contract instead of the defect.
     func testC22DraftCountAndRebasingDraftCountAreDifferentQuestions() throws {
         let empty = ProfileStoreFfi() // no canonical: every checkout is create-flow
-        let draft = empty.checkout()
+        let draft = empty.checkout(usernameChecker: nil)
         XCTAssertFalse(draft.snapshot().username.dirty)
 
         XCTAssertEqual(empty.liveDraftCount(), 1, "a create-flow draft exists")
@@ -313,7 +312,7 @@ final class FreezeContractTests: XCTestCase {
 
         // an entity-backed checkout is both
         try empty.applyCanonical(values: validValues())
-        let edit = empty.checkout()
+        let edit = empty.checkout(usernameChecker: nil)
         XCTAssertEqual(empty.liveDraftCount(), 2)
         XCTAssertEqual(empty.rebasingDraftCount(), 1)
         _ = edit
@@ -328,13 +327,13 @@ final class FreezeContractTests: XCTestCase {
     /// surface, so the contract is exercised on both bindings.
     func testD27AcceptStashRefusesAStashFromAnUnknownSchema() throws {
         let store = try seededStore()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: "My Name")
         var stash = draft.stash()
 
         // Current version: accepted, and the token restores the edit session.
         let fresh = try seededStore()
-        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash), usernameChecker: nil)
         XCTAssertEqual(restored.snapshot().name.validity, .valid(value: "My Name"))
 
         // A schema version this build does not accept: refused, typed, both versions named.

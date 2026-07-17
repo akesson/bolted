@@ -45,6 +45,16 @@ final class StubChecker: UsernameChecker {
     func check(value: String) -> CheckVerdictFfi { verdict }
 }
 
+/// Returns scripted verdicts in order (the D34 shape of "swap the checker": one checker whose
+/// behaviour evolves, supplied once at checkout — the draft's capability never changes identity).
+final class SequencedChecker: UsernameChecker {
+    private var verdicts: [CheckVerdictFfi]
+    init(_ verdicts: [CheckVerdictFfi]) { self.verdicts = verdicts }
+    func check(value: String) -> CheckVerdictFfi {
+        verdicts.isEmpty ? .pass : verdicts.removeFirst()
+    }
+}
+
 /// Synchronously re-enters the SAME draft from inside the callback — the reentrancy/deadlock probe.
 final class ReentrantChecker: UsernameChecker {
     weak var draft: ProfileDraftFfi?

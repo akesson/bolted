@@ -17,7 +17,7 @@ public class ClassHandleProbe
     {
         using var store = Fixture.Seeded();
         Assert.That(store.LiveDraftCount(), Is.EqualTo(0u));
-        using var draft = store.Checkout();
+        using var draft = store.Checkout(null);
         Assert.That(store.LiveDraftCount(), Is.EqualTo(1u));
         Assert.That(draft.IsLive(), Is.True);
         draft.TrySetName(Fixture.NameMine);
@@ -30,7 +30,7 @@ public class ClassHandleProbe
     public void UsingReleasesTheDraft()
     {
         using var store = Fixture.Seeded();
-        using (var draft = store.Checkout())
+        using (var draft = store.Checkout(null))
         {
             Assert.That(store.LiveDraftCount(), Is.EqualTo(1u));
             _ = draft;
@@ -42,7 +42,7 @@ public class ClassHandleProbe
     public void DisposeIsIdempotent()
     {
         var store = Fixture.Seeded();
-        var draft = store.Checkout();
+        var draft = store.Checkout(null);
         draft.Dispose();
         Assert.DoesNotThrow(() => { draft.Dispose(); draft.Dispose(); },
             "Interlocked.Exchange guard makes Dispose idempotent, even on an id already gone (C18)");
@@ -59,7 +59,7 @@ public class ClassHandleProbe
     public void UseAfterDisposeIsTyped_NotUB()
     {
         var store = Fixture.Seeded();
-        var draft = store.Checkout();
+        var draft = store.Checkout(null);
         draft.Dispose();
         Assert.Throws<ObjectDisposedException>(() => draft.TrySetName("x"));
         Assert.Throws<ObjectDisposedException>(() => draft.Snapshot());
@@ -67,6 +67,6 @@ public class ClassHandleProbe
 
         store.Dispose();
         Assert.Throws<ObjectDisposedException>(() => store.LiveDraftCount());
-        Assert.Throws<ObjectDisposedException>(() => store.Checkout());
+        Assert.Throws<ObjectDisposedException>(() => store.Checkout(null));
     }
 }

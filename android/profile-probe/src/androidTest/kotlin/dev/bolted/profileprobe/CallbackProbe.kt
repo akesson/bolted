@@ -24,10 +24,11 @@ class CallbackProbe {
     private lateinit var store: ProfileStoreFfi
     private lateinit var draft: ProfileDraftFfi
 
+    // D34: the capability is a checkout argument, so each test checks out its own draft with the
+    // checker it probes; setUp only seeds the store, tearDown closes whatever the test checked out.
     @Before
     fun setUp() {
         store = seededStore()
-        draft = store.checkout()
     }
 
     @After
@@ -41,9 +42,10 @@ class CallbackProbe {
             override fun check(value: String): CheckVerdictFfi = body(value)
         }
 
-    /** No checker installed ⇒ the single-flight driver reports it did not run. */
+    /** A declared-absent capability (`null` at checkout, D34) ⇒ the driver reports it did not run. */
     @Test
     fun withoutACheckerTheCheckDoesNotRun() {
+        draft = store.checkout(null)
         assertTrue(!draft.runUsernameCheck())
     }
 
@@ -51,7 +53,7 @@ class CallbackProbe {
     @Test
     fun aTakenVerdictBlocksAndAUniqueVerdictUnblocks() {
         val seen = AtomicReference<String>()
-        draft.setUsernameChecker(
+        draft = store.checkout(
             checker { username ->
                 seen.set(username)
                 if (username == "admin") CheckVerdictFfi.FAIL else CheckVerdictFfi.PASS
@@ -82,7 +84,7 @@ class CallbackProbe {
      */
     @Test
     fun editingAfterAVerdictResetsTheCheck() {
-        draft.setUsernameChecker(checker { CheckVerdictFfi.FAIL })
+        draft = store.checkout(checker { CheckVerdictFfi.FAIL })
         draft.trySetUsername("admin")
         draft.runUsernameCheck()
         assertTrue(draft.snapshot().usernameCheck is CheckStateFfi.Failed)
@@ -102,7 +104,9 @@ class CallbackProbe {
     @Test(timeout = 20_000)
     fun aReentrantCheckerDoesNotDeadlock() {
         val reentered = AtomicReference(false)
-        draft.setUsernameChecker(
+        // The closure captures the class's `draft` property; by the time Rust calls the checker,
+        // checkout has returned and the property names the same draft the check runs on.
+        draft = store.checkout(
             checker {
                 draft.validate() // read, re-entering the same Rust object
                 draft.trySetName("Reentrant Name") // mutation, ditto

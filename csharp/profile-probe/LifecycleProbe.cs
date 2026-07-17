@@ -15,7 +15,7 @@ public class LifecycleProbe
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference CheckoutAndAbandon(ProfileStoreFfi store)
     {
-        var d = store.Checkout();     // entity-backed, deliberately never disposed
+        var d = store.Checkout(null);     // entity-backed, deliberately never disposed
         return new WeakReference(d);   // no strong reference escapes this frame
     }
 
@@ -33,7 +33,7 @@ public class LifecycleProbe
     public void AForgottenDraftIsReclaimedByTheFinalizer_Section6IsWrongForCSharp()
     {
         using var store = Fixture.Seeded();
-        using var control = store.Checkout();
+        using var control = store.Checkout(null);
         var controlWeak = new WeakReference(control);
         Assert.That(store.LiveDraftCount(), Is.EqualTo(1u), "the control is checked out");
 
@@ -64,8 +64,8 @@ public class LifecycleProbe
     public void DeterministicDisposeReturnsCountsToBaseline_NoGCInvolved()
     {
         using var store = Fixture.Seeded();
-        var a = store.Checkout();
-        var b = store.Checkout();
+        var a = store.Checkout(null);
+        var b = store.Checkout(null);
         Assert.That(store.LiveDraftCount(), Is.EqualTo(2u));
         Assert.That(store.RebasingDraftCount(), Is.EqualTo(2u));
 
@@ -89,7 +89,7 @@ public class LifecycleProbe
     public void D23_MutatorsOnAReleasedDraftAreTypedRefusals_ObserversTotal()
     {
         using var store = Fixture.Seeded();
-        using var draft = store.Checkout();
+        using var draft = store.Checkout(null);
         draft.Submit(); // releases the core-side draft; the C# object is NOT disposed
         Assert.That(draft.IsLive(), Is.False, "submit tombstones the handle (C17)");
 

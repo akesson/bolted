@@ -28,7 +28,7 @@ class ChattinessProbe {
     @Before
     fun setUp() {
         store = seededStore()
-        draft = store.checkout()
+        draft = store.checkout(null)
     }
 
     @After
@@ -133,7 +133,7 @@ class ChattinessProbe {
     @Test
     fun g_firstKeystrokeIsCold() {
         val coldStore = seededStore()
-        val coldDraft = coldStore.checkout()
+        val coldDraft = coldStore.checkout(null)
         val start = System.nanoTime()
         coldDraft.trySetUsername("cold_start")
         coldDraft.snapshot()

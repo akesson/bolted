@@ -22,7 +22,7 @@ final class GeneratedBindingsSmokeTests: XCTestCase {
     func testTheSharedTextFieldStateCrossesFromTheDependencyCrate() throws {
         let store = ProfileStoreFfi()
         try seed(store)
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let snapshot = draft.snapshot()
 
         let states: [TextFieldState] = [snapshot.username, snapshot.name, snapshot.email]
@@ -47,7 +47,7 @@ final class GeneratedBindingsSmokeTests: XCTestCase {
     func testAnInvalidValueThrowsATypedError() throws {
         let store = ProfileStoreFfi()
         try seed(store)
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetUsername(raw: "ab")) { error in
             XCTAssertEqual(error as? UsernameErrorFfi, .tooShort(min: 3, actual: 2))
         }
@@ -57,7 +57,7 @@ final class GeneratedBindingsSmokeTests: XCTestCase {
     func testAMutatorRefusesASubmittedDraft() throws {
         let store = ProfileStoreFfi()
         try seed(store)
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.submit()
         XCTAssertFalse(draft.isLive())
 
@@ -82,11 +82,10 @@ final class GeneratedBindingsSmokeTests: XCTestCase {
 
         let store = ProfileStoreFfi()
         try seed(store)
-        let draft = store.checkout()
+        let checker = Taken()
+        let draft = store.checkout(usernameChecker: checker)
         try draft.trySetUsername(raw: "  grace  ")
 
-        let checker = Taken()
-        draft.setUsernameChecker(checker: checker)
         XCTAssertTrue(try draft.runUsernameCheck())
 
         XCTAssertEqual(checker.asked, ["grace"], "the sanitizer ran before the checker was asked")
@@ -105,7 +104,7 @@ final class GeneratedBindingsSmokeTests: XCTestCase {
     func testTheCompositeCrossesAsARecord() throws {
         let store = ProfileStoreFfi()
         try seed(store)
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetAvailability(raw: AvailabilityRaw(
             start: PlainDate(year: 2026, month: 6, day: 1),
             end: PlainDate(year: 2026, month: 1, day: 1)))) { error in

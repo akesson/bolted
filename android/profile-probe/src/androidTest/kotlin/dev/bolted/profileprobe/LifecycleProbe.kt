@@ -61,7 +61,7 @@ class LifecycleProbe {
     @Test
     fun checkoutRaisesTheLiveDraftCount() {
         assertEquals(0u, store.liveDraftCount())
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         assertEquals(1u, store.liveDraftCount())
         draft.close()
         assertEquals(0u, store.liveDraftCount())
@@ -128,7 +128,7 @@ class LifecycleProbe {
 
     @Test
     fun closeFreesTheRustDraft() {
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         assertEquals(1u, store.liveDraftCount())
         draft.close()
         assertEquals(0u, store.liveDraftCount())
@@ -137,14 +137,14 @@ class LifecycleProbe {
     /** The idiomatic shape a Compose ViewModel would use. */
     @Test
     fun useBlockFreesAtScopeExit() {
-        store.checkout().use { assertEquals(1u, store.liveDraftCount()) }
+        store.checkout(null).use { assertEquals(1u, store.liveDraftCount()) }
         assertEquals(0u, store.liveDraftCount())
     }
 
     /** The generated `AtomicBoolean` should make this safe; a double free would be serious. */
     @Test
     fun doubleCloseIsIdempotent() {
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         draft.close()
         draft.close()
         draft.close()
@@ -158,8 +158,8 @@ class LifecycleProbe {
      */
     @Test
     fun anAbandonedCheckerSurvivesGcBecauseTheBindingsHoldItStrongly() {
-        store.checkout().use { draft ->
-            val abandoned = installAndAbandonChecker(draft)
+        val (checkedOut, abandoned) = checkoutWithAbandonedChecker(store)
+        checkedOut.use { draft ->
             val collected = awaitCollection(abandoned)
             record("callback.kotlin_checker_collected", collected.toString())
 
@@ -184,8 +184,7 @@ class LifecycleProbe {
      */
     @Test
     fun closingTheDraftReleasesTheCallbackObjectWithoutAFinalizer() {
-        val draft = store.checkout()
-        val abandoned = installAndAbandonChecker(draft)
+        val (draft, abandoned) = checkoutWithAbandonedChecker(store)
         assertNotNull("held strongly while the draft lives", abandoned.ref.get())
 
         draft.close() // drops the Rust Box<dyn UsernameChecker> -> free(handle) -> map.remove
@@ -221,10 +220,21 @@ class LifecycleProbe {
     }
 
     private fun checkoutAndAbandon(store: ProfileStoreFfi): Abandoned<ProfileDraftFfi> =
-        abandonOnAnotherThread { store.checkout() }
+        abandonOnAnotherThread { store.checkout(null) }
 
-    private fun installAndAbandonChecker(draft: ProfileDraftFfi): Abandoned<UsernameChecker> =
-        abandonOnAnotherThread {
+    /**
+     * D34 moved the capability to the checkout itself, so the checker is created AND wired on the
+     * worker thread — the draft comes back strongly held, the checker abandoned: after `join()` the
+     * only thing keeping the checker alive is whatever Rust and the bindings hold, which is exactly
+     * the question.
+     */
+    private fun checkoutWithAbandonedChecker(
+        store: ProfileStoreFfi
+    ): Pair<ProfileDraftFfi, Abandoned<UsernameChecker>> {
+        val queue = ReferenceQueue<UsernameChecker>()
+        val slot = AtomicReference<WeakReference<UsernameChecker>>()
+        val draftSlot = AtomicReference<ProfileDraftFfi>()
+        val worker = Thread {
             // Generated as a plain interface, not a `fun interface` — no SAM conversion.
             val checker =
                 object : UsernameChecker {
@@ -232,9 +242,13 @@ class LifecycleProbe {
                         if (value == "admin") CheckVerdictFfi.FAIL
                         else CheckVerdictFfi.PASS
                 }
-            draft.setUsernameChecker(checker)
-            checker
+            draftSlot.set(store.checkout(checker))
+            slot.set(WeakReference(checker, queue))
         }
+        worker.start()
+        worker.join()
+        return draftSlot.get() to Abandoned(slot.get(), queue)
+    }
 
     /**
      * Waits for collection by polling the `ReferenceQueue` — and never calling `ref.get()`.

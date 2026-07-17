@@ -33,7 +33,7 @@ class StashProbe {
     fun c21_restoreConflictsOnlyTheFieldsWhoseCanonicalMoved() {
         val stash =
             seededStore().use { store ->
-                store.checkout().use { draft ->
+                store.checkout(null).use { draft ->
                     draft.trySetName("My Name")
                     draft.trySetEmail("mine@other.com")
                     draft.stash()
@@ -49,7 +49,7 @@ class StashProbe {
         // A new process: a new store, seeded from a server that moved `email` while we were dead.
         ProfileStoreFfi.new().use { fresh ->
             fresh.applyCanonical(SEED.copy(email = "server@corp.example"))
-            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+            fresh.restore(fresh.acceptStash(stash), null).use { restored ->
                 val snap = restored.snapshot()
 
                 assertEquals(listOf(ProfileFieldId.EMAIL), snap.conflicts)
@@ -81,7 +81,7 @@ class StashProbe {
     fun c20_anInvalidAttemptSurvivesTheStash() {
         seededStore().use { store ->
             val stash =
-                store.checkout().use { draft ->
+                store.checkout(null).use { draft ->
                     var rejected = false
                     try {
                         draft.trySetEmail("not-an-email")
@@ -93,7 +93,7 @@ class StashProbe {
                 }
 
             assertEquals("not-an-email", stash.email.raw)
-            store.restore(store.acceptStash(stash)).use { restored ->
+            store.restore(store.acceptStash(stash), null).use { restored ->
                 val validity = restored.snapshot().email.validity
                 assertTrue("the user's rejected text is still theirs", validity is TextValidity.Invalid)
                 assertEquals("not-an-email", (validity as TextValidity.Invalid).raw)
@@ -106,14 +106,14 @@ class StashProbe {
     fun c21_restoreIntoADeletedCanonicalOrphansTheDraft() {
         val stash =
             seededStore().use { store ->
-                store.checkout().use { draft ->
+                store.checkout(null).use { draft ->
                     draft.trySetName("My Name")
                     draft.stash()
                 }
             }
 
         ProfileStoreFfi.new().use { empty -> // no canonical: the server 404s
-            empty.restore(empty.acceptStash(stash)).use { restored ->
+            empty.restore(empty.acceptStash(stash), null).use { restored ->
                 assertEquals(DraftStatusFfi.ORPHANED, restored.snapshot().status)
                 try {
                     restored.submit()
@@ -136,7 +136,7 @@ class StashProbe {
     fun d27_acceptStashRefusesAStashFromAnUnknownSchema() {
         val stash =
             seededStore().use { store ->
-                store.checkout().use { draft ->
+                store.checkout(null).use { draft ->
                     draft.trySetName("My Name")
                     draft.stash()
                 }
@@ -144,7 +144,7 @@ class StashProbe {
 
         seededStore().use { fresh ->
             // Current version: accepted, and restores the edit session.
-            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+            fresh.restore(fresh.acceptStash(stash), null).use { restored ->
                 val v = restored.snapshot().name.validity
                 assertTrue("the rescued edit survives", v is TextValidity.Valid && v.value == "My Name")
             }

@@ -154,8 +154,8 @@ class ProfileViewModel(
             }
         }
         restoredFromStash = accepted != null
-        draft = if (accepted != null) store.restore(accepted) else store.checkout()
-        draft.setUsernameChecker(makeChecker())
+        // D34: the capability travels with the draft entry point — forgetting it stopped compiling.
+        draft = if (accepted != null) store.restore(accepted, makeChecker()) else store.checkout(makeChecker())
 
         // The teardown, registered AT the acquisition — not remembered in an `onCleared()` override
         // at the other end of the lifecycle. On ART this closeable is the ONLY thing that frees the
@@ -433,8 +433,7 @@ class ProfileViewModel(
         // map) — and on ART only `close()` runs it. Swapping without closing leaked one handle per
         // successful submit.
         draft.close()
-        draft = store.checkout()
-        draft.setUsernameChecker(makeChecker())
+        draft = store.checkout(makeChecker())
         focused = null
         focusedTouched = false
         subscribeDraft()

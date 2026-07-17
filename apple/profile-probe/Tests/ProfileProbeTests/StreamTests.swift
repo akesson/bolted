@@ -9,7 +9,7 @@ final class StreamTests: XCTestCase {
     /// End to end: a mutation produces a snapshot the Swift consumer receives, with the new value.
     func testSnapshotDeliveredOnMutation() async throws {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let stream = draft.snapshots()
         let box = SnapshotBox()
         let received = expectation(description: "snapshot delivered")
@@ -36,7 +36,7 @@ final class StreamTests: XCTestCase {
     /// (step 03's SwiftUI view) detects a missed event in the gap.
     func testFreshSubscriptionIsFutureOnly() async throws {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetUsername(raw: "before") // BEFORE subscribing
         XCTAssertEqual(draft.snapshot().username.validity, .valid(value: "before"))
 
@@ -63,7 +63,7 @@ final class StreamTests: XCTestCase {
     /// drop-newest is not a kill (the `observe` verb's "always-valid current state" holds).
     func testBurstIsRecoverableViaSnapshotGetter() throws {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         _ = draft.snapshotsSmall() // a tiny (4-slot) ring subscriber we deliberately never drain
 
         for i in 3..<60 {
@@ -78,7 +78,7 @@ final class StreamTests: XCTestCase {
     @MainActor
     func testMainActorConsumption() async throws {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let stream = draft.snapshots()
         let box = SnapshotBox()
         let received = expectation(description: "main-actor delivery")
@@ -102,7 +102,7 @@ final class StreamTests: XCTestCase {
     /// deadlock (the wrapper emits outside its lock).
     func testStreamConsumerReentrancyDoesNotDeadlock() async throws {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let stream = draft.snapshots()
         let done = expectation(description: "reentrant call from consumer")
 

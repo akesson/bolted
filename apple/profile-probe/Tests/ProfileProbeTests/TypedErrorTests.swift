@@ -6,14 +6,14 @@ import GenProfileFfi
 final class TypedErrorTests: XCTestCase {
     /// A tier-1 setter throws a typed enum with associated values Swift can read.
     func testSetterThrowsTypedTooShort() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetUsername(raw: "ab")) { error in
             XCTAssertEqual(error as? UsernameErrorFfi, .tooShort(min: 3, actual: 2))
         }
     }
 
     func testSetterThrowsInvalidChars() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetUsername(raw: "has space")) { error in
             XCTAssertEqual(error as? UsernameErrorFfi, .invalidChars)
         }
@@ -23,7 +23,7 @@ final class TypedErrorTests: XCTestCase {
     /// takes the raw record (D20's shadow: same two dates, same order, same validation — the
     /// two-argument spelling was the hand-written spike's).
     func testDateRangeSetterThrowsTyped() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         let start = PlainDate(year: 2026, month: 12, day: 31)
         let end = PlainDate(year: 2026, month: 1, day: 1)
         XCTAssertThrowsError(try draft.trySetAvailability(raw: AvailabilityRaw(start: start, end: end))) { error in
@@ -33,7 +33,7 @@ final class TypedErrorTests: XCTestCase {
 
     /// A unit-only `#[error]` enum crosses as a C-style (raw-value) Swift enum, still `Error`.
     func testEmailErrorIsTyped() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetEmail(raw: "no-at-sign")) { error in
             XCTAssertEqual(error as? EmailErrorFfi, .invalid)
         }
@@ -43,7 +43,7 @@ final class TypedErrorTests: XCTestCase {
     /// keyed `ErrorData` — readable in Swift, not a message string. A create-flow draft is all
     /// `Unset`, so every field is `required`.
     func testSubmitThrowsValidationWithReportPayload() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.submit()) { error in
             guard case .validation(let report)? = error as? SubmitErrorFfi else {
                 return XCTFail("expected .validation, got \(error)")
@@ -56,7 +56,7 @@ final class TypedErrorTests: XCTestCase {
 
     /// A field error with PARAMS survives inside the report (the `too_short` {min, actual} data).
     func testReportCarriesFieldErrorParams() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetUsername(raw: "ab")) // records Invalid, also throws
         XCTAssertThrowsError(try draft.submit()) { error in
             guard case .validation(let report)? = error as? SubmitErrorFfi else {
@@ -71,7 +71,7 @@ final class TypedErrorTests: XCTestCase {
 
     /// The tier-2 relational rule (`corporate_email`) reaches the report with its params.
     func testTier2RuleViolationInReport() throws {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         try draft.trySetUsername(raw: "corp_bob")
         try draft.trySetName(raw: "Bob")
         try draft.trySetEmail(raw: "bob@gmail.com") // not corp.example → rule fires
