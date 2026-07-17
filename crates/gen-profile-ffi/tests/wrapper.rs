@@ -425,12 +425,19 @@ fn keep_mine_and_take_theirs_reach_different_outcomes() {
     );
 }
 
-/// M14, and §9's *"a real `Pending` across FFI"*.
+/// M14, and §9's *"a real `Pending` across FFI"* — rescoped by D37.
 ///
 /// With a synchronous checker, `begin` and `complete` are atomic inside one call, so a `snapshot()`
 /// taken *after* `run_username_check` returns can never be `Pending`. It is observable from exactly
 /// one place: the draft's stream, which the driver pushes to between the two halves. That is what the
-/// split `begin`/`complete` buys (D10), and it is why a spinner is not a fiction.
+/// split `begin`/`complete` buys (D10).
+///
+/// What this test pins is the **driver's eager emission**, not a delivery guarantee: observation is
+/// watch-shaped (D37), so a subscriber may legally see the `Pending` coalesced away — on Android it
+/// already is, below anything Bolted controls (the ViewModel pipes this stream into a `StateFlow`,
+/// which conflates by specification). A spinner binds to `pending` read from the latest snapshot;
+/// this in-process queue drain asserting `[Pending, Passed]` documents the driver, not what a shell
+/// may rely on.
 #[test]
 fn a_check_in_flight_is_observably_pending() {
     let store = seeded();
@@ -447,8 +454,8 @@ fn a_check_in_flight_is_observably_pending() {
     assert_eq!(
         states,
         vec![CheckStateFfi::Pending, CheckStateFfi::Passed],
-        "the driver must emit Pending before it calls out, or a shell has nothing to \
-         hang a spinner on"
+        "the driver must emit Pending before it calls out — the eager emission D37 \
+         rescopes as a driver fact, not a delivery guarantee"
     );
     // ...and after the fact, only the verdict remains. §9 asked whether `Pending` ever reaches a
     // `snapshot()` caller. With a synchronous checker: no. It reaches a subscriber.

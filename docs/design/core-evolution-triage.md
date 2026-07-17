@@ -9,6 +9,15 @@
 > is required first), **park in §9** (real but premature to make normative),
 > **superseded** (dropped, with the superseding decision named), **owner-decision**
 > (Henrik's alone). Nothing here changes ARCHITECTURE.md; that is the design session's output.
+>
+> **Adjudicated (July 2026 design session → ARCHITECTURE v1.11).** T3c → **D35** (no ambient
+> nondeterminism; no C-ID minted — the deny-list is the static rung, the runtime face is replay's
+> first artifact) · T5 → the restored §9 replay item, preconditions updated for D16 and the daemon
+> topology · T3b → **D36** (frame loop never crosses the FFI) · T1 → **D37** (`observe` is
+> watch-shaped; the `[Pending, Passed]` delivery downgraded to a driver fact — the wrapper test
+> rescoped, assertions unchanged) · T2 → parked as §9's windowed-collections item · T7 → **D38**
+> plus the §9 freeze-gate item, unscheduled until a feature needs HTTP · T6 (`facet`) → split into
+> its own PR.
 
 ## T1 — Watch-shaped observation (`Latest<T>`) · **live-with-conflict**
 

@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.10, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, and the step-21 planning pass).** Phase 1 validated this design against
+**Status: FROZEN (v1.11, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, and the core-evolution design session).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -39,7 +39,15 @@ surface lives; **D33** graduates the `command` verb as a scratch-draft transacti
 planning pass's one: **D34** resolves VISION's "capability coverage" promise **by construction** —
 the generated draft entry points take each declared capability as an explicit optional parameter,
 the settable slot is deleted, and a forgotten capability becomes a platform compile error while a
-`nil` stays a declared, C16-floored absence. A
+`nil` stays a declared, C16-floored absence. **v1.11** carries the core-evolution design session's
+four, adjudicating the `design/core-evolution` branch's triage
+([core-evolution-triage.md](design/core-evolution-triage.md)): **D35** states the
+no-ambient-nondeterminism rule §5 had enforced but never said; **D36** generalizes D9's echo rule —
+the frame loop never crosses the FFI; **D37** gives `observe` its semantics — watch-shaped,
+coalescing legal on every target, the old `[Pending, Passed]` delivery downgraded to a driver
+fact; **D38** adopts the `bolted-http` shape (sans-io contract crate, shell-side adapters). §9
+gains the restored interaction-replay item and the parked windowed-collections and `bolted-http`
+freeze-gate items. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -88,7 +96,7 @@ yet built (D33, see below):
 
 | Verb | Surface | Semantics |
 |------|---------|-----------|
-| **observe** | read-only, always-valid current state | *how* it is delivered is per-target: a `snapshots()` stream across FFI, a direct read plus a change tick in a Rust shell (§8) |
+| **observe** | read-only, always-valid current state | **watch-shaped** (D37): a consumer is guaranteed the newest state, never every intermediate — coalescing is legal on every target. *How* it is delivered is per-target: a `snapshots()` stream across FFI, a direct read plus a change tick in a Rust shell (§8), the push client over the wire (D31) |
 | **draft** | `checkout() -> FeatureDraft` | multi-field edit session: checkout → edit → validate → submit |
 
 A **third verb, `command`** — a session-less single-action mutation (`toggle_paused()`), for
@@ -130,7 +138,10 @@ discarded by sequence number. Shells choose *when* to trigger (debounce is shell
 core guarantees ordering correctness. The check's sub-state — unchecked / pending / passed /
 failed — is part of the draft's observable snapshot (core-owned verdict state, not presentation
 state, so this does not reintroduce the rejected visibility-policy enums of §8), letting a shell
-show progress without owning check logic.
+show progress without owning check logic. The sub-state is state, not an event: a spinner binds to
+`pending` *read from the latest snapshot*, never to delivery of the transition — observation is
+watch-shaped (D37), so a fast check may legally never show a subscriber its `Pending`, while a long
+one shows it at every read for as long as it is in flight.
 
 Two rules make a client-side verdict trustworthy, and neither is sufficient alone:
 
@@ -391,7 +402,14 @@ written and is now **struck** (D29); §1 describes the store-owned shape that sh
 
 **Sans-io / runtime-agnostic core**: effects are data driven by the platform layer; no tokio in
 `bolted-core`. This is what makes headless deterministic tests and wasm32 compatibility
-structural rather than aspirational.
+structural rather than aspirational. The rule extends to **all ambient nondeterminism**: no clocks,
+no randomness, no ambient identity sources inside core crates — time and identities arrive as
+inputs (verb arguments or effect completions; the `CheckToken` begin/complete pair is the pattern
+in shipped code). The store's own monotonic counters (`DraftId`, the check sequence) are not an
+exception but the point: they are pure functions of the input sequence, which is the property the
+rule protects — core state evolution is a deterministic function of its inputs, which is what
+keeps interaction replay (§9) possible (D35). Enforced by the workspace `clippy.toml` deny-list
+(`SystemTime::now` / `Instant::now`) riding `-D warnings`; `bolted-check` may widen it later.
 
 ## 6. Platform notes
 
@@ -405,6 +423,16 @@ structural rather than aspirational.
   leaves the field **clean** (the core trims, so the value never moved) while the control holds live
   keystrokes; repainting it would eat the spaces and jump the caret. `touched` is shell-local
   presentation state about a text control — not the core-side `touched` flag §8 rejects.
+- **The frame loop never crosses the FFI** (D36) — the echo rule generalized to every continuous
+  interaction. Rendering runs at frame rate from natively held state; the core hears *events*, not
+  frames. Continuous gestures (slider, drag-reorder) keep the value native while live and commit at
+  interaction boundaries; scroll fetches by overscan + threshold refetch, never per-frame calls.
+  Sparse snapshots animate via native implicit animation. Step 05's measurement justifies the
+  boundary being exactly here: 12–13 µs per crossing against a 1.0 ms bar pays easily for
+  per-*event* crossings and would still be the wrong bet per-*frame*, where FFI + encode + diff
+  would be spent against an 8.3 ms ProMotion budget. In the other direction, core-driven churn is
+  conflated at the driver — legal because observation is watch-shaped (D37) — so a burst of rebases
+  costs one repaint of the newest state, never a queue drain.
 - **GC languages (Kotlin, C#)**: no deterministic destruction, so `close()` cannot be optional. Since
   D16 it is not optional anywhere — an id is not an owner. What forgetting it costs differs per
   backend (v1.7, step 14): on Kotlin it leaks a Rust draft the store keeps rebasing forever (measured
@@ -516,6 +544,10 @@ what, and why it was worth it.
 | **D32** — daemon lifecycle is **OS-owned at rung 3**: socket activation (launchd `Sockets` / systemd socket units) + label/unit identity + idle-exit, from generated plists/units; no `KeepAlive`, no `Restart=always`. The steady state has a name — **on while any surface lives**: a persistent surface holding a connection keeps the daemon resident, a crashed daemon is resurrected by the next connect (surfaces run reconnect loops over open-then-verify), and a product with no live surface pays nothing | `KeepAlive`/`Restart=always` (an unconditionally resident daemon); client-managed spawn with lock files; or forcing idle-exit under persistent surfaces | Topology design pass. All three probes bought the same bargain at the same price: activation, single-instance and respawn-on-next-connect came from ~20 lines of configuration per OS, exercised as A1–A4, S1–S4 (SMAppService: **zero** approval steps) and L1–L4 (systemd; the user-unit posture priced at zero ceremony too). Step 19's M4 finding is the heart of the naming: with a FinderSync extension holding a connection, idle-exit never fires — that is the *intended* semantics, not a defect, because a surface that exists is expressing demand; forcing idle-exit under it would churn kill/respawn for nothing. `Restart=always` hides crash loops and pays residency with zero surfaces; hand-rolled lock files are the rung-4 single-instance the OS already owns (the verbatim A2/L2 refusals are the evidence). The reconnect loop healed the topology in the probe — kill -9 → the observing extension's next connect respawned the daemon through the socket unit — and step 20 bounded the good case (~45 ms queued-connect accept) while keeping the launchd limbo as the case the client library must survive |
 | **D33** — the `command` verb graduates: **a command is a scratch-draft transaction** — checkout → mutate → commit (re-validates everything) → close — with refusals typed as `CommitError`; `apply_canonical` is never a shell-reachable mutation path. The contract rule is law now; macro/DSL stamping and core packaging wait for the first framework consumer (the composite-value posture, D20) | Keep it demoted to §9; a bespoke validate-then-apply path that skips the draft; or a full DSL + core helper designed now | Topology design pass, on the reopening condition §9 itself set ("when a real feature needs a session-less mutation"): the campaign produced one — `toggle_paused`, driven from a Finder context menu (G5, human-executed) and a tray, surfaces that structurally cannot host an edit session. The hand-written shape taught the hazard that decides the design: tier-1 validity is free for a canonical-to-canonical mutation, but **`apply_canonical` runs no tier-2 rules** — a command that skips the scratch checkout can write a canonical no draft could ever submit, and today only discipline prevents it: a rung-4 mechanic, which the founding rule forbids. Routing commands through `commit` makes "submit re-validates everything, always" bind session-less mutations *by construction* and re-derives nothing (§5's rule: the gates live in `commit_gates`, once — a bespoke validate-then-apply path is precisely that re-derivation). Designing the DSL now from one example would repeat D20's error; the blessed shape is not a guess — it is the one the spike shipped and probed (B3 fan-out to open drafts, G5 end-to-end) |
 | **D34** — capability coverage is resolved **by construction at the generated seam**: each declared capability (today the one shipped family, the async check's `XChecker` trait) is an explicit **optional** parameter of the generated draft entry points — `checkout(username_checker: Option<Box<dyn UsernameChecker>>)`, same on `restore` — the `set_*_checker` slot and the silent `None` default are deleted, and the driver's "did not run" return survives only for a declared absence (or a reentrant outcall). A forgotten capability is a **platform compile error** (rung 2) at every call site on every FFI target; a `nil` is a *declared, reviewable* absence whose runtime floor is C16 unchanged. In-process Rust shells have no generated seam: C16 stays their floor, and no core API is invented for them (one consumer, D20). Scope: the check family only — no capability registry until a second family exists | A **mandatory** (non-optional) parameter; a rung-3 coverage analysis in `bolted-check` (committed per-target manifest + source-text scan for wiring tokens inside `check`); or the status quo (settable slot + C16 as the only floor) | Step-21 planning pass, on the topology campaign's capability evidence. The status quo is glue that fails only at runtime: nothing forces `set_*_checker`, the driver no-ops with `Ok(false)`, and the omission reaches the user as C16's submit refusal with no in-app fix — precisely what the founding rule forbids where a compiler could catch it. The mandatory parameter reads stronger on the ladder but is wrong on the spike's evidence: surfaces are heterogeneous (step 19 — the capability is the surface's *own* OS access), so a surface that structurally cannot implement a check would be forced to fabricate a stub, and a stub's lying `Pass` on a dirty field is strictly worse than C16's typed refusal — D6's logic again (don't demand what the surface cannot honestly supply). The manifest+scan polices a state better made unrepresentable, verifies only token presence, and adds an apparatus where the generator already owns the seam — so the planned rung-3 analysis **dissolves** (the D19/KC2 pattern). The wire inherits the shape client-side: the checker never crosses (D31 req. 1), so the generated wire client's checkout owes the same explicit parameter |
+| **D35** — no ambient nondeterminism in core crates: time and identities arrive as inputs; enforcement is the workspace clippy deny-list riding `-D warnings` | A `Ctx` argument stamped by the driver at dispatch (the branch snapshot's shape); or allow ambient calls and mock the clock in tests | Core-evolution design session (triage T3c). The rule was already true of the shipped code (`CheckToken` takes completions as inputs; D16's ids are monotonic, not random) and already enforced by the committed deny-list — the architecture just never stated it, so the deny-list justified itself against a §5 paragraph that existed only on the branch snapshot. `Ctx` died with the `update` loop (D29); a mocked clock makes determinism a test-harness property rather than a structural one. The OS-integration campaign validated the enforcement shape in passing: the spikes' three genuine wall-clock timing sites took local `#[allow]`s rather than weakening the rule. No C-ID is minted: the property as stated is static and the deny-list is its rung (build-time); the runtime-testable face — same input sequence ⇒ identical snapshot sequence — is replay's first artifact when §9 ever schedules it |
+| **D36** — the frame loop never crosses the FFI: the core hears event boundaries, not frames (§6) | Per-frame gesture/scroll round-trips through the core | Core-evolution design session (triage T3b). The generalization of D9's echo rule, justified by the same measurement read at the right grain: 12–13 µs per crossing (step 05) makes per-event crossings free and per-frame ones a bet of the 8.3 ms ProMotion budget on FFI + encode + diff — TCA's best-documented pitfall (per-frame reducer round-trips), designed out rather than mitigated |
+| **D37** — `observe` is watch-shaped: the contract guarantees the newest state, never every intermediate; coalescing is legal on every target | Queue-shaped delivery (every snapshot reaches every subscriber); or a split contract — coalesced state plus a guaranteed-delivery sub-channel for check-state transitions | Core-evolution design session (triage T1). This is the industry-standard state semantics — `StateFlow` conflates by specification, SwiftUI renders latest-per-frame, `INotifyPropertyChanged` has no value queue, `tokio::watch` is the name — and three of four binding targets structurally cannot deliver more: the Android shell already pipes the stream into a `MutableStateFlow`, so the old `[Pending, Passed]` delivery never survived to a UI anyway. Queue-shape also forces a backpressure choice (unbounded buffer, or a core blocked on its slowest subscriber) that the watch shape dissolves — for the wire's push client (D31) exactly as for the in-process stream. The split alternative misreads the standard two-channel pattern: the industry splits state from *events*, and check sub-state is state by the litmus test — a consumer that missed the emission is still correct by reading current state; genuinely event-like needs (announce a verdict, focus a field) belong to §9's one-shot-effects item. Wins: D7/C15's stamped reconcile simplifies to "read the latest"; both step-02 probes prove BoltFFI implements the shape at 0.27.5. Replay (§9) is unaffected: D35's determinism governs the core's *emitted* sequence — delivery was never part of its claim |
+| **D38** — `bolted-http`: a sans-io contract crate plus Bolted-shipped shell-side adapters (URLSession in Swift, OkHttp in Kotlin, WinRT in C#; Rust adapters only for Linux/web) | One Rust client binding the native stacks directly (objc2/windows-rs/JNI, nyquest-style) | Core-evolution design session (triage T7); full design in `crates/bolted-http/docs/`. Android has no credible Rust path to OkHttp/Cronet, so shell-side is the uniform default; adapters are rung-2 shipped components (the effect-side counterpart of a `BoltedTextField`), living in the framework's maintenance envelope with a per-adapter conformance suite; the contract is placement-blind, so Rust-side Darwin/Windows bindings stay possible without a breaking change. The snapshot's recorded retreat — reconsider if step-02's callback measurements came back ugly — closed the good way: callbacks measured cheap and reentrancy-safe (no deadlock, no lock held across an outcall), and both step-02 probes' stream findings at 0.27.5 clear the response-streaming half of the old freeze gate. Scheduling stays a §9 matter: the crate ships no feature until one needs HTTP |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -529,6 +561,43 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   second macro shape, currently justified by exactly one example. Do not design it from that one.
   *(Its shadow is now recorded twice: step 09 at the core, step 10 at the FFI, where the setter takes
   one `AvailabilityRaw` rather than two dates.)*
+- **Collection observation (windowed) — designed when the first real collection feature lands.** No
+  spike has a collection feature, so designing this now would repeat the error D20/D29 twice
+  refused: a shape justified by zero examples. The candidate answer is preserved from the
+  `design/core-evolution` snapshot: a windowed accessor (`open_window(range)` →
+  `WindowSnapshot { version, total_count, range, rows }`) with stable `RowId`s,
+  snapshot-authoritative and watch-shaped per window (D37, its precondition, is now decided), and
+  deltas never crossing the FFI — the rejected alternative being a `VecDiff`-style delta protocol,
+  which is unrepresentable now that coalescing is legal by contract (a delta stream cannot survive
+  a dropped intermediate; snapshots don't care). Open with the first feature: what a `Row`
+  projection is, where `RowId` comes from (entity key?), whether `open_window` takes sort/filter
+  parameters, and the windowing etiquette (overscan, threshold refetch — §6's frame-loop rule,
+  D36, already governs the scroll side).
+- **`bolted-http` contract freeze** — *reopens when a feature needs HTTP; nothing schedules it.*
+  The D38 shape is decided; still genuinely open before a freeze: the cookie capability's shape,
+  whether Android's declarative `<pin-set>` binds OkHttp/Cronet, and `BackgroundTransfer` — a
+  separate optional effect family whose precondition (effects as durable, serializable data with
+  stable identities) is shared with interaction replay (below) and the draft stash; nothing may
+  foreclose it. Response streaming, the old gate's hardest question, now has evidence: both
+  step-02 probes' stream machinery converges at boltffi 0.27.5.
+- **Interaction replay (protected possibility, unscheduled).** The contract boundary is a natural
+  record seam: every mutation enters the core as a typed, serializable call (draft verbs, commands,
+  canonical pushes, check completions), so logging those calls and re-driving the log against a
+  fresh core yields deterministic session replay — bug reports that attach a replayable log,
+  time-travel debugging, UI-less integration tests, and the strongest cross-platform conformance
+  test available (same log ⇒ identical snapshot sequences on every backend). Not designed and not
+  scheduled; the item exists so no other decision forecloses it. Three preconditions, with their
+  current state: **(1)** no ambient nondeterminism — the §5 rule (D35), enforced by the clippy
+  deny-list; its runtime face (same input sequence ⇒ identical snapshot sequence) would be replay's
+  first conformance artifact. **(2)** stable logical identities for handles — structurally
+  satisfied since D16: `DraftId`s are `Copy`, monotonically issued, never reused; `CheckToken`'s
+  private seq is the same shape. **(3)** a total order over inputs — true behind FFI, where
+  `bolted-ffi`'s single `Mutex` serializes every call, and by construction in the daemon topology,
+  where the store's one owner (D30) serializes the wire; **not guaranteed for a lock-free Rust
+  shell** holding the store by value, so a recording wrapper would have to impose the order it
+  logs — acceptable, because recording is opt-in instrumentation, never a core obligation. Replay
+  reproduces core state, not pixels: native view state (focus, IME composition, scroll) never
+  crosses the boundary and is out of scope by design.
 
 **Closed since the freeze** — kept here so the answers are findable from the questions:
 *store concurrency* → D16 · *resolvers on the trait* → D17 · *the async check's contract* → D18 ·
@@ -537,9 +606,13 @@ type) · *use-after-close* → **D23**, for the store-side half only; the foreig
 `Cleaner` question above · *a real `Pending` across FFI* → **answered by measurement, not by design**:
 with a synchronous checker `begin`/`complete` are atomic inside one call, so a `Pending` never reaches
 a `snapshot()` caller — it reaches a **stream subscriber**, because the generated check driver pushes a
-snapshot between the two halves. `gen-profile-ffi`'s `a_check_in_flight_is_observably_pending` asserts
-the sequence `[Pending, Passed]` off the subscription. A spinner bound to the stream is real; one bound
-to `snapshot()` is not, and no split `begin`/`complete` across FFI is needed to make it so ·
+snapshot between the two halves. *Re-closed under D37*: that emission is a **driver fact, not a
+contract guarantee** — observation is watch-shaped, so delivery of the `Pending` may legally coalesce
+(on Android it always did: the ViewModel pipes the stream into a `StateFlow`, which conflates below
+anything Bolted controls). A spinner binds to `pending` read from the latest snapshot: a long check
+shows it at every read while in flight, a fast one may never flash it — which is the better UX anyway.
+`gen-profile-ffi`'s `a_check_in_flight_is_observably_pending` still asserts `[Pending, Passed]`,
+rescoped to pin the driver's eager emission, not what a shell may rely on ·
 *the `Cleaner` backstop* → **D26** (declined: leak-freedom becomes a per-language contract test over
 C22's count; the use-after-close half stays an upstream filing) · *stash schema evolution* → **D27**
 (versioned envelope, wholesale refusal only at the parse gate, per-field salvage inside it; tightening
