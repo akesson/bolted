@@ -88,7 +88,8 @@ final class ProfileConformanceSuite: XCTestCase {
         try draft.trySetName(raw: fixture.seed().name)
         try draft.trySetEmail(raw: fixture.seed().email)
         try draft.trySetAvailability(raw: fixture.seed().availability)
-        draft.setUsernameChecker(checker: passingChecker())
+        // a create-flow checked field is dirty, so C16 demands its check has run
+        // (the checker itself arrived at checkout — D34)
         XCTAssertTrue(try draft.runUsernameCheck())
     }
 
@@ -102,7 +103,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C01 — holding a value loses no validity; the canonical raw re-parses to the same value.
     func testC01RoundtripHoldsValidity() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         XCTAssertEqual(draft.snapshot().name.validity, .valid(value: fixture.primaryMine))
         try draft.trySetName(raw: fixture.primaryMine) // idempotent: the canonical raw re-parses the same
@@ -112,7 +113,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C02 — a clean field adopts theirs on rebase and stays InSync.
     func testC02ACleanFieldFollowsCanonical() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         let f = draft.snapshot().name
         XCTAssertEqual(f.validity, .valid(value: fixture.primaryTheirs))
@@ -123,7 +124,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C03 — a dirty field whose canonical moved is never overwritten: it conflicts, naming theirs.
     func testC03ADirtyFieldIsNeverSilentlyOverwritten() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         let snap = draft.snapshot()
@@ -139,7 +140,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C04 — a dirty field whose value already equals theirs rebases clean.
     func testC04ConvergentRebaseIsClean() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryMine))
         let f = draft.snapshot().name
@@ -150,7 +151,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C05 — setting a field back to its base clears dirty; dirtiness is value-based.
     func testC05RevertForFree() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         XCTAssertTrue(draft.snapshot().name.dirty)
         try draft.trySetName(raw: fixture.primaryBase)
@@ -160,7 +161,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C06 — a failed try_set is typed, records Invalid{raw}, blocks submit, and never commits the stale value.
     func testC06NoStaleValueSubmit() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertThrowsError(try draft.trySetName(raw: fixture.primaryInvalid)) { error in
             XCTAssertNotNil(error as? PersonNameErrorFfi, "an invalid raw is refused, typed")
         }
@@ -181,7 +182,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C07 — precedence: a deleted canonical outranks a conflict (Orphaned wins).
     func testC07OrphanedOutranksConflicted() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         guard case .conflicted = draft.snapshot().name.sync else { return XCTFail("expected a conflict to outrank") }
@@ -194,7 +195,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C07 — precedence: a conflict outranks a validation error (Conflicted wins).
     func testC07ConflictedOutranksValidation() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs)) // conflict on primary
         XCTAssertThrowsError(try draft.trySetEmail(raw: fixture.secondaryInvalid)) // invalid secondary
@@ -210,7 +211,7 @@ final class ProfileConformanceSuite: XCTestCase {
     func testC08RebaseRerunsTier2() throws {
         guard let flip = fixture.ruleFlip() else { throw XCTSkip("this feature declares no tier-2 rule") }
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         for (id, raw) in flip.dirtyEdits { try setText(draft, id, raw) }
         XCTAssertFalse(draft.validate().ruleErrors.contains { $0.rule == flip.ruleName }, "the arrangement must leave the rule satisfied")
         try store.applyCanonical(values: flip.flippedCanonical)
@@ -225,7 +226,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C09 — resolve_keep_mine: value stays yours, base becomes theirs, dirty, InSync.
     func testC09ResolveKeepMine() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         guard case .conflicted = draft.snapshot().name.sync else { return XCTFail("expected a conflict to resolve") }
@@ -240,7 +241,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C09 — resolve_take_theirs: value and base become theirs, clean, InSync.
     func testC09ResolveTakeTheirs() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         try draft.resolveTakeTheirs(field: .name)
@@ -254,7 +255,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C11 — deleting the canonical under a live draft orphans it; submit is a typed Orphaned; the draft stays live.
     func testC11DeletionOrphans() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         store.deleteCanonical()
         XCTAssertEqual(draft.snapshot().status, .orphaned)
         XCTAssertTrue(draft.isLive(), "the refusal hands the draft back")
@@ -269,7 +270,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C12 — a create-flow draft (no base) is never in the fan-out, and commits normally once filled.
     func testC12CreateFlowNeverRebases() throws {
         let store = ProfileStoreFfi() // empty: no canonical
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: passingChecker())
         try store.applyCanonical(values: fixture.seed())
         XCTAssertEqual(store.rebasingDraftCount(), 0, "a create-flow draft is not rebased")
         guard case .unset = draft.snapshot().name.validity else { return XCTFail("its primary must stay unset") }
@@ -283,24 +284,24 @@ final class ProfileConformanceSuite: XCTestCase {
         var stash: ProfileStashFfi
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetName(raw: fixture.primaryMine)
             stash = draft.stash()
         }
         stash.email.base = nil // forget the secondary's ancestor
         let store = try seeded()
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash), usernameChecker: nil)
         XCTAssertEqual(store.rebasingDraftCount(), 1, "one surviving ancestor still means entity-backed")
         _ = restored
         let empty = ProfileStoreFfi() // ...and it orphans into a deleted canonical, not commit as new
-        let orphan = try empty.restore(accepted: empty.acceptStash(stash: stash))
+        let orphan = try empty.restore(accepted: empty.acceptStash(stash: stash), usernameChecker: nil)
         XCTAssertEqual(orphan.snapshot().status, .orphaned)
     }
 
     /// C14 — editing a conflicted field to theirs auto-converges (C04 with the events in the other order).
     func testC14EditingAConflictedFieldToTheirsAutoConverges() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         guard case .conflicted = draft.snapshot().name.sync else { return XCTFail("expected a conflict to converge") }
@@ -314,7 +315,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C15 — base_version tracks the rebase; an orphan's stamp stops moving.
     func testC15TheBaseVersionTracksTheRebase() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let atCheckout = draft.snapshot().version
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         let afterRebase = draft.snapshot().version
@@ -326,7 +327,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C17 — a successful submit tombstones the draft; a second is AlreadySubmitted.
     func testC17ASuccessfulSubmitReleasesTheDraft() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertTrue(draft.isLive())
         try draft.submit()
         XCTAssertFalse(draft.isLive(), "a successful submit tombstones the handle")
@@ -338,7 +339,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C17 — a refused submit leaves the draft live and its edit intact, under the same id.
     func testC17ARefusedSubmitLeavesTheDraftLive() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         XCTAssertThrowsError(try draft.submit()) { error in
@@ -353,7 +354,7 @@ final class ProfileConformanceSuite: XCTestCase {
     func testC18ReleaseFreesTheDraftAndStopsRebase() throws {
         let store = try seeded()
         do {
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             XCTAssertEqual(store.liveDraftCount(), 1)
             _ = draft
         } // ARC deinit → boltffi release → Rust Drop → deregister
@@ -366,7 +367,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C19 — a dirty field whose OWN canonical never moved is not conflicted by a rebase of another field.
     func testC19ADirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithSecondary(fixture.secondaryTheirs)) // secondary, and only secondary
         let snap = draft.snapshot()
@@ -382,7 +383,7 @@ final class ProfileConformanceSuite: XCTestCase {
         let store = try seeded()
         let stash: ProfileStashFfi
         do {
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetName(raw: fixture.primaryMine)
             XCTAssertThrowsError(try draft.trySetEmail(raw: fixture.secondaryInvalid)) // records Invalid{raw}
             stash = draft.stash()
@@ -391,7 +392,7 @@ final class ProfileConformanceSuite: XCTestCase {
         XCTAssertEqual(stash.name.raw, fixture.primaryMine)
         XCTAssertEqual(stash.name.base, fixture.primaryBase)
         XCTAssertEqual(stash.email.raw, fixture.secondaryInvalid)
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash), usernameChecker: nil)
         let snap = restored.snapshot()
         XCTAssertEqual(snap.name.validity, .valid(value: fixture.primaryMine))
         XCTAssertTrue(snap.name.dirty)
@@ -406,14 +407,14 @@ final class ProfileConformanceSuite: XCTestCase {
         let stash: ProfileStashFfi
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetName(raw: fixture.primaryMine)
             try draft.trySetEmail(raw: fixture.secondaryTheirs)
             stash = draft.stash()
         }
         let fresh = ProfileStoreFfi()
         try fresh.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs)) // server moved the primary only
-        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash), usernameChecker: nil)
         let snap = restored.snapshot()
         XCTAssertEqual(snap.conflicts, [.name])
         guard case .conflicted(_, let theirs) = snap.name.sync else { return XCTFail("the moved field must conflict") }
@@ -428,12 +429,12 @@ final class ProfileConformanceSuite: XCTestCase {
         let stash: ProfileStashFfi
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetName(raw: fixture.primaryMine)
             stash = draft.stash()
         }
         let empty = ProfileStoreFfi() // the server 404s
-        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash))
+        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash), usernameChecker: nil)
         XCTAssertEqual(restored.snapshot().status, .orphaned)
         XCTAssertThrowsError(try restored.submit()) { error in
             guard case .orphaned? = error as? SubmitErrorFfi else { return XCTFail("expected .orphaned") }
@@ -445,7 +446,7 @@ final class ProfileConformanceSuite: XCTestCase {
         let stash: ProfileStashFfi
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetName(raw: fixture.primaryMine)
             try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
             try draft.resolveKeepMine(field: .name) // base := theirs
@@ -453,7 +454,7 @@ final class ProfileConformanceSuite: XCTestCase {
         }
         let fresh = ProfileStoreFfi()
         try fresh.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs)) // server still says theirs
-        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash), usernameChecker: nil)
         let snap = restored.snapshot()
         XCTAssertTrue(snap.conflicts.isEmpty, "the user already resolved this; it must not be re-litigated")
         XCTAssertEqual(snap.name.validity, .valid(value: fixture.primaryMine))
@@ -463,11 +464,11 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C22 — "a draft exists" and "a draft rebases" are different questions; a create-flow draft and an orphan diverge them.
     func testC22DraftCountAndRebasingDraftCountAreDifferentQuestions() throws {
         let empty = ProfileStoreFfi()
-        let createFlow = empty.checkout()
+        let createFlow = empty.checkout(usernameChecker: nil)
         XCTAssertEqual(empty.liveDraftCount(), 1, "a create-flow draft exists")
         XCTAssertEqual(empty.rebasingDraftCount(), 0, "and is never rebased (C12)")
         try empty.applyCanonical(values: fixture.seed())
-        let entityBacked = empty.checkout()
+        let entityBacked = empty.checkout(usernameChecker: nil)
         XCTAssertEqual(empty.liveDraftCount(), 2, "an entity-backed checkout is both")
         XCTAssertEqual(empty.rebasingDraftCount(), 1)
         empty.deleteCanonical() // orphan the entity-backed one
@@ -482,13 +483,13 @@ final class ProfileConformanceSuite: XCTestCase {
         var stash: ProfileStashFfi
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetEmail(raw: fixture.secondaryTheirs)
             stash = draft.stash()
         }
         stash.email.base = fixture.secondaryInvalid // the ancestor no longer parses
         let store = try seeded() // canonical secondary == secondaryBase, differs from the rescued value
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash), usernameChecker: nil)
         let snap = restored.snapshot()
         XCTAssertTrue(snap.email.dirty, "the rescued value survives, dirty")
         guard case .conflicted(let base, let theirs) = snap.email.sync else {
@@ -503,14 +504,14 @@ final class ProfileConformanceSuite: XCTestCase {
         var stash: ProfileStashFfi
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: nil)
             try draft.trySetEmail(raw: fixture.secondaryTheirs)
             stash = draft.stash()
         }
         stash.email.base = fixture.secondaryInvalid
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: seedWithSecondary(fixture.secondaryTheirs)) // canonical == the rescued value
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash), usernameChecker: nil)
         let snap = restored.snapshot()
         guard case .inSync = snap.email.sync else { return XCTFail("a lost ancestor that converges lands clean") }
         XCTAssertFalse(snap.email.dirty)
@@ -519,8 +520,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C13 — a value-moving edit resets the async verdict; a verdict endorses a value, so a changed value un-endorses it.
     func testC13AValueMovingEditResetsTheVerdict() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.setUsernameChecker(checker: passingChecker())
+        let draft = store.checkout(usernameChecker: passingChecker())
         try draft.trySetUsername(raw: fixture.checkedMine)
         XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
@@ -531,8 +531,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C13 — a value-preserving edit (edit-to-same) leaves the verdict standing.
     func testC13AValuePreservingEditLeavesTheVerdictStanding() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.setUsernameChecker(checker: passingChecker())
+        let draft = store.checkout(usernameChecker: passingChecker())
         try draft.trySetUsername(raw: fixture.checkedMine)
         XCTAssertTrue(try draft.runUsernameCheck())
         try draft.trySetUsername(raw: fixture.checkedMine) // edit to the SAME value
@@ -542,8 +541,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C13 — a preserved conflict leaves the verdict standing; resolving take-theirs moves the value and resets it.
     func testC13TakeTheirsMovesTheValueAndResetsTheVerdict() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.setUsernameChecker(checker: passingChecker())
+        let draft = store.checkout(usernameChecker: passingChecker())
         try draft.trySetUsername(raw: fixture.checkedMine)
         XCTAssertTrue(try draft.runUsernameCheck())
         try store.applyCanonical(values: seedWithChecked(fixture.checkedTheirs)) // conflicts; value stays mine
@@ -552,10 +550,11 @@ final class ProfileConformanceSuite: XCTestCase {
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
     }
 
-    /// C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check unblocks it.
+    /// C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check
+    /// unblocks it. The capability was present from checkout (D34) — C16 binds on UNRUN, not on absent.
     func testC16AnUnrunCheckOnADirtyCheckedFieldBlocksSubmit() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: passingChecker())
         try draft.trySetUsername(raw: fixture.checkedMine)
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
         XCTAssertThrowsError(try draft.submit()) { error in
@@ -566,7 +565,6 @@ final class ProfileConformanceSuite: XCTestCase {
             XCTAssertEqual(violation?.error.key, "username_check_required")
             XCTAssertEqual(violation?.pins, [.username])
         }
-        draft.setUsernameChecker(checker: passingChecker())
         XCTAssertTrue(try draft.runUsernameCheck())
         try draft.submit() // now unblocked
     }
@@ -574,7 +572,7 @@ final class ProfileConformanceSuite: XCTestCase {
     /// C16 — the other half: a clean checked field needs no check, or an edit to another field could never submit.
     func testC16ACleanCheckedFieldNeedsNoCheck() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         try draft.trySetName(raw: fixture.primaryMine) // edit a NON-checked field
         XCTAssertFalse(draft.snapshot().username.dirty)
         try draft.submit() // must not throw
