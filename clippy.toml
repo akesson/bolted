@@ -1,7 +1,7 @@
 # Determinism: core state evolution must stay a pure function of the core's input
 # sequence, so time never originates inside core crates — it arrives as an input
-# (verb argument or effect completion). The rule's ARCHITECTURE §5 home is pending the
-# core-evolution design session (docs/design/core-evolution-triage.md, T3c). Tests may
+# (verb argument or effect completion). The rule is ARCHITECTURE §5's no-ambient-nondeterminism
+# paragraph (D35); this deny-list is its enforcement rung. Tests may
 # #[allow(clippy::disallowed_methods)] locally where wall-clock timing is genuinely needed.
 disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "ambient time breaks replay determinism — take time as an input" },
