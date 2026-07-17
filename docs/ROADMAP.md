@@ -37,7 +37,8 @@ work around them.
 | 20 | OS-integration spike III: Linux/systemd re-confirmation probe | 5 — OS spike | **done** — [plan](steps/step-20-linux-systemd-probe.md) · [report](steps/step-20-report.md) |
 | — | Topology design pass | design session | **done** — resolved as **D30–D33** (ARCHITECTURE **v1.9**): the daemon-owned topology is blessed (one store, one owner, every surface attaches; hybrids rejected as two canonicals), the wire is a generated values-only artifact — priced in [topology-wire-pricing.md](steps/artifacts/topology-wire-pricing.md), emitted later — lifecycle is OS-owned with "**on while any surface lives**" as the named steady state, and the `command` verb **graduates** as a scratch-draft transaction (DSL/core packaging wait for the first framework consumer). §9's process-topology and `command` bullets are closed; Phase 5's campaign is complete and `spikes/os-integration/` is **disposal-eligible** |
 | 21 | Capability coverage: the capability is a checkout argument | 4 — Harness | **done** — [plan](steps/step-21-capability-coverage.md) · [report](steps/step-21-report.md); **D34** (ARCHITECTURE **v1.10**) shipped through the whole chain: each declared capability is an explicit *optional* parameter of the generated `checkout`/`restore`, the settable slot is deleted, a forgotten capability is a platform **compile error** (watched verbatim on Swift and Kotlin), a `nil` is a declared absence with C16 as its floor — and the emitted C16 test now proves wired-but-unrun still blocks. `Option<Box<dyn Trait>>` crosses boltffi on all three live backends. Tiers: `test:apple` 0 failures · `test:android` 80/0 (+app/gen) · `test:csharp` 14/14 (tripwire green, unrelated). The planned rung-3 `bolted-check` analysis **dissolved**; no kill criteria hit |
-| 22+ | Harness cont. (`doctor`, `bolted new`) · the wire emitter (D31, gated on a product feature needing the daemon topology) · `command` in core/macros (D33, with its first framework consumer) · C# resume (tripwire-gated) | — | sketched — see Phases 4–5 |
+| 22 | `doctor`: the environment report for what mise cannot pin | 4 — Harness | **ready** — [plan](steps/step-22-doctor.md) |
+| 23+ | `bolted new` (gated on the first out-of-tree framework consumer / a publishing story) · the wire emitter (D31, gated on a product feature needing the daemon topology) · `command` in core/macros (D33, with its first framework consumer) · C# resume (tripwire-gated) | — | sketched — see Phases 4–5 |
 
 ## Phase 1 — Design validation spike
 
@@ -328,8 +329,20 @@ each declared capability is an explicit optional parameter of `checkout`/`restor
 one is a platform compile error (rung 2, watched verbatim on both compilers) and a `nil` is a
 declared absence with C16 as its runtime floor. The rung-3 analysis the sketch imagined for
 `bolted-check` dissolved (the D19/KC2 pattern): the uncovered state stopped being representable.
-The remaining analyses stay sketched, each authored when it becomes current: `doctor` and
-`bolted new` scaffolding. *(The Phase-4 sketch originally queued these before the OS-integration
+
+**Step 22 — `doctor`** ([plan](steps/step-22-doctor.md)) closes the last missing verb of VISION's
+standard set: a read-only, per-tier environment report covering exactly what `mise install`
+cannot pin (VISION risk 5 — Xcode, the Android SDK/NDK/system image, Chrome, the cargo-installed
+boltffi CLI at its pinned version), warning instead of failing, with the requirements knowledge
+guarded against drift by two rung-3 pins inside `check`: a coverage manifest (every `mise.toml`
+task maps to a doctor row or a recorded exemption, both directions) and a version cross-pin
+(doctor's boltffi literal must equal `setup:boltffi`'s). No ARCHITECTURE change — doctor is
+harness tooling, not contract.
+
+**`bolted new` stays sketched and gains its gate**: scaffolding designed today would be designed
+from zero out-of-tree consumers (no publishing story exists; every shell lives in-tree on path
+deps) — the D20 error the wire emitter and `command` packaging already refuse. It becomes
+current with the first external framework consumer. *(The Phase-4 sketch originally queued these before the OS-integration
 spike; the spike was pulled forward as Phase 5 — see below — because capability coverage could
 not be designed honestly before the spike showed what OS surfaces demand of capabilities. It
 did: surfaces are heterogeneous, and a capability is the surface's own OS access — which is why
