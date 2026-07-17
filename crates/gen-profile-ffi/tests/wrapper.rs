@@ -70,7 +70,7 @@ impl UsernameChecker for Scripted {
 #[test]
 fn every_mutator_refuses_a_submitted_draft_instead_of_lying_about_it() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     draft.try_set_name("Grace".to_owned()).expect("live draft");
     draft.submit().expect("valid");
 
@@ -114,7 +114,7 @@ fn every_mutator_refuses_a_submitted_draft_instead_of_lying_about_it() {
 #[test]
 fn the_observers_of_a_submitted_draft_do_not_throw() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     draft
         .submit()
         .expect("a clean checkout of a valid canonical commits");
@@ -127,26 +127,26 @@ fn the_observers_of_a_submitted_draft_do_not_throw() {
     let _ = draft.stash();
 }
 
-/// `run_*_check` distinguishes "no checker installed" from "the draft is gone". `spike-profile-ffi`
-/// returned `false` for both, and step 11 caught the generator doing the same when *no checker*
-/// was installed on a corpse: the no-checker short-circuit ran ahead of the draft-liveness gate,
-/// so a released draft answered `Ok(false)` instead of refusing. D23 says a mutating verb refuses a
-/// released draft *unconditionally* — the three cells below pin that.
+/// `run_*_check` distinguishes "the capability is a declared absence" from "the draft is gone".
+/// `spike-profile-ffi` returned `false` for both, and step 11 caught the generator doing the same
+/// when no checker was present on a corpse: the no-capability short-circuit ran ahead of the
+/// draft-liveness gate, so a released draft answered `Ok(false)` instead of refusing. D23 says a
+/// mutating verb refuses a released draft *unconditionally* — the three cells below pin that.
+/// Since D34 the absence is *declared* at checkout (`None`), never a forgotten setter.
 #[test]
 fn running_a_check_without_a_checker_is_not_the_same_as_running_it_on_a_corpse() {
-    // Cell 1 — live draft, no checker: the one case that is `Ok(false)`.
+    // Cell 1 — live draft, declared-absent capability: the one case that is `Ok(false)`.
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     assert_eq!(
         draft.run_username_check(),
         Ok(false),
-        "a live draft with no checker is the only `Ok(false)`"
+        "a live draft with a declared-absent capability is the only `Ok(false)`"
     );
 
-    // Cell 2 — corpse WITH a checker installed: refuses (this path always worked; the runner
-    // restores the checker and returns `DraftClosed` when `draft_mut` misses).
-    let with_checker = store.checkout();
-    with_checker.set_username_checker(Scripted::new(CheckVerdictFfi::Pass).0);
+    // Cell 2 — corpse WITH a checker: refuses (this path always worked; the runner restores the
+    // checker and returns `DraftClosed` when `draft_mut` misses).
+    let with_checker = store.checkout(Some(Scripted::new(CheckVerdictFfi::Pass).0));
     with_checker.submit().expect("valid");
     assert_eq!(
         with_checker.run_username_check(),
@@ -154,15 +154,15 @@ fn running_a_check_without_a_checker_is_not_the_same_as_running_it_on_a_corpse()
         "a released draft with a checker refuses"
     );
 
-    // Cell 3 — corpse with NO checker: the D23 no-checker control. Before M1 this returned
-    // `Ok(false)` (indistinguishable from "no checker on a live draft"); the draft-liveness gate
-    // now makes it refuse, checker or not.
-    let no_checker = store.checkout();
+    // Cell 3 — corpse with a declared-absent capability: the D23 control. Before step 12 this
+    // returned `Ok(false)` (indistinguishable from cell 1); the draft-liveness gate makes it
+    // refuse, capability or not.
+    let no_checker = store.checkout(None);
     no_checker.submit().expect("valid");
     assert_eq!(
         no_checker.run_username_check(),
         Err(DraftClosedFfi::DraftClosed),
-        "D23: a released draft refuses even with no checker installed"
+        "D23: a released draft refuses even with the capability declared absent"
     );
 }
 
@@ -173,11 +173,10 @@ fn running_a_check_without_a_checker_is_not_the_same_as_running_it_on_a_corpse()
 #[test]
 fn a_failed_check_raises_the_declared_key_and_blocks_the_submit() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(Some(Scripted::new(CheckVerdictFfi::Fail).0));
     draft
         .try_set_username("taken".to_owned())
         .expect("valid username");
-    draft.set_username_checker(Scripted::new(CheckVerdictFfi::Fail).0);
 
     assert_eq!(draft.run_username_check(), Ok(true));
 
@@ -204,12 +203,11 @@ fn a_failed_check_raises_the_declared_key_and_blocks_the_submit() {
 #[test]
 fn the_checker_is_asked_about_the_value_it_will_be_bound_to() {
     let store = seeded();
-    let draft = store.checkout();
+    let (checker, seen) = Scripted::new(CheckVerdictFfi::Pass);
+    let draft = store.checkout(Some(checker));
     draft
         .try_set_username("  Grace  ".to_owned())
         .expect("sanitized to `Grace`");
-    let (checker, seen) = Scripted::new(CheckVerdictFfi::Pass);
-    draft.set_username_checker(checker);
     assert_eq!(draft.run_username_check(), Ok(true));
 
     // The sanitizer ran first (D9's echo rule lives above this), so the checker sees the *parsed*
@@ -222,9 +220,8 @@ fn the_checker_is_asked_about_the_value_it_will_be_bound_to() {
 #[test]
 fn a_verdict_does_not_survive_the_value_that_earned_it() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(Some(Scripted::new(CheckVerdictFfi::Pass).0));
     draft.try_set_username("grace".to_owned()).expect("valid");
-    draft.set_username_checker(Scripted::new(CheckVerdictFfi::Pass).0);
     assert_eq!(draft.run_username_check(), Ok(true));
     assert_eq!(draft.snapshot().username_check, CheckStateFfi::Passed);
 
@@ -272,9 +269,8 @@ fn a_reentrant_checker_does_not_deadlock() {
     }
 
     let store = Arc::new(seeded());
-    let draft = store.checkout();
+    let draft = store.checkout(Some(Box::new(Nosy(Arc::clone(&store)))));
     draft.try_set_username("grace".to_owned()).expect("valid");
-    draft.set_username_checker(Box::new(Nosy(Arc::clone(&store))));
 
     assert_eq!(draft.run_username_check(), Ok(true));
     assert_eq!(draft.snapshot().username_check, CheckStateFfi::Passed);
@@ -284,7 +280,7 @@ fn a_reentrant_checker_does_not_deadlock() {
 #[test]
 fn the_two_draft_counts_answer_different_questions() {
     let store = ProfileStoreFfi::new();
-    let create_flow = store.checkout(); // no canonical yet
+    let create_flow = store.checkout(None); // no canonical yet
     assert_eq!(store.live_draft_count(), 1);
     assert_eq!(
         store.rebasing_draft_count(),
@@ -293,7 +289,7 @@ fn the_two_draft_counts_answer_different_questions() {
     );
 
     store.apply_canonical(values("ada")).expect("valid");
-    let editing = store.checkout();
+    let editing = store.checkout(None);
     assert_eq!(store.live_draft_count(), 2);
     assert_eq!(store.rebasing_draft_count(), 1);
 
@@ -341,7 +337,7 @@ fn the_declared_constraints_cross_the_boundary() {
 #[test]
 fn the_snapshot_reports_which_fields_are_dirty() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     assert!(!draft.snapshot().any_dirty);
 
     draft.try_set_name("Grace".to_owned()).expect("valid");
@@ -363,7 +359,7 @@ fn the_snapshot_reports_which_fields_are_dirty() {
 #[test]
 fn conflicts_cross_with_the_right_field_ids_in_declaration_order() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     draft.try_set_username("mine".to_owned()).expect("valid");
     draft
         .try_set_email("mine@corp.example".to_owned())
@@ -394,7 +390,7 @@ fn conflicts_cross_with_the_right_field_ids_in_declaration_order() {
 #[test]
 fn keep_mine_and_take_theirs_reach_different_outcomes() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     draft.try_set_username("mine".to_owned()).expect("valid");
     draft
         .try_set_email("mine@corp.example".to_owned())
@@ -438,11 +434,10 @@ fn keep_mine_and_take_theirs_reach_different_outcomes() {
 #[test]
 fn a_check_in_flight_is_observably_pending() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(Some(Scripted::new(CheckVerdictFfi::Pass).0));
     draft.try_set_username("grace".to_owned()).expect("valid");
 
     let subscription = draft.snapshots();
-    draft.set_username_checker(Scripted::new(CheckVerdictFfi::Pass).0);
     assert_eq!(draft.run_username_check(), Ok(true));
 
     let states: Vec<CheckStateFfi> = std::iter::from_fn(|| subscription.pop_event())
@@ -472,7 +467,7 @@ fn a_check_in_flight_is_observably_pending() {
 #[test]
 fn a_stash_from_an_unknown_schema_is_refused_and_a_current_one_restores() {
     let store = seeded();
-    let draft = store.checkout();
+    let draft = store.checkout(None);
     draft
         .try_set_name("My Name".to_owned())
         .expect("valid name");
@@ -487,7 +482,7 @@ fn a_stash_from_an_unknown_schema_is_refused_and_a_current_one_restores() {
     let accepted = fresh
         .accept_stash(stash.clone())
         .expect("a current-version stash passes the gate");
-    let restored = fresh.restore(accepted);
+    let restored = fresh.restore(accepted, None);
     assert_eq!(
         restored.snapshot().name.validity,
         TextValidity::Valid {
