@@ -10,7 +10,8 @@ target (browser only, never a webview).
 | Doc | What it is |
 |-----|------------|
 | [docs/VISION.md](docs/VISION.md) | Scope, principles, the verification ladder, non-goals |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The design: Elm core, observe/command/draft contract, typed fields, live rebase |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The design: facets over a store-owned core, observe/command/draft contract, typed fields, live rebase |
+| [docs/GLOSSARY.md](docs/GLOSSARY.md) | The ubiquitous language — deliberately small, owner-curated |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased plan and step status |
 | [docs/steps/](docs/steps/) | Detailed per-step plans and completion reports |
 | [CLAUDE.md](CLAUDE.md) | Project memory: read order, working agreement, conventions |

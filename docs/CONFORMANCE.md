@@ -8,7 +8,7 @@ Each one is normative: an implementation of the Bolted contract that violates an
 Bolted implementation, whatever else it does.
 
 Every `CNN` below has at least one `cNN_*` function in
-[`crates/bolted-conformance`](../crates/bolted-conformance/src), generic over a feature, and
+[`crates/bolted-conformance`](../crates/bolted-conformance/src), generic over a facet, and
 [`tests/manifest.rs`](../crates/bolted-conformance/tests/manifest.rs) guarantees this document and
 the suite cannot drift apart — three ways: every documented ID has a function, every function is a
 documented ID, and every function is stamped by exactly one `*_suite!` macro, so a fixture cannot
@@ -27,8 +27,8 @@ the mapping is verified by the build, not by review.
 Wording convention: **must** is normative. "The field" means an editable `Field<V>` of a draft; "the
 draft" means a value implementing `Draft`; "theirs" is an incoming canonical value.
 
-Not every feature owes every invariant. C08 presupposes a tier-2 rule; C10, C13 and C16 presuppose an
-async check; a feature with neither still satisfies the rest. The suite says so in trait bounds
+Not every facet owes every invariant. C08 presupposes a tier-2 rule; C10, C13 and C16 presuppose an
+async check; a facet with neither still satisfies the rest. The suite says so in trait bounds
 (`RuleFeature`, `AsyncCheckFeature`) rather than in prose.
 
 ## The invariants
@@ -111,7 +111,7 @@ property — it silently asserts the bug.**
 **C12's second sentence was added in step 08, and it is the only thing that tests `is_based`.** Every
 draft the rest of the suite builds has an ancestor in all of its fields or in none, so a `StoreDraft`
 that decides entity-backedness by consulting a *single* field passes all 21 other invariants — on both
-features, verified by mutation. It matters because a partially-ancestored draft is not hypothetical:
+facets, verified by mutation. It matters because a partially-ancestored draft is not hypothetical:
 the stash is an untrusted input, and a constraint tightened between app versions leaves exactly this
 shape. A draft misjudged create-flow is never rebased and never orphaned, and it silently overwrites
 the server on submit. Step 09 will *generate* `is_based`; this is the test that will catch it.
@@ -132,7 +132,7 @@ Step 06 promised the C-IDs would be *emitted* as per-language contract tests. St
 fixture, run in the emulator/simulator tiers the shells already build. The foreign tier verifies **the
 boundary, not the algebra** — that the binding and wrapper *preserve* the core's semantics across the
 seam — so it is example-based on purpose: the properties stay in the Rust suite above, which already
-proves them against four features. A foreign test that fails names a binding or wrapper bug, never the
+proves them against four facets. A foreign test that fails names a binding or wrapper bug, never the
 core's.
 
 Not every invariant crosses. An ID is **emitted** when the *public generated surface* (the `#[export]`
