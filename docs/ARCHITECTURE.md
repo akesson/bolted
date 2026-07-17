@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.11, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, and the core-evolution design session).** Phase 1 validated this design against
+**Status: FROZEN (v1.12, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, and the facet vocabulary pass).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -47,7 +47,12 @@ the frame loop never crosses the FFI; **D37** gives `observe` its semantics — 
 coalescing legal on every target, the old `[Pending, Passed]` delivery downgraded to a driver
 fact; **D38** adopts the `bolted-http` shape (sans-io contract crate, shell-side adapters). §9
 gains the restored interaction-replay item and the parked windowed-collections and `bolted-http`
-freeze-gate items. A
+freeze-gate items. **v1.12** is vocabulary only, no design change — the session's remaining triage
+item (T6): the unit a core exports to its shells is named **facet**
+([GLOSSARY.md](GLOSSARY.md)), ending the collision where "feature" meant both that unit and
+`bolted_decl::Feature`, the declaration model; the generated per-platform glue is a **facet
+binding**, and Bolted ships no ViewModels. Historical text (§8's rows, step docs and reports)
+keeps its words. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -62,7 +67,9 @@ which every decision below is justified against.
 
 ## 1. The shape: MVVM over a store-owned core
 
-- **Model** — a store-owned core per feature. A `Store<D>` owns the feature's single canonical,
+- **Model** — a store-owned core per **facet**, the unit Bolted exports to its shells: a
+  domain-grouped, reactive set of state and operations ([GLOSSARY.md](GLOSSARY.md)). A `Store<D>`
+  owns the facet's single canonical,
   always-valid entity and every open draft, keyed by id and lock-free (D16). Canonical state is
   never mid-edit: all editing happens inside draft sessions, and the store's answer to a mutation is
   **data** — the rebase fan-out is a returned `Vec<DraftId>`, an async check is a `CheckToken`
@@ -71,15 +78,19 @@ which every decision below is justified against.
   an Elm core with `State`/`Msg`/a pure `update` fn; six spikes shipped none of that and drove
   `Store` + `Draft` directly — D29 rewrote the framing to match the code. Effects-as-data, the good
   half of the Elm framing, survives; see §8's sans-io row.)*
-- **ViewModel** — generated per platform from the feature's contract: thin, dumb glue
-  binding the contract to `@Observable` (Swift) / `StateFlow` (Kotlin) /
+- **Facet binding** (where MVVM would say ViewModel) — generated per platform from the facet's
+  contract: thin, dumb glue binding it to `@Observable` (Swift) / `StateFlow` (Kotlin) /
   `INotifyPropertyChanged` (C#). Rust shells (web via Leptos/Dioxus/Silkenweb, Linux-native)
   consume the contract directly as a crate — no codegen.
 - **View** — fully native, owned by the app, holds no business logic and **no constraint
   literals** (a max length appearing in shell code is a defect — greppable in CI).
 
+**Facets are scoped by domain cohesion, never by view structure — Bolted ships no ViewModels.**
+A screen may compose several facets; a tray icon may observe a sliver of one. A ViewModel, if an
+app wants one at all, is the app's own view-scoped composition over facet bindings.
+
 A "view" is any native surface, not just a window: a tray/menu-bar icon, a file-manager
-extension, a widget, a CLI — each is just another (often tiny) observer of a feature's state,
+extension, a widget, a CLI — each is just another (often tiny) observer of a facet's state,
 driving it back through the same verbs. The main app window has no privileged status in the contract.
 
 Surfaces need not share a process (D30). The default topology embeds the store in the app process —
@@ -87,17 +98,17 @@ everything Phases 1–4 built. The moment a product needs surfaces the OS spawns
 (a daemon, a file-manager extension, a tray that outlives the window), the store moves into an
 OS-managed daemon and **every** surface — the main window included — attaches as a wire client: the
 contract crosses the boundary values-only over a generated wire (D31), and the OS owns the daemon's
-lifecycle (D32). One store, one owner, always — two live stores over one feature would be two
+lifecycle (D32). One store, one owner, always — two live stores over one facet would be two
 canonicals, and reconciling them is a merge protocol beyond the field-level keep/take ceiling (§4),
 i.e. the perimeter.
 
-The contract a feature exposes has two shipped verbs, plus a third — `command` — designed but not
+The contract a facet exposes has two shipped verbs, plus a third — `command` — designed but not
 yet built (D33, see below):
 
 | Verb | Surface | Semantics |
 |------|---------|-----------|
 | **observe** | read-only, always-valid current state | **watch-shaped** (D37): a consumer is guaranteed the newest state, never every intermediate — coalescing is legal on every target. *How* it is delivered is per-target: a `snapshots()` stream across FFI, a direct read plus a change tick in a Rust shell (§8), the push client over the wire (D31) |
-| **draft** | `checkout() -> FeatureDraft` | multi-field edit session: checkout → edit → validate → submit |
+| **draft** | `checkout() -> FacetDraft` | multi-field edit session: checkout → edit → validate → submit |
 
 A **third verb, `command`** — a session-less single-action mutation (`toggle_paused()`), for
 surfaces that structurally cannot host an edit session: a file-manager context menu, a tray toggle.
@@ -111,7 +122,7 @@ and core packaging wait for the first framework consumer (D33).
 
 **Canonical core state is never mid-edit.** All editing happens inside drafts; `submit` applies one
 fully-validated result to the store in a single transition (§4), so the canonical entity only ever
-moves between valid states, never through a keystroke. A feature that records its submits therefore
+moves between valid states, never through a keystroke. A facet that records its submits therefore
 gets a domain log ("profile updated"), not a keystroke log — the precondition for meaningful
 replay/time-travel.
 
@@ -227,7 +238,7 @@ merging, ever** (perimeter).
   survives only for the outer core↔server loop — the same pattern telescoped
   (shell↔core mirrors core↔server: snapshot down, transactional submit up, reconcile).
 - Across FFI, drafts expose their own snapshot stream (they can change from underneath via rebase);
-  a draft is then a mini feature, same stream+operations shape, same generated binding
+  a draft is then a mini facet, same stream+operations shape, same generated binding
   machinery, reused. A **Rust shell does not want the stream** and does not get one — see §8.
 - Every snapshot carries the store `version` it is based on. A draft's stamp advances with each
   rebase (C15), so a consumer can reconcile a `snapshot()` read against a future-only subscription.
@@ -369,7 +380,7 @@ subtrait that no shell ever calls (§8, D12). `AlreadySubmitted` is the one fail
 that a draft cannot, which is why the two enums differ by exactly that variant.
 
 **Thin macros, in practice.** Writing `bolted-macros` (step 09) is what put teeth in "generics carry
-behavior". Three judgements were about to be emitted per feature, and each moved down into the core
+behavior". Three judgements were about to be emitted per facet, and each moved down into the core
 instead: `Field::required_error` (the `Unset` → `required` decision, D13), `commit_gates` (C07's three
 gates, in order), and `SingleFlight::violation` (C13 + C16's whole payload). The rule the generated
 code now obeys is checkable, and is checked: **no `match` over a `Validity`, no `if` that decides
@@ -380,19 +391,19 @@ one of those shapes has moved the design's most consequential judgements to its 
 
 ```
 bolted-core         all traits + generic types; sans-io, and lock-free; NEVER depends on boltffi
-bolted-conformance  C01–C22, generic over a feature; the executable form of CONFORMANCE.md
+bolted-conformance  C01–C22, generic over a facet; the executable form of CONFORMANCE.md
 bolted-decl         the declaration model + its parser; read by BOTH emitters below (D25)
 bolted-macros       the derives (value, entity, rules); output = thin delegation to bolted-core
-bolted-ffi-gen      declaration -> Rust source text for a feature's FFI layer (D22); no boltffi dep
+bolted-ffi-gen      declaration -> Rust source text for a facet's FFI layer (D22); no boltffi dep
 bolted-ffi          shared #[data] DTOs; hand-written; the ONLY crate importing boltffi
 bolted-check        build-time analyses (drift, coverage, constraint semver)
 
-<feature>-ffi        GENERATED, committed src/generated.rs + hand-written src/custom.rs; imports boltffi
+<facet>-ffi          GENERATED, committed src/generated.rs + hand-written src/custom.rs; imports boltffi
 ```
 
 `bolted-decl` exists because two emitters would otherwise be two contracts, and the drift check would
 be comparing a generator against itself (D25). `bolted-ffi-gen` is not a macro for the reason §5 gives:
-bindgen cannot see macro output. `<feature>-ffi/src/lib.rs` must `pub use generated::*;` — under
+bindgen cannot see macro output. `<facet>-ffi/src/lib.rs` must `pub use generated::*;` — under
 `boltffi pack`'s expansion mode the whole-crate metadata blob resolves every exported type **from the
 crate root**, and `mise run check` cannot see that failure.
 
@@ -446,7 +457,7 @@ keeps interaction replay (§9) possible (D35). Enforced by the workspace `clippy
 - **Process death (Android)**: core-side drafts die with the process, so a draft flattens to raw data
   and comes back through `Store::restore` (D15, C20/C21, §4). The shell decides when — Android's
   `SavedStateHandle`; nothing else has to.
-- **Rust shells** (web, Linux-native): consume `bolted-core` + feature crates directly; zero
+- **Rust shells** (web, Linux-native): consume `bolted-core` + facet crates directly; zero
   FFI; the web target also enforces `wasm32-unknown-unknown` discipline on the whole core.
 - **Daemon topology (D30–D32)**: activation is per-OS in mechanism, identical in shape — launchd is
   one C call (`launch_activate_socket`, no env protocol), systemd is one env protocol
@@ -471,9 +482,9 @@ keeps interaction replay (§9) possible (D35). Enforced by the workspace `clippy
 
 The design's falsifiable claims, C01–C22, are stated normatively in **[CONFORMANCE.md](CONFORMANCE.md)**
 and exist as generic functions (`c01_*` … `c22_*`) in `crates/bolted-conformance`, stamped into tests
-by `*_suite!` macros. **Four** features implement the fixture traits — `spike-profile` (rule, async
+by `*_suite!` macros. **Four** facets implement the fixture traits — `spike-profile` (rule, async
 check, composite value) and `spike-note` (none of them), plus `gen-profile` and `gen-note`, which
-declare the same two features through `bolted-macros` — because a suite with one implementor is a
+declare the same two facets through `bolted-macros` — because a suite with one implementor is a
 suite shaped like its implementor, and a macro with one input is a macro shaped like it. A drift test
 parses the document and fails the build if an ID has no function, a function has no ID, or a function
 no macro stamps: the mapping is verified by the build, not by review (VISION rung 3).
@@ -490,7 +501,7 @@ draft · **C18** release is explicit, idempotent, and the only path · **C19** r
 merge, and idempotent · **C20** a draft stashes to raw data and restores from it · **C21** restore is
 a rebase · **C22** "exists" and "rebases" are different questions.
 
-Not every feature owes every invariant: C08 presupposes a tier-2 rule, C10/C13/C16 an async check.
+Not every facet owes every invariant: C08 presupposes a tier-2 rule, C10/C13/C16 an async check.
 Step 10 emits the suite as per-language contract tests.
 
 ## 8. Resolved decisions (with the losing alternative)
@@ -561,15 +572,15 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   second macro shape, currently justified by exactly one example. Do not design it from that one.
   *(Its shadow is now recorded twice: step 09 at the core, step 10 at the FFI, where the setter takes
   one `AvailabilityRaw` rather than two dates.)*
-- **Collection observation (windowed) — designed when the first real collection feature lands.** No
-  spike has a collection feature, so designing this now would repeat the error D20/D29 twice
+- **Collection observation (windowed) — designed when the first real collection facet lands.** No
+  spike has a collection facet, so designing this now would repeat the error D20/D29 twice
   refused: a shape justified by zero examples. The candidate answer is preserved from the
   `design/core-evolution` snapshot: a windowed accessor (`open_window(range)` →
   `WindowSnapshot { version, total_count, range, rows }`) with stable `RowId`s,
   snapshot-authoritative and watch-shaped per window (D37, its precondition, is now decided), and
   deltas never crossing the FFI — the rejected alternative being a `VecDiff`-style delta protocol,
   which is unrepresentable now that coalescing is legal by contract (a delta stream cannot survive
-  a dropped intermediate; snapshots don't care). Open with the first feature: what a `Row`
+  a dropped intermediate; snapshots don't care). Open with the first facet: what a `Row`
   projection is, where `RowId` comes from (entity key?), whether `open_window` takes sort/filter
   parameters, and the windowing etiquette (overscan, threshold refetch — §6's frame-loop rule,
   D36, already governs the scroll side).

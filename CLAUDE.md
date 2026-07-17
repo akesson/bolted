@@ -3,17 +3,22 @@
 Bolted is a compile-time-verified application framework around BoltFFI (boltffi.dev): one Rust
 core, native shells (SwiftUI / Compose / WinUI / Linux), plus a Rust-web target (Leptos/Dioxus,
 browser only, zero FFI). Phases 1–3 are **done** (validation spike → design freeze → framework
-extraction; ARCHITECTURE frozen, currently v1.8); Phase 4 — the verification harness — is in
+extraction; ARCHITECTURE frozen, currently v1.12); Phase 4 — the verification harness — is in
 progress. The C# leg waits on an upstream boltffi fix; status lives in
 `upstream/boltffi/README.md`.
 
 ## Read order (do this before any work)
 
 1. `docs/VISION.md` — scope, principles, the verification ladder, non-goals.
-2. `docs/ARCHITECTURE.md` — the design: observe/command/draft triad, Elm core, `Field`
-   validity×sync, live rebase, three-tier validation, invariants (§7), OPEN questions (§9).
+2. `docs/ARCHITECTURE.md` — the design: facets, observe/command/draft triad, store-owned core,
+   `Field` validity×sync, live rebase, three-tier validation, invariants (§7), OPEN questions (§9).
 3. `docs/ROADMAP.md` — phases, step table with status, working agreement.
 4. `docs/steps/step-XX-*.md` — the current step (the one marked **ready**).
+
+Keep `docs/GLOSSARY.md` at hand throughout: it is the project's **ubiquitous language**
+(domain-driven-design sense), deliberately small and curated. Terms are admitted only by
+Henrik's explicit decision — **propose a term and ask; never add to or extend the glossary
+unilaterally**. Definitions there are self-contained (no doc/section references).
 
 ## Memory setup
 
