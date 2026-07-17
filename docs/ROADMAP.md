@@ -36,7 +36,7 @@ work around them.
 | 19 | OS-integration spike II: the Finder-citizen app | 5 — OS spike | **done** — [plan](steps/step-19-finder-citizen-app.md) · [report](steps/step-19-report.md) |
 | 20 | OS-integration spike III: Linux/systemd re-confirmation probe | 5 — OS spike | **done** — [plan](steps/step-20-linux-systemd-probe.md) · [report](steps/step-20-report.md) |
 | — | Topology design pass | design session | **done** — resolved as **D30–D33** (ARCHITECTURE **v1.9**): the daemon-owned topology is blessed (one store, one owner, every surface attaches; hybrids rejected as two canonicals), the wire is a generated values-only artifact — priced in [topology-wire-pricing.md](steps/artifacts/topology-wire-pricing.md), emitted later — lifecycle is OS-owned with "**on while any surface lives**" as the named steady state, and the `command` verb **graduates** as a scratch-draft transaction (DSL/core packaging wait for the first framework consumer). §9's process-topology and `command` bullets are closed; Phase 5's campaign is complete and `spikes/os-integration/` is **disposal-eligible** |
-| 21 | Capability coverage: the capability is a checkout argument | 4 — Harness | **ready** — [plan](steps/step-21-capability-coverage.md); design resolved as **D34** (ARCHITECTURE **v1.10**, this step's planning pass): coverage by construction — each declared capability is an explicit *optional* parameter of the generated `checkout`/`restore`, the settable slot dies, a forgotten capability is a platform **compile error**, a `nil` is a declared absence with C16 as its floor. The planned rung-3 `bolted-check` analysis **dissolves** |
+| 21 | Capability coverage: the capability is a checkout argument | 4 — Harness | **done** — [plan](steps/step-21-capability-coverage.md) · [report](steps/step-21-report.md); **D34** (ARCHITECTURE **v1.10**) shipped through the whole chain: each declared capability is an explicit *optional* parameter of the generated `checkout`/`restore`, the settable slot is deleted, a forgotten capability is a platform **compile error** (watched verbatim on Swift and Kotlin), a `nil` is a declared absence with C16 as its floor — and the emitted C16 test now proves wired-but-unrun still blocks. `Option<Box<dyn Trait>>` crosses boltffi on all three live backends. Tiers: `test:apple` 0 failures · `test:android` 80/0 (+app/gen) · `test:csharp` 14/14 (tripwire green, unrelated). The planned rung-3 `bolted-check` analysis **dissolved**; no kill criteria hit |
 | 22+ | Harness cont. (`doctor`, `bolted new`) · the wire emitter (D31, gated on a product feature needing the daemon topology) · `command` in core/macros (D33, with its first framework consumer) · C# resume (tripwire-gated) | — | sketched — see Phases 4–5 |
 
 ## Phase 1 — Design validation spike
@@ -321,12 +321,13 @@ was wrong: it named two import sites, but `tests/controller.rs` also imported th
 three files repointed (a crate-name swap, no behavioral edit); and it estimated "29" host tests where
 there are 35.
 
-**Step 21 — capability coverage** is current ([plan](steps/step-21-capability-coverage.md)); its
-planning pass resolved the design as **D34** (ARCHITECTURE v1.10): coverage moves *into the
-generated surface* — each declared capability becomes an explicit optional parameter of
-`checkout`/`restore`, so forgetting one is a platform compile error (rung 2) and a `nil` is a
+**Step 21 — capability coverage. Done** ([report](steps/step-21-report.md)); the planning pass
+resolved the design as **D34** (ARCHITECTURE v1.10) and the implementation shipped it through
+generator, emitted suites, and all three FFI shells: coverage moved *into the generated surface* —
+each declared capability is an explicit optional parameter of `checkout`/`restore`, so forgetting
+one is a platform compile error (rung 2, watched verbatim on both compilers) and a `nil` is a
 declared absence with C16 as its runtime floor. The rung-3 analysis the sketch imagined for
-`bolted-check` dissolves (the D19/KC2 pattern): the uncovered state stops being representable.
+`bolted-check` dissolved (the D19/KC2 pattern): the uncovered state stopped being representable.
 The remaining analyses stay sketched, each authored when it becomes current: `doctor` and
 `bolted new` scaffolding. *(The Phase-4 sketch originally queued these before the OS-integration
 spike; the spike was pulled forward as Phase 5 — see below — because capability coverage could

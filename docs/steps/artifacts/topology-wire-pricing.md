@@ -51,6 +51,10 @@ three-field feature with echo rule, conflicts, async check, submit, and continuo
    from the contract's own taxonomy. Recorded, not hidden.
 9. **The stash blob lives client-side** (the process that survives a daemon death) and re-enters
    through the D27 version gate; stash-at-rest versioning is D27's envelope, unchanged.
+10. **The client library's draft-session entry points take the declared capabilities as explicit
+    optional arguments** (D34, step 21) — the checker never crosses the wire (req. 1), so the
+    capability is client-side state, and the generated client owes the same
+    forgetting-is-a-compile-error shape the in-process FFI wrapper now has.
 
 ## The totals, for scale
 
