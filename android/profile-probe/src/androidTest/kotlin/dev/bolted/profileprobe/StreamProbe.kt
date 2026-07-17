@@ -36,7 +36,7 @@ class StreamProbe {
     @Before
     fun setUp() {
         store = seededStore()
-        draft = store.checkout()
+        draft = store.checkout(null)
     }
 
     @After

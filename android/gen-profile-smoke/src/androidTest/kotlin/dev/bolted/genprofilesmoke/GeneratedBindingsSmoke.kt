@@ -54,7 +54,7 @@ class GeneratedBindingsSmoke {
     fun aDraftChecksOutAndSnapshots() {
         val store = ProfileStoreFfi()
         seed(store)
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         val snapshot = draft.snapshot()
 
         for (state in listOf(snapshot.username, snapshot.name, snapshot.email)) {
@@ -68,7 +68,7 @@ class GeneratedBindingsSmoke {
     fun aKeystrokeValidatesWithATypedError() {
         val store = ProfileStoreFfi()
         seed(store)
-        val draft = store.checkout()
+        val draft = store.checkout(null)
 
         val error = assertThrows(UsernameErrorFfi::class.java) { draft.trySetUsername("ab") }
         assertEquals(UsernameErrorFfi.TooShort(min = 3u, actual = 2u), error)
@@ -79,7 +79,7 @@ class GeneratedBindingsSmoke {
     fun aMutatorRefusesASubmittedDraft() {
         val store = ProfileStoreFfi()
         seed(store)
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         draft.submit()
         assertFalse(draft.isLive())
 
@@ -92,16 +92,14 @@ class GeneratedBindingsSmoke {
     fun theGeneratedCheckerCapabilityRoundTrips() {
         val store = ProfileStoreFfi()
         seed(store)
-        val draft = store.checkout()
-        draft.trySetUsername("  grace  ")
-
         val asked = mutableListOf<String>()
-        draft.setUsernameChecker(object : UsernameChecker {
+        val draft = store.checkout(object : UsernameChecker {
             override fun check(value: String): CheckVerdictFfi {
                 asked.add(value)
                 return CheckVerdictFfi.FAIL
             }
         })
+        draft.trySetUsername("  grace  ")
         assertTrue(draft.runUsernameCheck())
 
         assertEquals("the sanitizer runs before the checker is asked", listOf("grace"), asked)
@@ -116,7 +114,7 @@ class GeneratedBindingsSmoke {
     fun closeReleasesTheDraft() {
         val store = ProfileStoreFfi()
         seed(store)
-        val draft = store.checkout()
+        val draft = store.checkout(null)
         assertEquals(1u, store.liveDraftCount())
 
         draft.close()

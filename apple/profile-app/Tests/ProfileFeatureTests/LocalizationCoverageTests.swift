@@ -45,7 +45,7 @@ final class LocalizationCoverageTests: XCTestCase {
     /// Tier 1, every value type, every failure mode the core can produce for it.
     func testEveryTier1ErrorRenders() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
 
         try? draft.trySetUsername(raw: "ab")  // too_short
         errorsOf(draft).forEach { assertRenders($0) }
@@ -67,7 +67,7 @@ final class LocalizationCoverageTests: XCTestCase {
     /// `required` only exists for a create-flow draft: an unseeded store has no canonical to copy.
     func testTheRequiredErrorRenders() {
         let store = ProfileStoreFfi()
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         let errors = errorsOf(draft)
         XCTAssertEqual(errors.filter { $0.key == "required" }.count, 4, "all four fields are Unset")
         errors.forEach { assertRenders($0) }
@@ -76,8 +76,7 @@ final class LocalizationCoverageTests: XCTestCase {
     /// Tier 2, with its params: the sentence names `corp.example`, and the core supplied that word.
     func testTheTier2RuleErrorRendersWithItsParams() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.setUsernameChecker(checker: FixedChecker(.pass))
+        let draft = store.checkout(usernameChecker: FixedChecker(.pass))
         try draft.trySetUsername(raw: "corp_alice")
         _ = try draft.runUsernameCheck()
         try draft.trySetEmail(raw: "alice@other.com")
@@ -93,7 +92,9 @@ final class LocalizationCoverageTests: XCTestCase {
     /// The async keys: `username_check_required` (progress) and `username_taken` (failure).
     func testTheAsyncCheckKeysRender() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        // The failing checker rides along from checkout (D34); it does not run until asked, so the
+        // C16 progress key is still observable first.
+        let draft = store.checkout(usernameChecker: FixedChecker(.fail))
 
         // dirty, never checked -> C16 refuses, as PROGRESS
         try draft.trySetUsername(raw: "alice2")
@@ -102,7 +103,6 @@ final class LocalizationCoverageTests: XCTestCase {
         assertRenders(required!.error)
 
         // a taken verdict -> a real error
-        draft.setUsernameChecker(checker: FixedChecker(.fail))
         _ = try draft.runUsernameCheck()
         guard case .failed(let error) = draft.snapshot().usernameCheck else {
             return XCTFail("expected a failed verdict")

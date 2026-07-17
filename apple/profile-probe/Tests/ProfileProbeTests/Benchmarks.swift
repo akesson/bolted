@@ -7,7 +7,7 @@ import GenProfileFfi
 final class Benchmarks: XCTestCase {
     /// The per-keystroke `try_set` round-trip (encode raw → cross → validate → emit snapshot).
     func testTrySetUsernameThroughput() {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         measure {
             for i in 0..<1000 {
                 try? draft.trySetUsername(raw: "user\(i % 900 + 100)")
@@ -17,7 +17,7 @@ final class Benchmarks: XCTestCase {
 
     /// The snapshot read-back (`snapshot()`) round-trip — marshaling the whole ProfileSnapshot DTO.
     func testSnapshotReadbackThroughput() throws {
-        let draft = ProfileStoreFfi().checkout()
+        let draft = ProfileStoreFfi().checkout(usernameChecker: nil)
         try draft.trySetUsername(raw: "alice")
         measure {
             for _ in 0..<1000 {

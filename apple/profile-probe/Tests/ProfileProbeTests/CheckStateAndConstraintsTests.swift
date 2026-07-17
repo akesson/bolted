@@ -14,16 +14,14 @@ final class CheckStateAndConstraintsTests: XCTestCase {
     func testPassedAndFailedSubStateInSnapshot() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: SequencedChecker([.pass, .fail]))
         XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
 
-        draft.setUsernameChecker(checker: StubChecker(.pass))
         XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
 
         // a failing verdict surfaces as .failed carrying the check's ErrorData (username value
         // unchanged between checks, so no reset intervenes).
-        draft.setUsernameChecker(checker: StubChecker(.fail))
         XCTAssertTrue(try draft.runUsernameCheck())
         guard case .failed(let error) = draft.snapshot().usernameCheck else {
             return XCTFail("expected .failed sub-state")
@@ -38,11 +36,9 @@ final class CheckStateAndConstraintsTests: XCTestCase {
     func testPendingObservableOnStreamDuringCheck() async throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
-        XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
-
         let checker = BlockingChecker(.pass)
-        draft.setUsernameChecker(checker: checker)
+        let draft = store.checkout(usernameChecker: checker)
+        XCTAssertEqual(draft.snapshot().usernameCheck, .unchecked)
 
         // Subscribe first — streams are future-only — then drive the (blocking) check off-thread.
         let stream = draft.snapshots()
@@ -77,9 +73,8 @@ final class CheckStateAndConstraintsTests: XCTestCase {
     func testResetOnEditVisibleThroughFfi() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: StubChecker(.pass))
 
-        draft.setUsernameChecker(checker: StubChecker(.pass))
         XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
 
@@ -98,9 +93,8 @@ final class CheckStateAndConstraintsTests: XCTestCase {
         func conflictedDraft() throws -> ProfileDraftFfi {
             let store = ProfileStoreFfi()
             try store.applyCanonical(values: validValues())      // username "alice"
-            let draft = store.checkout()
+            let draft = store.checkout(usernameChecker: StubChecker(.pass))
             try draft.trySetUsername(raw: "mine")                // dirty
-            draft.setUsernameChecker(checker: StubChecker(.pass))
             XCTAssertTrue(try draft.runUsernameCheck())          // verdict endorses "mine"
             XCTAssertEqual(draft.snapshot().usernameCheck, .passed)
             var conflicting = validValues()

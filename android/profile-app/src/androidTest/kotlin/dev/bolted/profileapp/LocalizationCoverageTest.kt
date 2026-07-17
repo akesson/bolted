@@ -51,7 +51,7 @@ class LocalizationCoverageTest {
     @Test
     fun everyTier1ErrorRenders() {
         seeded().use { store ->
-            store.checkout().use { draft ->
+            store.checkout(null).use { draft ->
                 // too_short / too_long / invalid_chars (username)
                 runCatching { draft.trySetUsername("ab") }
                 errorsOf(draft).forEach(::assertRenders)
@@ -82,7 +82,7 @@ class LocalizationCoverageTest {
     @Test
     fun theRequiredErrorRenders() {
         ProfileStoreFfi.new().use { store ->
-            store.checkout().use { draft ->
+            store.checkout(null).use { draft ->
                 val errors = errorsOf(draft)
                 assertEquals("all four fields are Unset", 4, errors.count { it.key == "required" })
                 errors.forEach(::assertRenders)
@@ -94,8 +94,7 @@ class LocalizationCoverageTest {
     @Test
     fun theTier2RuleErrorRendersWithItsParams() {
         seeded().use { store ->
-            store.checkout().use { draft ->
-                draft.setUsernameChecker(alwaysUnique())
+            store.checkout(alwaysUnique()).use { draft ->
                 draft.trySetUsername("corp_alice")
                 draft.runUsernameCheck()
                 draft.trySetEmail("alice@other.com")
@@ -114,7 +113,9 @@ class LocalizationCoverageTest {
     @Test
     fun theAsyncCheckKeysRender() {
         seeded().use { store ->
-            store.checkout().use { draft ->
+            // The failing checker rides along from checkout (D34); it does not run until asked,
+            // so the C16 progress key is still observable first.
+            store.checkout(alwaysTaken()).use { draft ->
                 // never run, dirty -> C16 refuses, and it is PROGRESS
                 draft.trySetUsername("alice2")
                 val required = draft.validate().ruleErrors.single { it.rule == "username_unique" }
@@ -123,7 +124,6 @@ class LocalizationCoverageTest {
                 assertTrue(Localization.isProgress(required.error.key))
 
                 // a taken verdict -> a real error
-                draft.setUsernameChecker(alwaysTaken())
                 draft.runUsernameCheck()
                 val check = draft.snapshot().usernameCheck
                 assertTrue(check is CheckStateFfi.Failed)
@@ -148,7 +148,7 @@ class LocalizationCoverageTest {
     @Test
     fun theOrphanedOutcomeRenders() {
         seeded().use { store ->
-            store.checkout().use { draft ->
+            store.checkout(null).use { draft ->
                 store.applyCanonical(SEED) // keep it simple: orphan by deleting is not exposed here
                 assertRenders(ErrorData("draft_orphaned", emptyList()))
                 // and the typed refusal really is typed, not a rule violation (C07/C11)

@@ -35,7 +35,7 @@ class PhysicalChattinessProbe {
     fun setUp() {
         assertPhysicalDevice()
         store = ProfileStoreFfi.new().also { it.applyCanonical(SEED) }
-        draft = store.checkout()
+        draft = store.checkout(null)
     }
 
     @After
@@ -90,7 +90,7 @@ class PhysicalChattinessProbe {
     @Test
     fun theFirstKeystrokeIsCold() {
         val coldStore = ProfileStoreFfi.new().also { it.applyCanonical(SEED) }
-        val coldDraft = coldStore.checkout()
+        val coldDraft = coldStore.checkout(null)
         val start = System.nanoTime()
         coldDraft.trySetUsername("cold_start")
         coldDraft.snapshot()

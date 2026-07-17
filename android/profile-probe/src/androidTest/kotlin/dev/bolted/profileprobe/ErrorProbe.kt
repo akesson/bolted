@@ -27,7 +27,9 @@ class ErrorProbe {
     @Before
     fun setUp() {
         store = seededStore()
-        draft = store.checkout()
+        // D34: the capability arrives at checkout. Wired-but-unrun changes nothing for the tests
+        // here that never drive it (C16 binds on unrun, not on absent).
+        draft = store.checkout(uniqueChecker())
     }
 
     @After
@@ -82,9 +84,8 @@ class ErrorProbe {
     @Test
     fun aTier2RuleViolationCrossesWithItsPinsAndParams() {
         draft.trySetUsername("corp_alice")
-        // C16: a dirty username with an unrun check is itself a rule violation, so without this the
-        // report would carry two and the tier-2 rule under test would not be `single()`.
-        draft.setUsernameChecker(uniqueChecker())
+        // C16: a dirty username with an unrun check is itself a rule violation, so without this run
+        // the report would carry two and the tier-2 rule under test would not be `single()`.
         draft.runUsernameCheck()
         try {
             draft.submit()

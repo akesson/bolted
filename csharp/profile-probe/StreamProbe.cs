@@ -51,7 +51,7 @@ public class StreamProbe
     public async Task ASnapshotIsDeliveredOnMutation()
     {
         using var store = new ProfileStoreFfi();
-        using var draft = store.Checkout();
+        using var draft = store.Checkout(null);
         string? got = await FirstUsernameMatching(draft, "zoe", () => draft.TrySetUsername("zoe"));
         Assert.That(got, Is.EqualTo("zoe"));
     }
@@ -62,7 +62,7 @@ public class StreamProbe
     public async Task AFreshSubscriptionIsFutureOnly()
     {
         using var store = new ProfileStoreFfi();
-        using var draft = store.Checkout();
+        using var draft = store.Checkout(null);
         draft.TrySetUsername("before"); // BEFORE subscribing
         Assert.That(draft.Snapshot().Username.Validity, Is.EqualTo(new TextValidity.Valid("before")));
 

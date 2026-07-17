@@ -16,7 +16,7 @@ public class TypedErrorProbe
     public void AFailedSetterThrowsATypedException()
     {
         using var store = Fixture.Seeded();
-        using var draft = store.Checkout();
+        using var draft = store.Checkout(null);
         var ex = Assert.Throws<PersonNameErrorFfiException>(() => draft.TrySetName(Fixture.NameInvalid));
         // The refusal is a typed DU value, not a string.
         Assert.That(ex!.Error, Is.Not.Null);
@@ -30,7 +30,7 @@ public class TypedErrorProbe
     public void AnInvalidFieldBlocksSubmitWithTypedKeyAndParams()
     {
         using var store = Fixture.Seeded();
-        using var draft = store.Checkout();
+        using var draft = store.Checkout(null);
         Assert.Throws<PersonNameErrorFfiException>(() => draft.TrySetName(Fixture.NameInvalid));
 
         var ex = Assert.Throws<SubmitErrorFfiException>(() => draft.Submit());

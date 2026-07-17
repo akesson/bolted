@@ -6,26 +6,27 @@ import GenProfileFfi
 final class CallbackTests: XCTestCase {
     /// A `.fail` verdict blocks validation (a `username_unique` rule violation); a later `.pass`
     /// verdict unblocks it. Mirrors the step-01 behaviour tests, now across the FFI boundary.
+    /// Since D34 the capability is fixed at checkout, so "later" is the same checker answering
+    /// differently — a verdict is a fact about the value's world, not about checker identity.
     func testCheckerBlocksThenUnblocks() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: SequencedChecker([.fail, .pass]))
         XCTAssertTrue(draft.validate().isOK) // clean checkout of a valid canonical
 
-        draft.setUsernameChecker(checker: StubChecker(.fail))
         XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertTrue(draft.validate().ruleNames.contains("username_unique"))
 
-        draft.setUsernameChecker(checker: StubChecker(.pass))
         XCTAssertTrue(try draft.runUsernameCheck())
         XCTAssertFalse(draft.validate().ruleNames.contains("username_unique"))
     }
 
-    /// With no checker set, driving the check is a no-op (returns false) and does not block.
+    /// A declared-absent capability (`nil` at checkout, D34): driving the check is a no-op
+    /// (returns false) and does not block a clean draft.
     func testNoCheckerIsNoop() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
+        let draft = store.checkout(usernameChecker: nil)
         XCTAssertFalse(try draft.runUsernameCheck())
         XCTAssertTrue(draft.validate().isOK)
     }
@@ -36,10 +37,9 @@ final class CallbackTests: XCTestCase {
     func testCheckerReentrancyDoesNotDeadlock() throws {
         let store = ProfileStoreFfi()
         try store.applyCanonical(values: validValues())
-        let draft = store.checkout()
         let checker = ReentrantChecker()
+        let draft = store.checkout(usernameChecker: checker)
         checker.draft = draft
-        draft.setUsernameChecker(checker: checker)
 
         XCTAssertTrue(try draft.runUsernameCheck()) // would hang if the outcall held the lock
         XCTAssertTrue(checker.reentered)

@@ -65,8 +65,7 @@ public final class ProfileViewModel {
         self.debounce = debounce
         self.makeChecker = makeChecker
 
-        let d = store.checkout()
-        d.setUsernameChecker(checker: makeChecker())
+        let d = store.checkout(usernameChecker: makeChecker())
         self.draft = d
 
         let snap = d.snapshot()
@@ -319,8 +318,7 @@ public final class ProfileViewModel {
     }
 
     private func recheckout() {
-        let d = store.checkout()
-        d.setUsernameChecker(checker: makeChecker())
+        let d = store.checkout(usernameChecker: makeChecker())
         draft = d
         focused = nil
         focusedTouched = false
