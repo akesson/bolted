@@ -365,7 +365,6 @@ struct Checked {
     id: String,
     check_prop: String,
     checker_ty: String,
-    checker_set: String,
     checker_run: String,
     /// The l10n key C16 raises — a *declaration* fact (`#[check(required_key = ..)]`), emitted literal.
     required_key: String,
@@ -429,12 +428,22 @@ pub(crate) fn emit_kotlin_contract_suite(
             id: format!("{field_id}.{}", screaming(p.ident())),
             check_prop: format!("{}Check", lower_camel(p.ident())),
             checker_ty: format!("{camel}Checker"),
-            checker_set: format!("set{camel}Checker"),
             checker_run: format!("run{camel}Check"),
             required_key: c.required_key.clone(),
             rule_name: c.rule.clone(),
         })
     });
+
+    // D34: the capability is a checkout/restore argument. Three per-feature argument spellings —
+    // declared absence, the passing checker, and restore's trailing absence — empty when the
+    // feature declares no check, so a check-less feature's call sites do not move.
+    let co_none = if checked.is_some() { "null" } else { "" };
+    let co_cap = if checked.is_some() {
+        "passingChecker()"
+    } else {
+        ""
+    };
+    let rs_none = if checked.is_some() { ", null" } else { "" };
 
     // --- helpers (dispatch + fill), built from the field list with real names ---------------------
     let mut set_text_branches = String::new();
@@ -462,8 +471,8 @@ pub(crate) fn emit_kotlin_contract_suite(
             ),
             format!(
                 "        // a create-flow checked field is dirty, so C16 demands its check has run\n        \
-                 draft.{}(passingChecker())\n        check(draft.{}())\n",
-                c.checker_set, c.checker_run,
+                 // (the checker itself arrived at checkout — D34)\n        check(draft.{}())\n",
+                c.checker_run,
             ),
         ),
         None => (String::new(), String::new()),
@@ -528,6 +537,9 @@ pub(crate) fn emit_kotlin_contract_suite(
     let mut s = out
         .replace("@@SUITE_PKG@@", suite_pkg)
         .replace("@@BINDING_PKG@@", binding_pkg)
+        .replace("@@CO_NONE@@", co_none)
+        .replace("@@CO_CAP@@", co_cap)
+        .replace("@@RS_NONE@@", rs_none)
         .replace("@@FIXTURE_CHECKED@@", fixture_checked)
         .replace("@@SEED_CHECKED@@", seed_checked)
         .replace("@@C20_CHECK@@", c20_check)
@@ -554,7 +566,6 @@ pub(crate) fn emit_kotlin_contract_suite(
             .replace("@@C_SET@@", &c.setter)
             .replace("@@C_PROP@@", &c.prop)
             .replace("@@C_ID@@", &c.id)
-            .replace("@@C_CHECKERSET@@", &c.checker_set)
             .replace("@@C_CHECKERRUN@@", &c.checker_run)
             .replace("@@C_CHECK@@", &c.check_prop)
             .replace("@@C_REQKEY@@", &c.required_key)
@@ -633,7 +644,7 @@ const SANITY_TEST: &str = r#"    /** The fixture's constants must describe the s
 const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; the canonical raw re-parses to the same value. */
     @Test
     fun c01_roundtripHoldsValidity() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             val v = draft.snapshot().@@P_PROP@@.validity
             assertTrue("a set valid raw reads back Valid{value}", v is TextValidity.Valid && v.value == fixture.primaryMine)
@@ -646,7 +657,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C02 — a clean field adopts theirs on rebase and stays InSync. */
     @Test
     fun c02_aCleanFieldFollowsCanonical() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             val f = draft.snapshot().@@P_PROP@@
             val v = f.validity
@@ -659,7 +670,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C03 — a dirty field whose canonical moved is never overwritten: it conflicts, naming theirs. */
     @Test
     fun c03_aDirtyFieldIsNeverSilentlyOverwritten() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             val snap = draft.snapshot()
@@ -676,7 +687,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C04 — a dirty field whose value already equals theirs rebases clean. */
     @Test
     fun c04_convergentRebaseIsClean() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryMine))
             val f = draft.snapshot().@@P_PROP@@
@@ -688,7 +699,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C05 — setting a field back to its base clears dirty; dirtiness is value-based. */
     @Test
     fun c05_revertForFree() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             assertTrue(draft.snapshot().@@P_PROP@@.dirty)
             draft.@@P_SET@@(fixture.primaryBase)
@@ -699,7 +710,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C06 — a failed try_set is typed, records Invalid{raw}, blocks submit, and never commits the stale value. */
     @Test
     fun c06_noStaleValueSubmit() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             var rejected = false
             try { draft.@@P_SET@@(fixture.primaryInvalid) } catch (e: @@P_ERR@@) { rejected = true }
             assertTrue("an invalid raw is refused, typed", rejected)
@@ -719,7 +730,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C07 — precedence: a deleted canonical outranks a conflict (Orphaned wins). */
     @Test
     fun c07_orphanedOutranksConflicted() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             assertTrue(draft.snapshot().@@P_PROP@@.sync is TextFieldSync.Conflicted)
@@ -734,7 +745,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C07 — precedence: a conflict outranks a validation error (Conflicted wins). */
     @Test
     fun c07_conflictedOutranksValidation() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs)) // conflict on primary
             try { draft.@@S_SET@@(fixture.secondaryInvalid) } catch (e: @@S_ERR@@) { /* invalid secondary */ }
@@ -753,7 +764,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
         val flip = fixture.ruleFlip()
         Assume.assumeTrue("this feature declares no tier-2 rule", flip != null)
         val f = flip!!
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             f.dirtyEdits.forEach { (id, raw) -> setText(draft, id, raw) }
             assertTrue("the arrangement must leave the rule satisfied", draft.validate().ruleErrors.none { it.rule == f.ruleName })
             store.applyCanonical(f.flippedCanonical)
@@ -768,7 +779,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C09 — resolve_keep_mine: value stays yours, base becomes theirs, dirty, InSync. */
     @Test
     fun c09_resolveKeepMine() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             assertTrue(draft.snapshot().@@P_PROP@@.sync is TextFieldSync.Conflicted)
@@ -785,7 +796,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C09 — resolve_take_theirs: value and base become theirs, clean, InSync. */
     @Test
     fun c09_resolveTakeTheirs() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             draft.resolveTakeTheirs(@@P_ID@@)
@@ -801,7 +812,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C11 — deleting the canonical under a live draft orphans it; submit is a typed Orphaned; the draft stays live. */
     @Test
     fun c11_deletionOrphans() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             store.deleteCanonical()
             assertEquals(DraftStatusFfi.ORPHANED, draft.snapshot().status)
             assertTrue("the refusal hands the draft back", draft.isLive())
@@ -817,7 +828,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     @Test
     fun c12_createFlowNeverRebases() {
         @@STORE@@.new().use { store -> // empty: no canonical
-            store.checkout().use { draft ->
+            store.checkout(@@CO_CAP@@).use { draft ->
                 store.applyCanonical(fixture.seed())
                 assertEquals("a create-flow draft is not rebased", 0u, store.rebasingDraftCount())
                 assertTrue("its primary stays unset", draft.snapshot().@@P_PROP@@.validity is TextValidity.Unset)
@@ -831,18 +842,18 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C12 — the contrapositive: a draft that keeps an ancestor in ANY field is entity-backed (it rebases, it orphans). */
     @Test
     fun c12_aPartiallyStashedDraftIsStillEntityBacked() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             draft.stash()
         } }
         val partial = stash.copy(@@S_PROP@@ = stash.@@S_PROP@@.copy(base = null)) // forget the secondary's ancestor
         seeded().use { store ->
-            store.restore(store.acceptStash(partial)).use { _ ->
+            store.restore(store.acceptStash(partial)@@RS_NONE@@).use { _ ->
                 assertEquals("one surviving ancestor still means entity-backed", 1u, store.rebasingDraftCount())
             }
         }
         @@STORE@@.new().use { empty -> // ...and it orphans into a deleted canonical, not commit as new
-            empty.restore(empty.acceptStash(partial)).use { restored ->
+            empty.restore(empty.acceptStash(partial)@@RS_NONE@@).use { restored ->
                 assertEquals(DraftStatusFfi.ORPHANED, restored.snapshot().status)
             }
         }
@@ -851,7 +862,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C14 — editing a conflicted field to theirs auto-converges (C04 with the events in the other order). */
     @Test
     fun c14_editingAConflictedFieldToTheirsAutoConverges() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             assertTrue(draft.snapshot().@@P_PROP@@.sync is TextFieldSync.Conflicted)
@@ -866,7 +877,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C15 — base_version tracks the rebase; an orphan's stamp stops moving. */
     @Test
     fun c15_theBaseVersionTracksTheRebase() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             val atCheckout = draft.snapshot().version
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             val afterRebase = draft.snapshot().version
@@ -879,7 +890,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C17 — a successful submit tombstones the draft; a second is AlreadySubmitted. */
     @Test
     fun c17_aSuccessfulSubmitReleasesTheDraft() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             assertTrue(draft.isLive())
             draft.submit()
             assertFalse("a successful submit tombstones the handle", draft.isLive())
@@ -893,7 +904,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C17 — a refused submit leaves the draft live and its edit intact, under the same id. */
     @Test
     fun c17_aRefusedSubmitLeavesTheDraftLive() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             try {
@@ -910,7 +921,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     @Test
     fun c18_closeFreesIsIdempotentAndStopsRebase() {
         seeded().use { store ->
-            val draft = store.checkout()
+            val draft = store.checkout(@@CO_NONE@@)
             assertEquals(1u, store.liveDraftCount())
             draft.close()
             assertEquals("close frees the draft", 0u, store.liveDraftCount())
@@ -926,7 +937,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C19 — a dirty field whose OWN canonical never moved is not conflicted by a rebase of another field. */
     @Test
     fun c19_aDirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@S_PROP@@ = fixture.secondaryTheirs)) // secondary, and only secondary
             val snap = draft.snapshot()
@@ -944,7 +955,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     @Test
     fun c20_aDraftStashesAndRestores() {
         seeded().use { store ->
-            val stash = store.checkout().use { draft ->
+            val stash = store.checkout(@@CO_NONE@@).use { draft ->
                 draft.@@P_SET@@(fixture.primaryMine)
                 try { draft.@@S_SET@@(fixture.secondaryInvalid) } catch (e: @@S_ERR@@) { /* records Invalid{raw} */ }
                 draft.stash()
@@ -953,7 +964,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
             assertEquals(fixture.primaryMine, stash.@@P_PROP@@.raw)
             assertEquals(fixture.primaryBase, stash.@@P_PROP@@.base)
             assertEquals(fixture.secondaryInvalid, stash.@@S_PROP@@.raw)
-            store.restore(store.acceptStash(stash)).use { restored ->
+            store.restore(store.acceptStash(stash)@@RS_NONE@@).use { restored ->
                 val snap = restored.snapshot()
                 val pv = snap.@@P_PROP@@.validity
                 assertTrue(pv is TextValidity.Valid && pv.value == fixture.primaryMine)
@@ -968,14 +979,14 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C21 — restore conflicts exactly the fields whose canonical moved while away; the others stay dirty · InSync. */
     @Test
     fun c21_restoreConflictsOnlyTheFieldsWhoseCanonicalMoved() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             draft.@@S_SET@@(fixture.secondaryTheirs)
             draft.stash()
         } }
         @@STORE@@.new().use { fresh ->
             fresh.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs)) // server moved the primary only
-            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+            fresh.restore(fresh.acceptStash(stash)@@RS_NONE@@).use { restored ->
                 val snap = restored.snapshot()
                 assertEquals(listOf(@@P_ID@@), snap.conflicts)
                 val sync = snap.@@P_PROP@@.sync
@@ -992,12 +1003,12 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C21 — restoring into a deleted canonical orphans the draft; it does not resurrect the entity. */
     @Test
     fun c21_restoreIntoADeletedCanonicalOrphans() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             draft.stash()
         } }
         @@STORE@@.new().use { empty -> // the server 404s
-            empty.restore(empty.acceptStash(stash)).use { restored ->
+            empty.restore(empty.acceptStash(stash)@@RS_NONE@@).use { restored ->
                 assertEquals(DraftStatusFfi.ORPHANED, restored.snapshot().status)
                 try {
                     restored.submit()
@@ -1010,7 +1021,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C21 — a resolution taken before the death survives it: its effect lives in the stashed ancestor. */
     @Test
     fun c21_aResolutionSurvivesTheRestore() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs))
             draft.resolveKeepMine(@@P_ID@@) // base := theirs
@@ -1018,7 +1029,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
         } }
         @@STORE@@.new().use { fresh ->
             fresh.applyCanonical(fixture.seed().copy(@@P_PROP@@ = fixture.primaryTheirs)) // server still says theirs
-            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+            fresh.restore(fresh.acceptStash(stash)@@RS_NONE@@).use { restored ->
                 val snap = restored.snapshot()
                 assertTrue("the user already resolved this; it must not be re-litigated", snap.conflicts.isEmpty())
                 val v = snap.@@P_PROP@@.validity
@@ -1032,11 +1043,11 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     @Test
     fun c22_draftCountAndRebasingDraftCountAreDifferentQuestions() {
         @@STORE@@.new().use { empty ->
-            empty.checkout().use { _ ->
+            empty.checkout(@@CO_NONE@@).use { _ ->
                 assertEquals("a create-flow draft exists", 1u, empty.liveDraftCount())
                 assertEquals("and is never rebased (C12)", 0u, empty.rebasingDraftCount())
                 empty.applyCanonical(fixture.seed())
-                empty.checkout().use { _ ->
+                empty.checkout(@@CO_NONE@@).use { _ ->
                     assertEquals("an entity-backed checkout is both", 2u, empty.liveDraftCount())
                     assertEquals(1u, empty.rebasingDraftCount())
                     empty.deleteCanonical() // orphan the entity-backed one
@@ -1050,14 +1061,14 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C23 — a stashed ancestor a tightened constraint invalidated degrades to dirty-from-unset, and conflicts on rebase. */
     @Test
     fun c23_aDegradedAncestorRestoresDirtyAndConflicts() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@S_SET@@(fixture.secondaryTheirs)
             draft.stash()
         } }
         val tightened = stash.copy(@@S_PROP@@ = stash.@@S_PROP@@.copy(base = fixture.secondaryInvalid)) // ancestor no longer parses
         @@STORE@@.new().use { store ->
             store.applyCanonical(fixture.seed()) // canonical secondary == secondaryBase, differs from the rescued value
-            store.restore(store.acceptStash(tightened)).use { restored ->
+            store.restore(store.acceptStash(tightened)@@RS_NONE@@).use { restored ->
                 val snap = restored.snapshot()
                 assertTrue("the rescued value survives, dirty", snap.@@S_PROP@@.dirty)
                 val sync = snap.@@S_PROP@@.sync
@@ -1071,14 +1082,14 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
     /** C23 — ...and the convergence guard: a lost ancestor whose rescued value equals canonical lands clean (C04). */
     @Test
     fun c23_aDegradedAncestorConvergesClean() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@S_SET@@(fixture.secondaryTheirs)
             draft.stash()
         } }
         val tightened = stash.copy(@@S_PROP@@ = stash.@@S_PROP@@.copy(base = fixture.secondaryInvalid))
         @@STORE@@.new().use { store ->
             store.applyCanonical(fixture.seed().copy(@@S_PROP@@ = fixture.secondaryTheirs)) // canonical == the rescued value
-            store.restore(store.acceptStash(tightened)).use { restored ->
+            store.restore(store.acceptStash(tightened)@@RS_NONE@@).use { restored ->
                 val snap = restored.snapshot()
                 assertTrue("a lost ancestor that converges lands clean, not a conflict from nothing", snap.@@S_PROP@@.sync is TextFieldSync.InSync)
                 assertFalse(snap.@@S_PROP@@.dirty)
@@ -1091,8 +1102,7 @@ const CORE_TESTS: &str = r#"    /** C01 — holding a value loses no validity; t
 const CHECKED_TESTS: &str = r#"    /** C13 — a value-moving edit resets the async verdict; a verdict endorses a value, so a changed value un-endorses it. */
     @Test
     fun c13_aValueMovingEditResetsTheVerdict() {
-        seeded().use { store -> store.checkout().use { draft ->
-            draft.@@C_CHECKERSET@@(passingChecker())
+        seeded().use { store -> store.checkout(@@CO_CAP@@).use { draft ->
             draft.@@C_SET@@(fixture.checkedMine)
             assertTrue(draft.@@C_CHECKERRUN@@())
             assertEquals(CheckStateFfi.Passed, draft.snapshot().@@C_CHECK@@)
@@ -1104,8 +1114,7 @@ const CHECKED_TESTS: &str = r#"    /** C13 — a value-moving edit resets the as
     /** C13 — a value-preserving edit (edit-to-same) leaves the verdict standing. */
     @Test
     fun c13_aValuePreservingEditLeavesTheVerdictStanding() {
-        seeded().use { store -> store.checkout().use { draft ->
-            draft.@@C_CHECKERSET@@(passingChecker())
+        seeded().use { store -> store.checkout(@@CO_CAP@@).use { draft ->
             draft.@@C_SET@@(fixture.checkedMine)
             assertTrue(draft.@@C_CHECKERRUN@@())
             draft.@@C_SET@@(fixture.checkedMine) // edit to the SAME value
@@ -1116,8 +1125,7 @@ const CHECKED_TESTS: &str = r#"    /** C13 — a value-moving edit resets the as
     /** C13 — a preserved conflict leaves the verdict standing; resolving take-theirs moves the value and resets it. */
     @Test
     fun c13_takeTheirsMovesTheValueAndResetsTheVerdict() {
-        seeded().use { store -> store.checkout().use { draft ->
-            draft.@@C_CHECKERSET@@(passingChecker())
+        seeded().use { store -> store.checkout(@@CO_CAP@@).use { draft ->
             draft.@@C_SET@@(fixture.checkedMine)
             assertTrue(draft.@@C_CHECKERRUN@@())
             store.applyCanonical(fixture.seed().copy(@@C_PROP@@ = fixture.checkedTheirs)) // conflicts; value stays mine
@@ -1127,10 +1135,10 @@ const CHECKED_TESTS: &str = r#"    /** C13 — a value-moving edit resets the as
         } }
     }
 
-    /** C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check unblocks it. */
+    /** C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check unblocks it. The capability was present from checkout (D34) — C16 binds on UNRUN, not on absent. */
     @Test
     fun c16_anUnrunCheckOnADirtyCheckedFieldBlocksSubmit() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_CAP@@).use { draft ->
             draft.@@C_SET@@(fixture.checkedMine)
             assertEquals(CheckStateFfi.Unchecked, draft.snapshot().@@C_CHECK@@)
             try {
@@ -1141,7 +1149,6 @@ const CHECKED_TESTS: &str = r#"    /** C13 — a value-moving edit resets the as
                 assertEquals("@@C_REQKEY@@", violation.error.key)
                 assertEquals(listOf(@@C_ID@@), violation.pins)
             }
-            draft.@@C_CHECKERSET@@(passingChecker())
             assertTrue(draft.@@C_CHECKERRUN@@())
             draft.submit() // now unblocked
         } }
@@ -1150,7 +1157,7 @@ const CHECKED_TESTS: &str = r#"    /** C13 — a value-moving edit resets the as
     /** C16 — the other half: a clean checked field needs no check, or an edit to another field could never submit. */
     @Test
     fun c16_aCleanCheckedFieldNeedsNoCheck() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(@@CO_NONE@@).use { draft ->
             draft.@@P_SET@@(fixture.primaryMine) // edit a NON-checked field
             assertFalse(draft.snapshot().@@C_PROP@@.dirty)
             draft.submit() // must not throw
@@ -1227,17 +1234,28 @@ pub(crate) fn emit_swift_contract_suite(feature: &Feature, binding_module: &str)
         let c = p.field.check.as_ref()?;
         let camel = upper_camel(p.ident());
         Some((
-            format!("trySet{camel}"),                   // c_set
-            lower_camel(p.ident()),                     // c_prop
-            format!(".{}", lower_camel(p.ident())),     // c_idcase
-            format!("{}Check", lower_camel(p.ident())), // c_check
-            format!("{camel}Checker"),                  // c_checker
-            format!("set{camel}Checker"),               // c_checkerset
-            format!("run{camel}Check"),                 // c_checkerrun
-            c.required_key.clone(),                     // c_reqkey
-            c.rule.clone(),                             // c_rule
+            format!("trySet{camel}"),                     // c_set
+            lower_camel(p.ident()),                       // c_prop
+            format!(".{}", lower_camel(p.ident())),       // c_idcase
+            format!("{}Check", lower_camel(p.ident())),   // c_check
+            format!("{camel}Checker"),                    // c_checker
+            format!("{}Checker", lower_camel(p.ident())), // c_label — the argument label D34's parameter gets in Swift
+            format!("run{camel}Check"),                   // c_checkerrun
+            c.required_key.clone(),                       // c_reqkey
+            c.rule.clone(),                               // c_rule
         ))
     });
+
+    // D34: the capability is a checkout/restore argument — the three Swift argument spellings,
+    // empty when the feature declares no check (a check-less feature's call sites do not move).
+    let (co_none, co_cap, rs_none) = match &checked {
+        Some((_, _, _, _, _, c_label, _, _, _)) => (
+            format!("{c_label}: nil"),
+            format!("{c_label}: passingChecker()"),
+            format!(", {c_label}: nil"),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
 
     // --- helpers -----------------------------------------------------------------------------------
     let mut helpers = String::new();
@@ -1282,9 +1300,11 @@ pub(crate) fn emit_swift_contract_suite(feature: &Feature, binding_module: &str)
             lower_camel(p.ident()),
         );
     }
-    if let Some((_, _, _, _, _, c_checkerset, c_checkerrun, _, _)) = &checked {
+    if let Some((_, _, _, _, _, _, c_checkerrun, _, _)) = &checked {
         helpers += &format!(
-            "        draft.{c_checkerset}(checker: passingChecker())\n        XCTAssertTrue(try draft.{c_checkerrun}())\n"
+            "        // a create-flow checked field is dirty, so C16 demands its check has run\n        \
+             // (the checker itself arrived at checkout — D34)\n        \
+             XCTAssertTrue(try draft.{c_checkerrun}())\n"
         );
     }
     helpers += "    }\n";
@@ -1327,6 +1347,9 @@ pub(crate) fn emit_swift_contract_suite(feature: &Feature, binding_module: &str)
 
     let mut s = out
         .replace("@@MODULE@@", binding_module)
+        .replace("@@CO_NONE@@", &co_none)
+        .replace("@@CO_CAP@@", &co_cap)
+        .replace("@@RS_NONE@@", &rs_none)
         .replace("@@FIXTURE_CHECKED@@", fixture_checked)
         .replace("@@SEED_CHECKED@@", seed_checked)
         .replace("@@C20_CHECK@@", c20_check)
@@ -1353,7 +1376,7 @@ pub(crate) fn emit_swift_contract_suite(feature: &Feature, binding_module: &str)
         c_idcase,
         c_check,
         c_checker,
-        c_checkerset,
+        _c_label,
         c_checkerrun,
         c_reqkey,
         c_rule,
@@ -1363,7 +1386,6 @@ pub(crate) fn emit_swift_contract_suite(feature: &Feature, binding_module: &str)
             .replace("@@C_SET@@", c_set)
             .replace("@@C_PROP@@", c_prop)
             .replace("@@C_IDCASE@@", c_idcase)
-            .replace("@@C_CHECKERSET@@", c_checkerset)
             .replace("@@C_CHECKERRUN@@", c_checkerrun)
             .replace("@@C_CHECKER@@", c_checker)
             .replace("@@C_CHECK@@", c_check)
@@ -1438,7 +1460,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C01 — holding a value loses no validity; the canonical raw re-parses to the same value.
     func testC01RoundtripHoldsValidity() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         XCTAssertEqual(draft.snapshot().@@P_PROP@@.validity, .valid(value: fixture.primaryMine))
         try draft.@@P_SET@@(raw: fixture.primaryMine) // idempotent: the canonical raw re-parses the same
@@ -1448,7 +1470,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C02 — a clean field adopts theirs on rebase and stays InSync.
     func testC02ACleanFieldFollowsCanonical() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         let f = draft.snapshot().@@P_PROP@@
         XCTAssertEqual(f.validity, .valid(value: fixture.primaryTheirs))
@@ -1459,7 +1481,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C03 — a dirty field whose canonical moved is never overwritten: it conflicts, naming theirs.
     func testC03ADirtyFieldIsNeverSilentlyOverwritten() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         let snap = draft.snapshot()
@@ -1475,7 +1497,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C04 — a dirty field whose value already equals theirs rebases clean.
     func testC04ConvergentRebaseIsClean() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryMine))
         let f = draft.snapshot().@@P_PROP@@
@@ -1486,7 +1508,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C05 — setting a field back to its base clears dirty; dirtiness is value-based.
     func testC05RevertForFree() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         XCTAssertTrue(draft.snapshot().@@P_PROP@@.dirty)
         try draft.@@P_SET@@(raw: fixture.primaryBase)
@@ -1496,7 +1518,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C06 — a failed try_set is typed, records Invalid{raw}, blocks submit, and never commits the stale value.
     func testC06NoStaleValueSubmit() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         XCTAssertThrowsError(try draft.@@P_SET@@(raw: fixture.primaryInvalid)) { error in
             XCTAssertNotNil(error as? @@P_ERR@@, "an invalid raw is refused, typed")
         }
@@ -1517,7 +1539,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C07 — precedence: a deleted canonical outranks a conflict (Orphaned wins).
     func testC07OrphanedOutranksConflicted() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         guard case .conflicted = draft.snapshot().@@P_PROP@@.sync else { return XCTFail("expected a conflict to outrank") }
@@ -1530,7 +1552,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C07 — precedence: a conflict outranks a validation error (Conflicted wins).
     func testC07ConflictedOutranksValidation() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs)) // conflict on primary
         XCTAssertThrowsError(try draft.@@S_SET@@(raw: fixture.secondaryInvalid)) // invalid secondary
@@ -1546,7 +1568,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     func testC08RebaseRerunsTier2() throws {
         guard let flip = fixture.ruleFlip() else { throw XCTSkip("this feature declares no tier-2 rule") }
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         for (id, raw) in flip.dirtyEdits { try setText(draft, id, raw) }
         XCTAssertFalse(draft.validate().ruleErrors.contains { $0.rule == flip.ruleName }, "the arrangement must leave the rule satisfied")
         try store.applyCanonical(values: flip.flippedCanonical)
@@ -1561,7 +1583,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C09 — resolve_keep_mine: value stays yours, base becomes theirs, dirty, InSync.
     func testC09ResolveKeepMine() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         guard case .conflicted = draft.snapshot().@@P_PROP@@.sync else { return XCTFail("expected a conflict to resolve") }
@@ -1576,7 +1598,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C09 — resolve_take_theirs: value and base become theirs, clean, InSync.
     func testC09ResolveTakeTheirs() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         try draft.resolveTakeTheirs(field: @@P_IDCASE@@)
@@ -1590,7 +1612,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C11 — deleting the canonical under a live draft orphans it; submit is a typed Orphaned; the draft stays live.
     func testC11DeletionOrphans() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         store.deleteCanonical()
         XCTAssertEqual(draft.snapshot().status, .orphaned)
         XCTAssertTrue(draft.isLive(), "the refusal hands the draft back")
@@ -1605,7 +1627,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C12 — a create-flow draft (no base) is never in the fan-out, and commits normally once filled.
     func testC12CreateFlowNeverRebases() throws {
         let store = @@STORE@@() // empty: no canonical
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_CAP@@)
         try store.applyCanonical(values: fixture.seed())
         XCTAssertEqual(store.rebasingDraftCount(), 0, "a create-flow draft is not rebased")
         guard case .unset = draft.snapshot().@@P_PROP@@.validity else { return XCTFail("its primary must stay unset") }
@@ -1619,24 +1641,24 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         var stash: @@STASH@@
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@P_SET@@(raw: fixture.primaryMine)
             stash = draft.stash()
         }
         stash.@@S_PROP@@.base = nil // forget the secondary's ancestor
         let store = try seeded()
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash)@@RS_NONE@@)
         XCTAssertEqual(store.rebasingDraftCount(), 1, "one surviving ancestor still means entity-backed")
         _ = restored
         let empty = @@STORE@@() // ...and it orphans into a deleted canonical, not commit as new
-        let orphan = try empty.restore(accepted: empty.acceptStash(stash: stash))
+        let orphan = try empty.restore(accepted: empty.acceptStash(stash: stash)@@RS_NONE@@)
         XCTAssertEqual(orphan.snapshot().status, .orphaned)
     }
 
     /// C14 — editing a conflicted field to theirs auto-converges (C04 with the events in the other order).
     func testC14EditingAConflictedFieldToTheirsAutoConverges() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         guard case .conflicted = draft.snapshot().@@P_PROP@@.sync else { return XCTFail("expected a conflict to converge") }
@@ -1650,7 +1672,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C15 — base_version tracks the rebase; an orphan's stamp stops moving.
     func testC15TheBaseVersionTracksTheRebase() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         let atCheckout = draft.snapshot().version
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         let afterRebase = draft.snapshot().version
@@ -1662,7 +1684,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C17 — a successful submit tombstones the draft; a second is AlreadySubmitted.
     func testC17ASuccessfulSubmitReleasesTheDraft() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         XCTAssertTrue(draft.isLive())
         try draft.submit()
         XCTAssertFalse(draft.isLive(), "a successful submit tombstones the handle")
@@ -1674,7 +1696,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C17 — a refused submit leaves the draft live and its edit intact, under the same id.
     func testC17ARefusedSubmitLeavesTheDraftLive() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
         XCTAssertThrowsError(try draft.submit()) { error in
@@ -1689,7 +1711,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     func testC18ReleaseFreesTheDraftAndStopsRebase() throws {
         let store = try seeded()
         do {
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             XCTAssertEqual(store.liveDraftCount(), 1)
             _ = draft
         } // ARC deinit → boltffi release → Rust Drop → deregister
@@ -1702,7 +1724,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C19 — a dirty field whose OWN canonical never moved is not conflicted by a rebase of another field.
     func testC19ADirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine)
         try store.applyCanonical(values: seedWithSecondary(fixture.secondaryTheirs)) // secondary, and only secondary
         let snap = draft.snapshot()
@@ -1718,7 +1740,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         let store = try seeded()
         let stash: @@STASH@@
         do {
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@P_SET@@(raw: fixture.primaryMine)
             XCTAssertThrowsError(try draft.@@S_SET@@(raw: fixture.secondaryInvalid)) // records Invalid{raw}
             stash = draft.stash()
@@ -1727,7 +1749,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         XCTAssertEqual(stash.@@P_PROP@@.raw, fixture.primaryMine)
         XCTAssertEqual(stash.@@P_PROP@@.base, fixture.primaryBase)
         XCTAssertEqual(stash.@@S_PROP@@.raw, fixture.secondaryInvalid)
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash)@@RS_NONE@@)
         let snap = restored.snapshot()
         XCTAssertEqual(snap.@@P_PROP@@.validity, .valid(value: fixture.primaryMine))
         XCTAssertTrue(snap.@@P_PROP@@.dirty)
@@ -1741,14 +1763,14 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         let stash: @@STASH@@
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@P_SET@@(raw: fixture.primaryMine)
             try draft.@@S_SET@@(raw: fixture.secondaryTheirs)
             stash = draft.stash()
         }
         let fresh = @@STORE@@()
         try fresh.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs)) // server moved the primary only
-        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash)@@RS_NONE@@)
         let snap = restored.snapshot()
         XCTAssertEqual(snap.conflicts, [@@P_IDCASE@@])
         guard case .conflicted(_, let theirs) = snap.@@P_PROP@@.sync else { return XCTFail("the moved field must conflict") }
@@ -1763,12 +1785,12 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         let stash: @@STASH@@
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@P_SET@@(raw: fixture.primaryMine)
             stash = draft.stash()
         }
         let empty = @@STORE@@() // the server 404s
-        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash))
+        let restored = try empty.restore(accepted: empty.acceptStash(stash: stash)@@RS_NONE@@)
         XCTAssertEqual(restored.snapshot().status, .orphaned)
         XCTAssertThrowsError(try restored.submit()) { error in
             guard case .orphaned? = error as? SubmitErrorFfi else { return XCTFail("expected .orphaned") }
@@ -1780,7 +1802,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         let stash: @@STASH@@
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@P_SET@@(raw: fixture.primaryMine)
             try store.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs))
             try draft.resolveKeepMine(field: @@P_IDCASE@@) // base := theirs
@@ -1788,7 +1810,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         }
         let fresh = @@STORE@@()
         try fresh.applyCanonical(values: seedWithPrimary(fixture.primaryTheirs)) // server still says theirs
-        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash))
+        let restored = try fresh.restore(accepted: fresh.acceptStash(stash: stash)@@RS_NONE@@)
         let snap = restored.snapshot()
         XCTAssertTrue(snap.conflicts.isEmpty, "the user already resolved this; it must not be re-litigated")
         XCTAssertEqual(snap.@@P_PROP@@.validity, .valid(value: fixture.primaryMine))
@@ -1798,11 +1820,11 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
     /// C22 — "a draft exists" and "a draft rebases" are different questions; a create-flow draft and an orphan diverge them.
     func testC22DraftCountAndRebasingDraftCountAreDifferentQuestions() throws {
         let empty = @@STORE@@()
-        let createFlow = empty.checkout()
+        let createFlow = empty.checkout(@@CO_NONE@@)
         XCTAssertEqual(empty.liveDraftCount(), 1, "a create-flow draft exists")
         XCTAssertEqual(empty.rebasingDraftCount(), 0, "and is never rebased (C12)")
         try empty.applyCanonical(values: fixture.seed())
-        let entityBacked = empty.checkout()
+        let entityBacked = empty.checkout(@@CO_NONE@@)
         XCTAssertEqual(empty.liveDraftCount(), 2, "an entity-backed checkout is both")
         XCTAssertEqual(empty.rebasingDraftCount(), 1)
         empty.deleteCanonical() // orphan the entity-backed one
@@ -1817,13 +1839,13 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         var stash: @@STASH@@
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@S_SET@@(raw: fixture.secondaryTheirs)
             stash = draft.stash()
         }
         stash.@@S_PROP@@.base = fixture.secondaryInvalid // the ancestor no longer parses
         let store = try seeded() // canonical secondary == secondaryBase, differs from the rescued value
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash)@@RS_NONE@@)
         let snap = restored.snapshot()
         XCTAssertTrue(snap.@@S_PROP@@.dirty, "the rescued value survives, dirty")
         guard case .conflicted(let base, let theirs) = snap.@@S_PROP@@.sync else {
@@ -1838,14 +1860,14 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
         var stash: @@STASH@@
         do {
             let store = try seeded()
-            let draft = store.checkout()
+            let draft = store.checkout(@@CO_NONE@@)
             try draft.@@S_SET@@(raw: fixture.secondaryTheirs)
             stash = draft.stash()
         }
         stash.@@S_PROP@@.base = fixture.secondaryInvalid
         let store = @@STORE@@()
         try store.applyCanonical(values: seedWithSecondary(fixture.secondaryTheirs)) // canonical == the rescued value
-        let restored = try store.restore(accepted: store.acceptStash(stash: stash))
+        let restored = try store.restore(accepted: store.acceptStash(stash: stash)@@RS_NONE@@)
         let snap = restored.snapshot()
         guard case .inSync = snap.@@S_PROP@@.sync else { return XCTFail("a lost ancestor that converges lands clean") }
         XCTAssertFalse(snap.@@S_PROP@@.dirty)
@@ -1856,8 +1878,7 @@ const SWIFT_CORE_TESTS: &str = r#"    /// The fixture's constants must describe 
 const SWIFT_CHECKED_TESTS: &str = r#"    /// C13 — a value-moving edit resets the async verdict; a verdict endorses a value, so a changed value un-endorses it.
     func testC13AValueMovingEditResetsTheVerdict() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.@@C_CHECKERSET@@(checker: passingChecker())
+        let draft = store.checkout(@@CO_CAP@@)
         try draft.@@C_SET@@(raw: fixture.checkedMine)
         XCTAssertTrue(try draft.@@C_CHECKERRUN@@())
         XCTAssertEqual(draft.snapshot().@@C_CHECK@@, .passed)
@@ -1868,8 +1889,7 @@ const SWIFT_CHECKED_TESTS: &str = r#"    /// C13 — a value-moving edit resets 
     /// C13 — a value-preserving edit (edit-to-same) leaves the verdict standing.
     func testC13AValuePreservingEditLeavesTheVerdictStanding() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.@@C_CHECKERSET@@(checker: passingChecker())
+        let draft = store.checkout(@@CO_CAP@@)
         try draft.@@C_SET@@(raw: fixture.checkedMine)
         XCTAssertTrue(try draft.@@C_CHECKERRUN@@())
         try draft.@@C_SET@@(raw: fixture.checkedMine) // edit to the SAME value
@@ -1879,8 +1899,7 @@ const SWIFT_CHECKED_TESTS: &str = r#"    /// C13 — a value-moving edit resets 
     /// C13 — a preserved conflict leaves the verdict standing; resolving take-theirs moves the value and resets it.
     func testC13TakeTheirsMovesTheValueAndResetsTheVerdict() throws {
         let store = try seeded()
-        let draft = store.checkout()
-        draft.@@C_CHECKERSET@@(checker: passingChecker())
+        let draft = store.checkout(@@CO_CAP@@)
         try draft.@@C_SET@@(raw: fixture.checkedMine)
         XCTAssertTrue(try draft.@@C_CHECKERRUN@@())
         try store.applyCanonical(values: seedWithChecked(fixture.checkedTheirs)) // conflicts; value stays mine
@@ -1889,10 +1908,11 @@ const SWIFT_CHECKED_TESTS: &str = r#"    /// C13 — a value-moving edit resets 
         XCTAssertEqual(draft.snapshot().@@C_CHECK@@, .unchecked)
     }
 
-    /// C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check unblocks it.
+    /// C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check
+    /// unblocks it. The capability was present from checkout (D34) — C16 binds on UNRUN, not on absent.
     func testC16AnUnrunCheckOnADirtyCheckedFieldBlocksSubmit() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_CAP@@)
         try draft.@@C_SET@@(raw: fixture.checkedMine)
         XCTAssertEqual(draft.snapshot().@@C_CHECK@@, .unchecked)
         XCTAssertThrowsError(try draft.submit()) { error in
@@ -1903,7 +1923,6 @@ const SWIFT_CHECKED_TESTS: &str = r#"    /// C13 — a value-moving edit resets 
             XCTAssertEqual(violation?.error.key, "@@C_REQKEY@@")
             XCTAssertEqual(violation?.pins, [@@C_IDCASE@@])
         }
-        draft.@@C_CHECKERSET@@(checker: passingChecker())
         XCTAssertTrue(try draft.@@C_CHECKERRUN@@())
         try draft.submit() // now unblocked
     }
@@ -1911,7 +1930,7 @@ const SWIFT_CHECKED_TESTS: &str = r#"    /// C13 — a value-moving edit resets 
     /// C16 — the other half: a clean checked field needs no check, or an edit to another field could never submit.
     func testC16ACleanCheckedFieldNeedsNoCheck() throws {
         let store = try seeded()
-        let draft = store.checkout()
+        let draft = store.checkout(@@CO_NONE@@)
         try draft.@@P_SET@@(raw: fixture.primaryMine) // edit a NON-checked field
         XCTAssertFalse(draft.snapshot().@@C_PROP@@.dirty)
         try draft.submit() // must not throw

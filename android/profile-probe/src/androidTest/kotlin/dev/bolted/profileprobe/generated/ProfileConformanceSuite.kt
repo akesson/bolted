@@ -95,7 +95,7 @@ class ProfileConformanceSuite {
         draft.trySetEmail(fixture.seed().email)
         draft.trySetAvailability(fixture.seed().availability)
         // a create-flow checked field is dirty, so C16 demands its check has run
-        draft.setUsernameChecker(passingChecker())
+        // (the checker itself arrived at checkout — D34)
         check(draft.runUsernameCheck())
     }
 
@@ -110,7 +110,7 @@ class ProfileConformanceSuite {
     /** C01 — holding a value loses no validity; the canonical raw re-parses to the same value. */
     @Test
     fun c01_roundtripHoldsValidity() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             val v = draft.snapshot().name.validity
             assertTrue("a set valid raw reads back Valid{value}", v is TextValidity.Valid && v.value == fixture.primaryMine)
@@ -123,7 +123,7 @@ class ProfileConformanceSuite {
     /** C02 — a clean field adopts theirs on rebase and stays InSync. */
     @Test
     fun c02_aCleanFieldFollowsCanonical() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             val f = draft.snapshot().name
             val v = f.validity
@@ -136,7 +136,7 @@ class ProfileConformanceSuite {
     /** C03 — a dirty field whose canonical moved is never overwritten: it conflicts, naming theirs. */
     @Test
     fun c03_aDirtyFieldIsNeverSilentlyOverwritten() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             val snap = draft.snapshot()
@@ -153,7 +153,7 @@ class ProfileConformanceSuite {
     /** C04 — a dirty field whose value already equals theirs rebases clean. */
     @Test
     fun c04_convergentRebaseIsClean() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryMine))
             val f = draft.snapshot().name
@@ -165,7 +165,7 @@ class ProfileConformanceSuite {
     /** C05 — setting a field back to its base clears dirty; dirtiness is value-based. */
     @Test
     fun c05_revertForFree() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             assertTrue(draft.snapshot().name.dirty)
             draft.trySetName(fixture.primaryBase)
@@ -176,7 +176,7 @@ class ProfileConformanceSuite {
     /** C06 — a failed try_set is typed, records Invalid{raw}, blocks submit, and never commits the stale value. */
     @Test
     fun c06_noStaleValueSubmit() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             var rejected = false
             try { draft.trySetName(fixture.primaryInvalid) } catch (e: PersonNameErrorFfi) { rejected = true }
             assertTrue("an invalid raw is refused, typed", rejected)
@@ -196,7 +196,7 @@ class ProfileConformanceSuite {
     /** C07 — precedence: a deleted canonical outranks a conflict (Orphaned wins). */
     @Test
     fun c07_orphanedOutranksConflicted() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             assertTrue(draft.snapshot().name.sync is TextFieldSync.Conflicted)
@@ -211,7 +211,7 @@ class ProfileConformanceSuite {
     /** C07 — precedence: a conflict outranks a validation error (Conflicted wins). */
     @Test
     fun c07_conflictedOutranksValidation() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs)) // conflict on primary
             try { draft.trySetEmail(fixture.secondaryInvalid) } catch (e: EmailErrorFfi) { /* invalid secondary */ }
@@ -230,7 +230,7 @@ class ProfileConformanceSuite {
         val flip = fixture.ruleFlip()
         Assume.assumeTrue("this feature declares no tier-2 rule", flip != null)
         val f = flip!!
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             f.dirtyEdits.forEach { (id, raw) -> setText(draft, id, raw) }
             assertTrue("the arrangement must leave the rule satisfied", draft.validate().ruleErrors.none { it.rule == f.ruleName })
             store.applyCanonical(f.flippedCanonical)
@@ -245,7 +245,7 @@ class ProfileConformanceSuite {
     /** C09 — resolve_keep_mine: value stays yours, base becomes theirs, dirty, InSync. */
     @Test
     fun c09_resolveKeepMine() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             assertTrue(draft.snapshot().name.sync is TextFieldSync.Conflicted)
@@ -262,7 +262,7 @@ class ProfileConformanceSuite {
     /** C09 — resolve_take_theirs: value and base become theirs, clean, InSync. */
     @Test
     fun c09_resolveTakeTheirs() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             draft.resolveTakeTheirs(ProfileFieldId.NAME)
@@ -278,7 +278,7 @@ class ProfileConformanceSuite {
     /** C11 — deleting the canonical under a live draft orphans it; submit is a typed Orphaned; the draft stays live. */
     @Test
     fun c11_deletionOrphans() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             store.deleteCanonical()
             assertEquals(DraftStatusFfi.ORPHANED, draft.snapshot().status)
             assertTrue("the refusal hands the draft back", draft.isLive())
@@ -294,7 +294,7 @@ class ProfileConformanceSuite {
     @Test
     fun c12_createFlowNeverRebases() {
         ProfileStoreFfi.new().use { store -> // empty: no canonical
-            store.checkout().use { draft ->
+            store.checkout(passingChecker()).use { draft ->
                 store.applyCanonical(fixture.seed())
                 assertEquals("a create-flow draft is not rebased", 0u, store.rebasingDraftCount())
                 assertTrue("its primary stays unset", draft.snapshot().name.validity is TextValidity.Unset)
@@ -308,18 +308,18 @@ class ProfileConformanceSuite {
     /** C12 — the contrapositive: a draft that keeps an ancestor in ANY field is entity-backed (it rebases, it orphans). */
     @Test
     fun c12_aPartiallyStashedDraftIsStillEntityBacked() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             draft.stash()
         } }
         val partial = stash.copy(email = stash.email.copy(base = null)) // forget the secondary's ancestor
         seeded().use { store ->
-            store.restore(store.acceptStash(partial)).use { _ ->
+            store.restore(store.acceptStash(partial), null).use { _ ->
                 assertEquals("one surviving ancestor still means entity-backed", 1u, store.rebasingDraftCount())
             }
         }
         ProfileStoreFfi.new().use { empty -> // ...and it orphans into a deleted canonical, not commit as new
-            empty.restore(empty.acceptStash(partial)).use { restored ->
+            empty.restore(empty.acceptStash(partial), null).use { restored ->
                 assertEquals(DraftStatusFfi.ORPHANED, restored.snapshot().status)
             }
         }
@@ -328,7 +328,7 @@ class ProfileConformanceSuite {
     /** C14 — editing a conflicted field to theirs auto-converges (C04 with the events in the other order). */
     @Test
     fun c14_editingAConflictedFieldToTheirsAutoConverges() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             assertTrue(draft.snapshot().name.sync is TextFieldSync.Conflicted)
@@ -343,7 +343,7 @@ class ProfileConformanceSuite {
     /** C15 — base_version tracks the rebase; an orphan's stamp stops moving. */
     @Test
     fun c15_theBaseVersionTracksTheRebase() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             val atCheckout = draft.snapshot().version
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             val afterRebase = draft.snapshot().version
@@ -356,7 +356,7 @@ class ProfileConformanceSuite {
     /** C17 — a successful submit tombstones the draft; a second is AlreadySubmitted. */
     @Test
     fun c17_aSuccessfulSubmitReleasesTheDraft() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             assertTrue(draft.isLive())
             draft.submit()
             assertFalse("a successful submit tombstones the handle", draft.isLive())
@@ -370,7 +370,7 @@ class ProfileConformanceSuite {
     /** C17 — a refused submit leaves the draft live and its edit intact, under the same id. */
     @Test
     fun c17_aRefusedSubmitLeavesTheDraftLive() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             try {
@@ -387,7 +387,7 @@ class ProfileConformanceSuite {
     @Test
     fun c18_closeFreesIsIdempotentAndStopsRebase() {
         seeded().use { store ->
-            val draft = store.checkout()
+            val draft = store.checkout(null)
             assertEquals(1u, store.liveDraftCount())
             draft.close()
             assertEquals("close frees the draft", 0u, store.liveDraftCount())
@@ -403,7 +403,7 @@ class ProfileConformanceSuite {
     /** C19 — a dirty field whose OWN canonical never moved is not conflicted by a rebase of another field. */
     @Test
     fun c19_aDirtyFieldIsNotConflictedWhenItsOwnCanonicalDidNotMove() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(email = fixture.secondaryTheirs)) // secondary, and only secondary
             val snap = draft.snapshot()
@@ -421,7 +421,7 @@ class ProfileConformanceSuite {
     @Test
     fun c20_aDraftStashesAndRestores() {
         seeded().use { store ->
-            val stash = store.checkout().use { draft ->
+            val stash = store.checkout(null).use { draft ->
                 draft.trySetName(fixture.primaryMine)
                 try { draft.trySetEmail(fixture.secondaryInvalid) } catch (e: EmailErrorFfi) { /* records Invalid{raw} */ }
                 draft.stash()
@@ -430,7 +430,7 @@ class ProfileConformanceSuite {
             assertEquals(fixture.primaryMine, stash.name.raw)
             assertEquals(fixture.primaryBase, stash.name.base)
             assertEquals(fixture.secondaryInvalid, stash.email.raw)
-            store.restore(store.acceptStash(stash)).use { restored ->
+            store.restore(store.acceptStash(stash), null).use { restored ->
                 val snap = restored.snapshot()
                 val pv = snap.name.validity
                 assertTrue(pv is TextValidity.Valid && pv.value == fixture.primaryMine)
@@ -447,14 +447,14 @@ class ProfileConformanceSuite {
     /** C21 — restore conflicts exactly the fields whose canonical moved while away; the others stay dirty · InSync. */
     @Test
     fun c21_restoreConflictsOnlyTheFieldsWhoseCanonicalMoved() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             draft.trySetEmail(fixture.secondaryTheirs)
             draft.stash()
         } }
         ProfileStoreFfi.new().use { fresh ->
             fresh.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs)) // server moved the primary only
-            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+            fresh.restore(fresh.acceptStash(stash), null).use { restored ->
                 val snap = restored.snapshot()
                 assertEquals(listOf(ProfileFieldId.NAME), snap.conflicts)
                 val sync = snap.name.sync
@@ -471,12 +471,12 @@ class ProfileConformanceSuite {
     /** C21 — restoring into a deleted canonical orphans the draft; it does not resurrect the entity. */
     @Test
     fun c21_restoreIntoADeletedCanonicalOrphans() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             draft.stash()
         } }
         ProfileStoreFfi.new().use { empty -> // the server 404s
-            empty.restore(empty.acceptStash(stash)).use { restored ->
+            empty.restore(empty.acceptStash(stash), null).use { restored ->
                 assertEquals(DraftStatusFfi.ORPHANED, restored.snapshot().status)
                 try {
                     restored.submit()
@@ -489,7 +489,7 @@ class ProfileConformanceSuite {
     /** C21 — a resolution taken before the death survives it: its effect lives in the stashed ancestor. */
     @Test
     fun c21_aResolutionSurvivesTheRestore() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine)
             store.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs))
             draft.resolveKeepMine(ProfileFieldId.NAME) // base := theirs
@@ -497,7 +497,7 @@ class ProfileConformanceSuite {
         } }
         ProfileStoreFfi.new().use { fresh ->
             fresh.applyCanonical(fixture.seed().copy(name = fixture.primaryTheirs)) // server still says theirs
-            fresh.restore(fresh.acceptStash(stash)).use { restored ->
+            fresh.restore(fresh.acceptStash(stash), null).use { restored ->
                 val snap = restored.snapshot()
                 assertTrue("the user already resolved this; it must not be re-litigated", snap.conflicts.isEmpty())
                 val v = snap.name.validity
@@ -511,11 +511,11 @@ class ProfileConformanceSuite {
     @Test
     fun c22_draftCountAndRebasingDraftCountAreDifferentQuestions() {
         ProfileStoreFfi.new().use { empty ->
-            empty.checkout().use { _ ->
+            empty.checkout(null).use { _ ->
                 assertEquals("a create-flow draft exists", 1u, empty.liveDraftCount())
                 assertEquals("and is never rebased (C12)", 0u, empty.rebasingDraftCount())
                 empty.applyCanonical(fixture.seed())
-                empty.checkout().use { _ ->
+                empty.checkout(null).use { _ ->
                     assertEquals("an entity-backed checkout is both", 2u, empty.liveDraftCount())
                     assertEquals(1u, empty.rebasingDraftCount())
                     empty.deleteCanonical() // orphan the entity-backed one
@@ -529,14 +529,14 @@ class ProfileConformanceSuite {
     /** C23 — a stashed ancestor a tightened constraint invalidated degrades to dirty-from-unset, and conflicts on rebase. */
     @Test
     fun c23_aDegradedAncestorRestoresDirtyAndConflicts() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetEmail(fixture.secondaryTheirs)
             draft.stash()
         } }
         val tightened = stash.copy(email = stash.email.copy(base = fixture.secondaryInvalid)) // ancestor no longer parses
         ProfileStoreFfi.new().use { store ->
             store.applyCanonical(fixture.seed()) // canonical secondary == secondaryBase, differs from the rescued value
-            store.restore(store.acceptStash(tightened)).use { restored ->
+            store.restore(store.acceptStash(tightened), null).use { restored ->
                 val snap = restored.snapshot()
                 assertTrue("the rescued value survives, dirty", snap.email.dirty)
                 val sync = snap.email.sync
@@ -550,14 +550,14 @@ class ProfileConformanceSuite {
     /** C23 — ...and the convergence guard: a lost ancestor whose rescued value equals canonical lands clean (C04). */
     @Test
     fun c23_aDegradedAncestorConvergesClean() {
-        val stash = seeded().use { store -> store.checkout().use { draft ->
+        val stash = seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetEmail(fixture.secondaryTheirs)
             draft.stash()
         } }
         val tightened = stash.copy(email = stash.email.copy(base = fixture.secondaryInvalid))
         ProfileStoreFfi.new().use { store ->
             store.applyCanonical(fixture.seed().copy(email = fixture.secondaryTheirs)) // canonical == the rescued value
-            store.restore(store.acceptStash(tightened)).use { restored ->
+            store.restore(store.acceptStash(tightened), null).use { restored ->
                 val snap = restored.snapshot()
                 assertTrue("a lost ancestor that converges lands clean, not a conflict from nothing", snap.email.sync is TextFieldSync.InSync)
                 assertFalse(snap.email.dirty)
@@ -568,8 +568,7 @@ class ProfileConformanceSuite {
     /** C13 — a value-moving edit resets the async verdict; a verdict endorses a value, so a changed value un-endorses it. */
     @Test
     fun c13_aValueMovingEditResetsTheVerdict() {
-        seeded().use { store -> store.checkout().use { draft ->
-            draft.setUsernameChecker(passingChecker())
+        seeded().use { store -> store.checkout(passingChecker()).use { draft ->
             draft.trySetUsername(fixture.checkedMine)
             assertTrue(draft.runUsernameCheck())
             assertEquals(CheckStateFfi.Passed, draft.snapshot().usernameCheck)
@@ -581,8 +580,7 @@ class ProfileConformanceSuite {
     /** C13 — a value-preserving edit (edit-to-same) leaves the verdict standing. */
     @Test
     fun c13_aValuePreservingEditLeavesTheVerdictStanding() {
-        seeded().use { store -> store.checkout().use { draft ->
-            draft.setUsernameChecker(passingChecker())
+        seeded().use { store -> store.checkout(passingChecker()).use { draft ->
             draft.trySetUsername(fixture.checkedMine)
             assertTrue(draft.runUsernameCheck())
             draft.trySetUsername(fixture.checkedMine) // edit to the SAME value
@@ -593,8 +591,7 @@ class ProfileConformanceSuite {
     /** C13 — a preserved conflict leaves the verdict standing; resolving take-theirs moves the value and resets it. */
     @Test
     fun c13_takeTheirsMovesTheValueAndResetsTheVerdict() {
-        seeded().use { store -> store.checkout().use { draft ->
-            draft.setUsernameChecker(passingChecker())
+        seeded().use { store -> store.checkout(passingChecker()).use { draft ->
             draft.trySetUsername(fixture.checkedMine)
             assertTrue(draft.runUsernameCheck())
             store.applyCanonical(fixture.seed().copy(username = fixture.checkedTheirs)) // conflicts; value stays mine
@@ -604,10 +601,10 @@ class ProfileConformanceSuite {
         } }
     }
 
-    /** C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check unblocks it. */
+    /** C16 — an unrun check on a dirty checked field blocks submit, pinned and keyed; a passing check unblocks it. The capability was present from checkout (D34) — C16 binds on UNRUN, not on absent. */
     @Test
     fun c16_anUnrunCheckOnADirtyCheckedFieldBlocksSubmit() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(passingChecker()).use { draft ->
             draft.trySetUsername(fixture.checkedMine)
             assertEquals(CheckStateFfi.Unchecked, draft.snapshot().usernameCheck)
             try {
@@ -618,7 +615,6 @@ class ProfileConformanceSuite {
                 assertEquals("username_check_required", violation.error.key)
                 assertEquals(listOf(ProfileFieldId.USERNAME), violation.pins)
             }
-            draft.setUsernameChecker(passingChecker())
             assertTrue(draft.runUsernameCheck())
             draft.submit() // now unblocked
         } }
@@ -627,7 +623,7 @@ class ProfileConformanceSuite {
     /** C16 — the other half: a clean checked field needs no check, or an edit to another field could never submit. */
     @Test
     fun c16_aCleanCheckedFieldNeedsNoCheck() {
-        seeded().use { store -> store.checkout().use { draft ->
+        seeded().use { store -> store.checkout(null).use { draft ->
             draft.trySetName(fixture.primaryMine) // edit a NON-checked field
             assertFalse(draft.snapshot().username.dirty)
             draft.submit() // must not throw
