@@ -9,6 +9,8 @@
 //! contract itself is designed after spike steps 02–03 produce friction evidence. Design
 //! docs live in `docs/` next to this crate: `architecture.md` (the settled shape: contract
 //! crate + Bolted-shipped shell-side adapters, and what step 02 must verify), `prior-art.md`
-//! (previous cross-platform HTTP attempts and where they fail), and `platform-surfaces.md`
-//! (the native API surfaces the adapters must map).
+//! (previous cross-platform HTTP attempts and where they fail), `platform-surfaces.md`
+//! (the native API surfaces the adapters must map), `feature-matrix.md` (the homogenized
+//! surface: every dimension classified portable-core / capability / adapter-config /
+//! excluded), and `spike-plan.md` (the five-platform verification plan).
 #![forbid(unsafe_code)]

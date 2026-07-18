@@ -11,6 +11,11 @@ round-trip + error taxonomy verified, overhead measured at nanoseconds). The con
 sketch in §2 remains unfrozen pending the rest of step 02 (streaming, §5). Evidence base:
 [prior-art.md](prior-art.md) (why every alternative shape fails) and
 [platform-surfaces.md](platform-surfaces.md) (what each native stack can honor).
+**2026-07-18:** a second investigation round produced the full homogenized feature matrix and
+contract proposal ([feature-matrix.md](feature-matrix.md) — resolves the earlier studies'
+verification flags, adds the skipped dimensions; raw evidence in `research/`) and the
+five-platform verification plan ([spike-plan.md](spike-plan.md)). Where they conflict with
+this doc or the studies, the matrix wins.
 
 ## 1. The shape
 
