@@ -168,7 +168,9 @@ upstream fix.
 
 ## 8. Out of scope, recorded
 
-- The background family end-to-end (A7/W3 deferred; the family's contract is §9-open).
+- The background family end-to-end (A7/W3 deferred; the family's contract is §9-open). The
+  Linux detached-helper mechanics (feature-matrix §6.5 — detachment method, logout survival,
+  Flatpak Background portal) join that deferred cluster as the family's L-probe.
 - WebSocket anything (parked family).
 - Cookie capability probes (shape undesigned; probing before design is backwards).
 - Web adapter probes — web is out of the platform set (feature-matrix §9); if it ever joins,
