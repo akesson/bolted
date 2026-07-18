@@ -341,7 +341,9 @@ handed over entirely (no per-chunk hooks, no redirect interception, no in-memory
 completion delivered as an input to a possibly-new core instance; force-quit loss is legal
 behavior. Android's extra freedom (core code may run) must not leak into the contract, or
 iOS can't implement it. This is the same durable-effect precondition already noted in
-ARCHITECTURE §9.
+ARCHITECTURE §9. Linux, which has no OS service at all, joins the family the same way
+Android's WorkManager path does — adapter-owned code in a detached helper process (§9,
+bucket-D note; feature-matrix §6.5).
 
 ### 7.2 Timeouts: one portable knob, the rest capabilities
 
@@ -486,7 +488,18 @@ adapter code the platform will never test for us (feature-matrix §7, rules 3, 4
 - **Trailers on Apple/reqwest**: no public API surfaces them → OUT.
 - **Enterprise auth on Android**: no built-in NTLM/Negotiate; reimplementing auth protocols
   in adapter code is a liability, not a synthesis → OUT.
-- **OS-run background transfer on Linux**: no OS service exists; a helper process is an app
-  architecture, not an adapter → the background family's `availability()` reports it.
 - **A single proxy truth on Linux**: structural (env vars vs gsettings vs kioslaverc) →
   document, don't promise.
+
+One entry left this bucket on 2026-07-18: **background transfer on Linux**. No OS service
+exists (that fact stands, §5), but the *adapter* can supply the behavior bucket-C style — a
+detached helper process (the app's own binary re-exec'd with a worker flag, or a
+`systemd-run --user` transient unit; not an embedded second binary, which is a packaging
+burden in every distro format) transferring against file-based descriptors in the XDG state
+directory, results picked up by the reattach-on-launch ceremony the family already mandates
+everywhere. This is the Android-freedom case again — app code runs — and like Android it
+implements the iOS-shaped contract, never widens it. Honest limits, documented not promised:
+lost on reboot; logout survival environment-dependent (`KillUserProcesses`, lingering);
+sandboxed packaging needs its own probe (a detached child keeps a Flatpak instance alive,
+but session teardown kills the sandbox — the Background portal is the sanctioned route); no
+OS cost/scheduling policies. Details: feature-matrix §6.5.

@@ -379,8 +379,9 @@ Still §9-open; the research moves four things from guess to fact:
    `RESULT_FAILURE`), API 34+, with a user-facing Stop that kills the process without
    `onStopJob`; Windows needs package identity (sparse packages count) and caps at 200
    operations with mandatory reattach ceremony; iOS relaunch is rate-limited with
-   force-discretionary-when-backgrounded; Linux has nothing. So the family's capability
-   surface is `availability() -> {Available, NeedsForeground, NoIdentity, Unsupported, …}` —
+   force-discretionary-when-backgrounded; Linux has no OS service (item 5 is the adapter's
+   answer). So the family's capability surface is
+   `availability() -> {Available, NeedsForeground, NoIdentity, Unsupported, …}` —
    queried, not assumed, and the *scheduling precondition* is part of the type.
 3. **Android's adapter is a three-way dispatch** (UIDT on 34+ / WorkManager / DownloadManager
    for plain downloads), all implementing the iOS-shaped contract; DownloadManager transfers
@@ -391,6 +392,21 @@ Still §9-open; the research moves four things from guess to fact:
 4. **Progress byte semantics must be self-defined** (§5.9's rule doubly so here: Windows'
    BackgroundTransfer excludes headers where WinRT foreground includes them; both regress on
    restart; `HasRestarted` is a field, not an anomaly).
+5. **Linux joins the family via a detached helper** (proposed 2026-07-18): the adapter
+   re-execs the app's own binary with a worker flag (or starts a `systemd-run --user`
+   transient unit — never an embedded second binary, which is pure packaging burden);
+   descriptors, progress, and results are files in the XDG state directory (which *is* the
+   family's required durable-descriptor shape — nothing extra to invent); a
+   pidfile/liveness check lets reattach-on-launch classify a crashed helper as lost, which
+   the contract already legalizes. Uploads come free — file-based bodies, better than
+   DownloadManager's downloads-only. `availability()` reports the honest limits: no reboot
+   survival (note the contract should not promise reboot survival *globally* either — iOS's
+   behavior there is unverified, and force-quit loss is already legal), logout survival
+   environment-dependent, no cost/scheduling policies (metered via NetworkManager at best),
+   and Flatpak/snap mechanics unresolved (Background portal — a probe question deferred
+   with the family, alongside A7/W3). Like Android's WorkManager path, this is app code
+   running with more freedom than iOS allows — it implements the iOS-shaped contract,
+   never widens it.
 
 ## 7. Conformance rules the research forces
 
