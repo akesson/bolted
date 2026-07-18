@@ -6,35 +6,41 @@ after spike steps 02–03). Companion doc: [prior-art.md](prior-art.md).
 **Method:** inventory of official documentation (developer.apple.com, developer.android.com,
 learn.microsoft.com, MDN, curl.se, libsoup/GLib docs). Claims that could not be verified
 against a fetched official page are flagged inline and collected in
-[§8](#8-verification-notes) as spike candidates. The browser section is included beyond the
-asked win/lin/mac/android/ios set because the Rust-web target must implement the same contract
-with zero FFI — it is the weakest adapter and therefore shapes the contract's floor.
+[§8](#8-verification-notes) as spike candidates.
+
+**2026-07-18:** web removed from the platform set — it was never part of the asked
+win/lin/mac/android/ios surface, and its "weakest adapter shapes the floor" premise no longer
+holds. §6 keeps a short overview of how web would fit if it ever joins
+(details: [feature-matrix.md §9](feature-matrix.md)); §9 (new) lists what can be made
+homogeneous across the five platforms / four adapter surfaces, including what adapter code
+can synthesize.
 
 ---
 
 ## 1. The surfaces at a glance
 
-| | Apple (iOS/macOS) | Android | Windows | Linux | Web (WASM) |
-|---|---|---|---|---|---|
-| Native stack | URLSession (the only one) | OkHttp / Cronet / HttpsURLConnection (choice) | WinHTTP / WinRT / WinINet (+ own stack) | libcurl / libsoup3 / own stack | `fetch` (the only one) |
-| HTTP/3 | yes (system stack) | only via Cronet | Win 11 / Server 2022+ | via libcurl builds | browser-negotiated, invisible |
-| OS-managed background transfer | yes — up+down, app relaunch | downloads only (DownloadManager) | yes — up+down (packaged apps); BITS otherwise | **none** | none portable (Background Fetch = Chromium, experimental) |
-| App code runs during bg transfer | **never** | yes (WorkManager) / no (DownloadManager) | no | always (it's your process) | no |
-| Pinning | delegate (SecTrust) + declarative plist | CertificatePinner + declarative XML | cert-context inspection / WinRT event | you own the verifier | **impossible** |
-| Cookies default | on (3rd-party blocked) | OkHttp: **off** | WinHTTP: session-only; WinRT: managed jar | per-library | browser-owned, script-invisible |
-| Cache default | on (protocol policy) | OkHttp: **off** | WinHTTP: none; WinRT: yes | per-library | browser-owned + Cache API |
-| Timeout vocabulary | idle (60 s) + total (7 d) | connect/read/write (10 s) + call (off) | per-phase knobs; bg fixed 5 min/2 min | per-library | AbortSignal only |
-| Proxy | OS-managed (+ per-session config) | ProxySelector / system | WPAD/PAC APIs, per-interface failover | env vars vs gsettings vs kioslaverc — no single truth | invisible |
-| Cleartext HTTP | blocked (ATS) | blocked since API 28 | allowed | allowed | mixed-content blocked |
+| | Apple (iOS/macOS) | Android | Windows | Linux |
+|---|---|---|---|---|
+| Native stack | URLSession (the only one) | OkHttp / Cronet / HttpsURLConnection (choice) | WinHTTP / WinRT / WinINet (+ own stack) | libcurl / libsoup3 / own stack |
+| HTTP/3 | yes (system stack) | only via Cronet | Win 11 / Server 2022+ | via libcurl builds |
+| OS-managed background transfer | yes — up+down, app relaunch | downloads only (DownloadManager) | yes — up+down (packaged apps); BITS otherwise | **none** |
+| App code runs during bg transfer | **never** | yes (WorkManager) / no (DownloadManager) | no | always (it's your process) |
+| Pinning | delegate (SecTrust) + declarative plist | CertificatePinner + declarative XML | cert-context inspection / WinRT event | you own the verifier |
+| Cookies default | on (3rd-party blocked) | OkHttp: **off** | WinHTTP: session-only; WinRT: managed jar | per-library |
+| Cache default | on (protocol policy) | OkHttp: **off** | WinHTTP: none; WinRT: yes | per-library |
+| Timeout vocabulary | idle (60 s) + total (7 d) | connect/read/write (10 s) + call (off) | per-phase knobs; bg fixed 5 min/2 min | per-library |
+| Proxy | OS-managed (+ per-session config) | ProxySelector / system | WPAD/PAC APIs, per-interface failover | env vars vs gsettings vs kioslaverc — no single truth |
+| Cleartext HTTP | blocked (ATS) | blocked since API 28 | allowed | allowed |
 
 Two structural facts fall out immediately:
 
 1. **The background-transfer models are mutually incompatible in kind**, not just in detail —
    who executes the transfer, whether app code can run, what payloads are legal, and what
    survives termination differ per platform (§7.1).
-2. **The web target is the contract's floor**: no pinning, no proxy, no cookie access, no
-   upload progress in fetch, no portable background anything. Whatever the portable core of
-   `Http` promises must be implementable there.
+2. **No single surface is the floor** (since web's removal): the contract's ceiling is set
+   per dimension by the least-featured stack *after* adapter synthesis — see §9 for which
+   gaps configuration or custom adapter code can close, and feature-matrix §4 for the rows
+   that remain capabilities because no seam exists to synthesize from.
 
 ## 2. Apple (iOS + macOS) — URLSession
 
@@ -292,46 +298,39 @@ Windows 11.
 **Linux forbids nothing — and provides nothing**: no OS transfers, no cost policies, no
 single proxy truth, no canonical cert path. Freedom as an unfunded mandate.
 
-## 6. Web / WASM (`fetch`) — the contract's floor
+## 6. Web — out of the platform set; how it would fit
 
-Included beyond the asked platform set because the Rust-web shell consumes the same core
-with zero FFI; every portable contract promise must survive this adapter.
+Web was removed from the platform set on 2026-07-18 (never part of the asked surface). The
+Rust-web shell exists as a Bolted target, so the question may return; the short version of
+what the 2026-07-18 web sweep established (raw evidence:
+[research/2026-07-18-web.md](research/2026-07-18-web.md), full row-by-row deltas:
+[feature-matrix.md §9](feature-matrix.md)):
 
-- **Model**: promise-based; `Response` resolves at headers; HTTP error statuses do **not**
-  reject. Works identically in workers and service workers.
-- **Timeout**: none. `AbortSignal` is the only cancellation mechanism (`AbortSignal.timeout()`
-  → `TimeoutError`, manual abort → `AbortError`; combine with `AbortSignal.any()`). A single
-  total-deadline semantic is the only timeout the web adapter can honor.
-- **Streaming**: response-body streaming is broadly supported (`ReadableStream`).
-  **Request-body streaming is effectively Chromium-only** (105+), requires HTTP/2+, is
-  half-duplex, always triggers CORS preflight, and Safari accepts the API but won't send it.
-- **Redirects**: `follow` / `error` / `manual` (opaque) — intermediate responses are **never
-  visible** and cannot be rewritten. No redirect interception, period.
-- **Upload progress: fetch has none.** XHR's `upload.progress` events are the only
-  mechanism — a web adapter that promises upload progress is an XHR adapter for those
-  requests (XHR is unavailable in service workers).
-- **CORS is an absolute boundary** with no application escape hatch; forbidden headers
-  (`Cookie`, `Host`, `Origin`, `Referer`…) are browser-owned.
-- **TLS/auth**: entirely browser-owned. **No pinning is possible** (HPKP removed from the
-  platform; by-absence claim), no client-cert API, no proxy visibility.
-- **Cookies**: browser-managed and script-invisible on the wire; the `credentials` option
-  (`omit`/`same-origin`/`include`) is the only control.
-- **Background**: Background Fetch API (SW-based, survives page close, browser progress UI)
-  is **Chromium-only and experimental** — a progressive enhancement, never a portable
-  capability. `keepalive: true` covers the page-unload case with a 64 KiB cap.
-- Unique to the web: subresource-integrity enforcement in the request API (`integrity`),
-  zero-config TLS/HSTS/CT, service-worker request interception + Cache API offline layer.
+- The adapter would be `fetch` via web-sys, zero FFI — a fifth conformance implementor with
+  no BoltFFI machinery.
+- The deadline maps to `AbortSignal.timeout`, with timeout-vs-cancel classified via
+  `signal.reason` (WebKit rejects with `AbortError` even on timeout).
+- Several portable rows would demote to capabilities again: redirect hop trace (fetch hides
+  hops), upload progress (fetch has none; XHR-only), pinning (impossible — HPKP removed),
+  negotiated-version observability (TAO-gated Resource Timing only).
+- Download-to-file survives via OPFS `createWritable` (Baseline since Sept 2025) — but into
+  origin-private storage, not a path, which is why `FileRef` stays an opaque newtype.
+- CORS, forbidden headers, browser-owned cookies/TLS/proxy, and the absence of any portable
+  background mechanism are absolute — browser-owned, no adapter seam.
+- The one decision worth taking early *if* web joining is plausible: contract traits must use
+  conditional `Send` bounds (wasm futures are `!Send`) — cheap when the traits are written,
+  expensive to retrofit.
 
 ## 7. What the intersection permits — contract implications
 
 ### 7.1 Background transfer is four different machines
 
-| | iOS | Android | Windows (packaged) | Linux / Web |
+| | iOS | Android | Windows (packaged) | Linux |
 |---|---|---|---|---|
-| Who executes | OS daemon | your code (WorkManager) or OS (downloads only) | OS service | you / nobody |
-| Uploads | file-based only | app-code only | yes | you / no |
+| Who executes | OS daemon | your code (WorkManager) or OS (downloads only) | OS service | you |
+| Uploads | file-based only | app-code only | yes | you |
 | Survives force-quit | **no** (cancelled) | WorkManager: yes | yes | n/a |
-| Redirect/auth hooks during bg | none | full (own code) / none (DownloadManager) | none | full / none |
+| Redirect/auth hooks during bg | none | full (own code) / none (DownloadManager) | none | full |
 | Completion with app dead | relaunch + delegate rehydration | WorkManager reschedule / broadcast | background task invoked | no |
 | Fixed OS limits | discretionary scheduling, escalating relaunch throttle | 6 h dataSync budget, Doze | 200 ops, 5 min/2 min timeouts | none |
 
@@ -347,64 +346,66 @@ ARCHITECTURE §9.
 ### 7.2 Timeouts: one portable knob, the rest capabilities
 
 The only timeout every surface can honor is a **total deadline** (resource timeout /
-callTimeout / AbortSignal / fixed OS budgets). Idle, connect, read, and write timeouts exist
-on *some* stacks with *different* meanings — Apple has idle+total but no connect; OkHttp has
-connect/read/write but total off by default; fetch has abort only; background transfer has
-none configurable anywhere. Contract: `deadline` portable; finer-grained timeouts typed as
-per-adapter capabilities. (This single issue produced the most prior-art bugs — see
-prior-art §4.)
+callTimeout / fixed OS budgets) — and on Apple/.NET the per-request form is adapter-
+synthesized (timer + cancel), not native. Idle, connect, read, and write timeouts exist on
+*some* stacks with *different* meanings — Apple has idle+total but no connect; OkHttp has
+connect/read/write but total off by default; background transfer has none configurable
+anywhere. Contract: `deadline` portable; finer-grained timeouts are composition-root
+configuration. (This single issue produced the most prior-art bugs — see prior-art §4.)
 
-### 7.3 Pinning: declarative data, gated off the web
+### 7.3 Pinning: declarative data, mapped per adapter
 
-All four native platforms can implement SPKI-pin *data* (SecTrust evaluation /
-CertificatePinner / cert-context inspection / own verifier); the web cannot, full stop.
-Pinning is therefore a capability the web adapter simply does not provide — and the
-declarative-XML route on Android needs a spike check (does `<pin-set>` bind OkHttp/Cronet?
-undocumented). Callbacks are unportable everywhere (prior-art lesson 5).
+All four surfaces can implement SPKI-pin *data* (SecTrust evaluation / CertificatePinner /
+cert-context inspection / own verifier) — native only on Android; adapter code elsewhere
+(see §9 bucket C). The declarative-XML route on Android needed a spike check and got its
+answer (feature-matrix §5.14: `<pin-set>` binds OkHttp via Conscrypt but is
+custom-TrustManager-fragile — the adapter carries its own pins). Callbacks are unportable
+everywhere (prior-art lesson 5).
 
 ### 7.4 Cookies and caching: pick an explicit default; the defaults conflict
 
-URLSession: both on. OkHttp/WinHTTP: both off. Web: browser-owned, invisible. A contract
-that is silent inherits a per-platform coin flip. The bolted-shaped answer: **the portable
-request effect is cookie-less and cache-less by default** (matching a core that treats HTTP
-as an effect, not ambient state); cookie/cache participation is opt-in per adapter, and on
-the web the browser's ownership is accepted as-is (credentials mode, cache mode).
+URLSession: both on. OkHttp/WinHTTP: both off. A contract that is silent inherits a
+per-platform coin flip. The bolted-shaped answer: **the portable request effect is
+cookie-less and cache-less by default** (matching a core that treats HTTP as an effect, not
+ambient state); cookie/cache participation is opt-in per adapter.
 
 ### 7.5 Redirects: observe-maybe, intercept-never
 
-Foreground interception exists on URLSession (delegate), OkHttp (interceptors), Cronet
-(explicit consent), WinHTTP (callback) — but **not on fetch**, and **not in any background
-transfer**. Portable contract: redirects are followed by the stack; the final URL is
-reported; hop-by-hop interception is a capability absent on web and in background.
+Foreground *observation* exists on URLSession (delegate), OkHttp (interceptors), Cronet
+(explicit consent), WinHTTP (callback); on .NET only by disabling auto-redirect and
+following manually — an honest adapter synthesis under a cookie-less contract
+(feature-matrix §5.5). **No background transfer exposes hops on any platform.** Portable
+contract: redirects are followed; the final URL is reported; the hop *trace* is
+foreground-only and recorded, never an async veto.
 
 ### 7.6 Streaming and progress
 
-Response streaming is portable (every surface). Request streaming is not (Chromium-only on
-web). Upload progress is portable **only if** the web adapter drops to XHR. Download progress
-is portable. Independent of platforms, whether streamed bodies can cross BoltFFI at all is
-exactly the step-02 probe (stream burst/ordering semantics) — the platform ceiling is known;
-the FFI ceiling is the open question.
+Response streaming is portable (every surface). Request streaming is now platform-portable
+too, but excluded by design — an effect carries complete data (feature-matrix §5.3).
+Upload progress is portable via adapter synthesis (OS-fed only on Apple; sink/stream
+wrapping elsewhere). Download progress is portable. Independent of platforms, whether
+streamed bodies can cross BoltFFI at all is exactly the step-02 probe (stream burst/ordering
+semantics) — the platform ceiling is known; the FFI ceiling is the open question.
 
 ### 7.7 Proxy and trust: never portable concepts
 
-Proxy is OS-coherent on Windows/Apple, a four-way policy mess on Linux, invisible on web.
-Trust evaluation is platform-delegated everywhere (and the Rust ecosystem converged on the
-same — prior-art §3g). Neither appears in the portable contract; both are adapter
-configuration.
+Proxy is OS-coherent on Windows/Apple, a four-way policy mess on Linux. Trust evaluation is
+platform-delegated everywhere (and the Rust ecosystem converged on the same — prior-art
+§3g). Neither appears in the portable contract; both are adapter configuration.
 
 ### 7.8 Protocol versions and cleartext
 
-The contract must not promise HTTP/3 (OkHttp caps at h2; Windows 10 caps at h2; web is
-invisible) — version is an observable, not a request parameter. HTTPS-only is safe as the
-portable rule: ATS, Android API 28+, and browsers already enforce it; cleartext is a
-dev-only, platform-config-gated exception.
+The contract must not promise HTTP/3 (OkHttp caps at h2; Windows 10 caps at h2) — version
+is an observable, not a request parameter. HTTPS-only is safe as the portable rule: ATS and
+Android API 28+ already enforce it, and the sans-io core can refuse non-https URLs before
+dispatch on Windows/Linux; cleartext is a dev-only, platform-config-gated exception.
 
 ### 7.9 Observability
 
-DNS/connect/TLS/first-byte/bytes timing is implementable on every native surface
-(TaskMetrics / EventListener / WinHTTP request-times / curl probes) and **not on the web**
-(fetch exposes nothing; the Resource Timing API gives coarse figures — unverified here).
-Metrics: an optional capability, rich on native, absent-or-coarse on web.
+DNS/connect/TLS/first-byte/bytes timing is rich on Apple/.NET/OkHttp and **coarse on Linux**
+— the "implementable on every native surface" claim here was corrected by the second round
+(feature-matrix §1.5: reqwest exposes no per-phase timing, and no seam exists to synthesize
+it from). Metrics: an optional, *tiered* capability.
 
 ## 8. Verification notes
 
@@ -422,9 +423,70 @@ requiring Win 11/Server 2022 (Q&A source); WinINet deprecation status (interpret
 **Linux:** KDE proxy specifics (community sources); snap network-interface details (reference
 page 404); Fedora p11-kit paths; NetworkManager metered-flag non-integration; libsoup3
 HTTP/2.
-**Web:** Firefox status on streaming request bodies; Resource Timing granularity for fetch;
-Background Sync/Periodic Sync support status.
+
+Most of these flags were resolved by the 2026-07-18 sweeps — see feature-matrix §1 and the
+raw reports in `research/`.
 
 The step-02/03 spikes intersect this list where it matters most: BoltFFI streaming semantics
 (§7.6), NSC pinning coverage (§7.3), and — if background transfer is ever promised — a
 minimal URLSession-background + relaunch rehydration probe on real hardware.
+
+## 9. What can be made homogeneous — and how
+
+Added 2026-07-18. The five platforms / four adapter surfaces, sorted by *what it takes* to
+make each feature behave identically everywhere. Buckets A–C are all homogenizable — the
+difference is only where the work lives; bucket D is not, because no seam exists to write
+code against. Classifications match [feature-matrix.md](feature-matrix.md) §4 (bucket C =
+its CORE(adapter) rows).
+
+### A. Homogeneous natively — the primitive exists on all four surfaces
+
+Adapter work is mapping, not building: method/URL/typed headers; `Bytes`/`File` request
+bodies streaming from disk; redirect auto-follow with final URL; response streaming;
+download progress; cancellation of in-flight calls; negotiated-version observability
+(all four stacks report it); 401/407 as ordinary responses; typed error mapping (the mapping
+table is per-adapter work, but every input is a native error the stack already surfaces).
+
+### B. Homogeneous by configuration — the defaults conflict, one decision per adapter
+
+- **Cookie-less + cache-less**: ephemeral/no-store session (Apple), `NO_COOKIES` + no cache
+  (OkHttp — its default), no `CookieContainer`/no cache (.NET — its default), no jar
+  (reqwest — its default).
+- **Decompression normalized**: `DecompressionMethods.All` on .NET (default is None!),
+  brotli/zstd modules on OkHttp, gzip/brotli/zstd features on reqwest; Apple decodes always.
+- **Request-level retry off**: reqwest `retry()` unused; connection-level recovery stays at
+  platform defaults everywhere (the split in feature-matrix §5.17).
+- **HTTPS-only**: enforced natively by ATS / Android API 28; on Windows/Linux the sans-io
+  core refuses non-https URLs before dispatch — configuration-free homogeneity.
+- **Fine timeouts**: aligned client-wide at the composition root; never per-request anywhere.
+
+### C. Homogeneous by adapter code — a native gap, closed by custom code in the shipped adapter
+
+The feature-matrix CORE(adapter) rows; per-surface synthesis (— means native, no synthesis):
+
+| Feature | Apple | Android/OkHttp | Windows/.NET | Linux/reqwest |
+|---|---|---|---|---|
+| Per-request total deadline | timer + cancel (no native per-request wall clock) | — (`Call.timeout`) | per-request CTS; re-armed per-read cancel once streaming | — (`RequestBuilder.timeout`) |
+| Multipart body | hand-built (core-supplied boundary) | — (`MultipartBody`) | hand-built | — |
+| https→http refusal | redirect delegate | `followSslRedirects(false)` (config) | — (enforced) | custom redirect policy |
+| Redirect hop trace | — (delegate sees hops) | — (network interceptor) | manual-follow loop (no observation hook) | — (policy closure) |
+| Upload progress | — (OS-fed `didSendBodyData`) | sink wrapping | flush-aware content-stream wrapping | body-stream wrapping |
+| Download-to-file | — (`downloadTask`) | stream copy to file | stream copy | `bytes_stream` to disk |
+| SPKI pinning | trust-evaluation delegate | — (`CertificatePinner`) | cert-validation callback | custom rustls verifier (spike-gated) |
+
+The cost of this bucket is real and lives in the conformance suite: every synthesis is
+adapter code the platform will never test for us (feature-matrix §7, rules 3, 4, 10, 11).
+
+### D. Cannot be homogenized — no seam to synthesize from
+
+- **Per-phase metrics on Linux**: reqwest exposes no DNS/connect/TLS timing and no hook that
+  observes those phases → metrics stay a *tiered* capability.
+- **Request priority on OkHttp/.NET**: no API (FIFO dispatcher / closed-wontfix) — nothing
+  to write code against, and faking wire priority is not compensation.
+- **Trailers on Apple/reqwest**: no public API surfaces them → OUT.
+- **Enterprise auth on Android**: no built-in NTLM/Negotiate; reimplementing auth protocols
+  in adapter code is a liability, not a synthesis → OUT.
+- **OS-run background transfer on Linux**: no OS service exists; a helper process is an app
+  architecture, not an adapter → the background family's `availability()` reports it.
+- **A single proxy truth on Linux**: structural (env vars vs gsettings vs kioslaverc) →
+  document, don't promise.
