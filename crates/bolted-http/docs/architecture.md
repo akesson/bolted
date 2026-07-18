@@ -14,8 +14,12 @@ sketch in §2 remains unfrozen pending the rest of step 02 (streaming, §5). Evi
 **2026-07-18:** a second investigation round produced the full homogenized feature matrix and
 contract proposal ([feature-matrix.md](feature-matrix.md) — resolves the earlier studies'
 verification flags, adds the skipped dimensions; raw evidence in `research/`) and the
-five-platform verification plan ([spike-plan.md](spike-plan.md)). Where they conflict with
-this doc or the studies, the matrix wins.
+verification plan ([spike-plan.md](spike-plan.md)). Where they conflict with
+this doc or the studies, the matrix wins. **Later the same day:** web removed from the
+platform set (Henrik — it was never part of the asked win/lin/mac/android/ios surface); the
+web adapter row is gone from the diagram below, and feature-matrix §9 records how web would
+fit if it ever joins. Note: D38's row in the repo-level ARCHITECTURE.md still lists the
+fetch/web adapter — updating a frozen decision is a design-session act, flagged for Henrik.
 
 ## 1. The shape
 
@@ -37,7 +41,6 @@ Three layers, only the first of which is visible to facet authors:
 │   BoltedHttp.kt     → OkHttp / WorkManager  (in the Kotlin pkg) │
 │   BoltedHttp.cs     → WinRT HttpClient      (in the C# pkg)     │
 │   bolted-http-linux → reqwest/curl          (Rust)              │
-│   bolted-http-web   → fetch via wasm-bindgen (Rust, zero FFI)   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -69,10 +72,12 @@ Portable core, honored identically by every adapter (derived in platform-surface
 
 Optional capabilities, typed so an unsupporting adapter fails to compile, not at runtime:
 
-- `FineTimeouts` (connect/read/write — absent on Darwin/web),
-- `UploadProgress` (web adapter must drop to XHR),
-- `Pinning` — **declarative SPKI data, never callbacks**; absent on web,
-- `Metrics` (DNS/connect/TLS/first-byte timing; absent-or-coarse on web),
+- `FineTimeouts` (connect/read/write — absent on Darwin; the matrix has since demoted these
+  to composition-root config),
+- `UploadProgress` (the matrix has since promoted this to CORE(adapter)),
+- `Pinning` — **declarative SPKI data, never callbacks** (the matrix has since promoted this
+  to CORE(adapter), spike-gated on Linux),
+- `Metrics` (DNS/connect/TLS/first-byte timing; tiered — coarse on Linux),
 - `BackgroundTransfer` — a **separate effect family**, never a flag on the request effect:
   durable, serializable, file-based transfer descriptors with stable identities, handed over
   entirely (no per-chunk hooks), completion delivered as an input to a possibly-new core
@@ -81,8 +86,9 @@ Optional capabilities, typed so an unsupporting adapter fails to compile, not at
   replay (ARCHITECTURE §9): effects as durable data with stable identities.
 
 Never in the contract: proxy and trust configuration (adapter/OS-owned), cookie ownership,
-streaming request bodies (web cannot). Whether **response streaming** makes the portable core
-is decided by the step-02 BoltFFI stream findings, not by the platforms.
+streaming request bodies (excluded by design — an effect carries complete data; see
+feature-matrix §5.3). Whether **response streaming** makes the portable core is decided by
+the step-02 BoltFFI stream findings, not by the platforms.
 
 ## 3. Adapter placement: shell-side, by decision
 
