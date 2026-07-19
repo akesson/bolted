@@ -288,6 +288,57 @@ class StreamProbe {
         }
     }
 
+    /**
+     * **M3 under-load sweep (completing M0's N2 evidence the A1 way).** Re-run the headline probe with
+     * the FAST O(1) collector while background threads SATURATE the CPU (one busy-spin thread per core),
+     * both pacings, and record ingested / delivered / ordered / off-main / p50 / p99 UNDER LOAD.
+     *
+     * Expectation from M0: the cross-FFI **ingest stays 200/200 and ordered** — that is the load-bearing,
+     * un-droppable measure and it IS gated (a degrade or reorder here is fresh kill-criterion-3 evidence).
+     * **Re-delivery completeness (`delivered`) is RECORDED, not gated**: under CPU contention the generated
+     * `callbackFlow`'s `trySend` into the bounded `BUFFERED` channel may drop, exactly the M0 finding — the
+     * streaming seam is deliberately unfrozen, so a `delivered==200` gate under burst would be flaky.
+     */
+    @Test
+    fun theStreamIsWholeUnderCpuLoad() = runBlocking {
+        val cores = Runtime.getRuntime().availableProcessors()
+        val loadThreads = maxOf(2, cores) // one busy-spin per core, at least two, to saturate the CPU
+        val stopLoad = java.util.concurrent.atomic.AtomicBoolean(false)
+        val spinners = (0 until loadThreads).map {
+            Thread {
+                var x = 0L
+                while (!stopLoad.get()) { x = x * 1_000_003L + 7L; if (x == Long.MIN_VALUE) println(x) }
+            }.apply { isDaemon = true; priority = Thread.NORM_PRIORITY; start() }
+        }
+        record("N2 under-load: saturating with $loadThreads busy-spin threads on $cores cores")
+        try {
+            for (delayUs in intArrayOf(0, 200)) {
+                val (harness, base) = freshHarness()
+                val scope = CoroutineScope(Dispatchers.Default)
+                try {
+                    val r = runOnce(harness, base, CHUNKS, delayUs, dropSeq = null, teardown = true, consumerScope = scope)
+                    record(
+                        "N2 UNDER-LOAD F1 ffi_stream (delay=${delayUs}us, $loadThreads spinners): " +
+                            "delivered=${r.delivered}/$CHUNKS ingested=${r.ingested} stallPoint=${r.stallPoint} " +
+                            "ordered=${r.ordered} p50=${"%.1f".format(r.p50Us)}us p99=${"%.1f".format(r.p99Us)}us " +
+                            "consumerThreads=${r.consumerThreads} consumerOffMain=${!r.sawMain}",
+                    )
+                    // GATED (kill-criterion-3): the cross-FFI ingest must stay whole and in-order even
+                    // under saturation — if THIS degrades or reorders, the streaming seam is unsound.
+                    assertEquals("under CPU load, cross-FFI ingest must stay whole (delay=$delayUs)", CHUNKS.toLong(), r.ingested)
+                    assertTrue("under CPU load, chunks must still be delivered in ascending seq (delay=$delayUs)", r.ordered)
+                    assertFalse("under CPU load, the consumer must still resume off the main thread (delay=$delayUs)", r.sawMain)
+                    // `delivered` under load is RECORDED above, not gated (callbackFlow trySend variance).
+                } finally {
+                    harness.stopServer(); harness.close(); scope.cancel()
+                }
+            }
+        } finally {
+            stopLoad.set(true)
+            spinners.forEach { it.join(1_000) }
+        }
+    }
+
     /** Launch an abandoned (never-torn-down) consumer whose scope is not retained by this method. */
     private suspend fun abandonRun(
         harness: HttpHarness,
