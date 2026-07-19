@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The adapter opens sockets (OkHttp), so the consumable library declares the INTERNET permission;
+     it merges into any consuming APK. Cleartext policy (for the in-process 127.0.0.1 test server)
+     is a test-tier concern and lives in the conformance project's manifest, not here. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

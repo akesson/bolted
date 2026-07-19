@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The conformance tier drives OkHttp against the in-process Rust `TestServer` on 127.0.0.1 over
+     plain HTTP, so the (self-instrumenting) test APK must permit cleartext traffic. This is a
+     TEST-tier allowance for the loopback test server only; the shipped `android/bolted-http` library
+     carries no such policy. INTERNET is needed even for loopback sockets. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:usesCleartextTraffic="true" />
+</manifest>
