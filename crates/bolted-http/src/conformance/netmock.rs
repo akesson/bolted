@@ -83,6 +83,10 @@ pub struct MockBehavior {
     /// `final_url` and drop the hop trace — the trace-drop break, invisible to every rule until the
     /// M4 redirect-trace row.
     pub honest_redirect_trace: bool,
+    /// Report the honest negotiated HTTP version the server spoke (the test server is HTTP/1.1). Off
+    /// ⇒ report `Http2` for the 1.1 server — the version-observable break, invisible to every rule
+    /// until the step-25 M4 negotiated-version row.
+    pub honest_version: bool,
 }
 
 impl MockBehavior {
@@ -105,6 +109,7 @@ impl MockBehavior {
             honest_upload_progress: true,
             terminal_upload_progress: true,
             honest_redirect_trace: true,
+            honest_version: true,
         }
     }
 }
@@ -283,13 +288,17 @@ impl SocketMock {
             } else {
                 (request.url().clone(), Vec::new())
             };
-            let mut resp = HttpResponse::builder(
-                StatusCode::new(head.status),
-                final_url,
-                HttpVersion::Http1_1,
-                outcome,
-            )
-            .content_length(content_length);
+            // The negotiated version observable (row 11): the test server speaks HTTP/1.1. The
+            // version break reports `Http2` for the 1.1 server (invisible to every rule until the
+            // step-25 M4 negotiated-version row).
+            let version = if self.behavior.honest_version {
+                HttpVersion::Http1_1
+            } else {
+                HttpVersion::Http2
+            };
+            let mut resp =
+                HttpResponse::builder(StatusCode::new(head.status), final_url, version, outcome)
+                    .content_length(content_length);
             for h in hops {
                 resp = resp.hop(h);
             }

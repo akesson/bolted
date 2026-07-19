@@ -23,7 +23,7 @@ use super::{Cluster, ConformanceCtx, ConformanceRow, FailureReason, RowResult};
 use super::{drive_cancel, drive_once, drive_with_progress};
 use crate::error::HttpErrorKey;
 use crate::request::{FileRef, HttpRequest, Method, PinSet, RequestBody, ResponseSink, Url};
-use crate::response::{BodyOutcome, HttpResponse};
+use crate::response::{BodyOutcome, HttpResponse, HttpVersion};
 
 /// The eleven C1 rows.
 #[must_use]
@@ -420,7 +420,7 @@ pub fn extra_rows() -> &'static [ConformanceRow] {
     &SINK_ROWS
 }
 
-static SINK_ROWS: [ConformanceRow; 2] = [
+static SINK_ROWS: [ConformanceRow; 4] = [
     row(
         "C1/row-15-response-sink-correspondence",
         row_15_sink_correspondence,
@@ -429,7 +429,67 @@ static SINK_ROWS: [ConformanceRow; 2] = [
         "C1/row-redirect-trace-final-url-and-hops",
         redirect_trace_correspondence,
     ),
+    row(
+        "C1/row-negotiated-version-observable",
+        negotiated_version_observable,
+    ),
+    row(
+        "C1/row-deadline-total-not-per-idle",
+        deadline_total_not_per_idle,
+    ),
 ];
+
+/// Row 11 (step-25 M4 blind-spot fix): the negotiated HTTP version observable is reported and matches
+/// what the server actually spoke (the test server is HTTP/1.1). Until this row **no** C1/C2/C3 rule
+/// referenced [`HttpResponse::version`], so an adapter that reported the wrong negotiated protocol
+/// passed the *entire* suite — the version-observable blind spot (the redirect-trace blind spot's
+/// exact shape, for the version field; found by the Apple `mapVersion` mutation, step-25 M4).
+fn negotiated_version_observable(ctx: &ConformanceCtx) -> RowResult {
+    let url = match http_url(ctx, "/ok") {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    let req = HttpRequest::builder(Method::Get, url, Duration::from_secs(5)).build();
+    match drive_once(ctx.factory.new_adapter().as_ref(), req, BUDGET) {
+        Some(Ok(r)) if r.version() == HttpVersion::Http1_1 => RowResult::Pass,
+        Some(Ok(r)) => RowResult::Fail(FailureReason::WrongHttpVersion {
+            got: r.version(),
+            expected: HttpVersion::Http1_1,
+        }),
+        Some(Err(e)) => RowResult::Fail(FailureReason::ExpectedSuccessGotError { got: e.key() }),
+        None => RowResult::Fail(FailureReason::NoCompletion),
+    }
+}
+
+/// Rule 3 (step-25 M4 blind-spot fix): a **trickling** body must still time out at the *total*
+/// deadline. `/drip` dribbles one byte every 50 ms, so a *per-idle* timeout is continually reset and
+/// never fires — only a total deadline (the contract) fires. `/stall`'s single burst-then-silence
+/// cannot distinguish the two: an adapter that synthesises the deadline as a per-idle idle-timer
+/// passes rule 3 yet violates the contract (found by the Apple `timeoutInterval` mutation, step-25
+/// M4). This row drives the trickle with a deadline far under the drip's total duration and requires
+/// `Timeout` within budget.
+fn deadline_total_not_per_idle(ctx: &ConformanceCtx) -> RowResult {
+    // ~40 bytes × 50 ms ≈ 2 s of trickle; the 300 ms total deadline must fire long before it ends.
+    let url = match http_url(ctx, "/drip?count=40&interval_ms=50") {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    let deadline = Duration::from_millis(300);
+    let req = HttpRequest::builder(Method::Get, url, deadline).build();
+    match drive_once(ctx.factory.new_adapter().as_ref(), req, BUDGET) {
+        Some(Err(e)) if e.key() == HttpErrorKey::Timeout => RowResult::Pass,
+        Some(Err(e)) => RowResult::Fail(FailureReason::WrongErrorKey {
+            expected: HttpErrorKey::Timeout,
+            got: e.key(),
+        }),
+        // A success ⇒ the trickle ran to completion, i.e. a per-idle timeout never fired (the bug).
+        Some(Ok(r)) => RowResult::Fail(FailureReason::ExpectedErrorGotSuccess {
+            expected: HttpErrorKey::Timeout,
+            status: r.status().as_u16(),
+        }),
+        None => RowResult::Fail(FailureReason::NoCompletion),
+    }
+}
 
 /// The redirect-trace row (M4 — the redirect-trace blind spot fix): a followed `302` chain reports
 /// the chain's tail as `final_url` and records every intermediate hop. Until M4 **no** rule
@@ -729,6 +789,32 @@ mod tests {
         assert!(matches!(
             rule_11(&ctx_of(&f, &ep)),
             RowResult::Fail(FailureReason::ProgressNotTerminal { .. })
+        ));
+    }
+
+    #[test]
+    fn negotiated_version_red_when_wrong() {
+        // Step-25 M4 blind-spot fix: the version break reports `Http2` for the HTTP/1.1 test server.
+        // Before this row no rule referenced `version()`, so it passed the whole suite.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honest_version = false);
+        assert!(matches!(
+            negotiated_version_observable(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::WrongHttpVersion { .. })
+        ));
+    }
+
+    #[test]
+    fn deadline_total_red_under_per_idle() {
+        // Step-25 M4 blind-spot fix: with no total deadline the trickling `/drip` body runs to
+        // completion — exactly what a per-idle idle-timer (reset by every byte) would also do, so a
+        // success reaches the caller where the total deadline must produce `Timeout`. `/stall` cannot
+        // exercise this (its single burst-then-silence lets a per-idle timer fire at ~the deadline).
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.arm_deadline = false);
+        assert!(matches!(
+            deadline_total_not_per_idle(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::ExpectedErrorGotSuccess { .. })
         ));
     }
 }

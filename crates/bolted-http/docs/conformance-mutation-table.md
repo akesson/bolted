@@ -1,12 +1,12 @@
-# bolted-http conformance — the mutation pass (step 24 M4)
+# bolted-http conformance — the mutation pass (step 24 M4 + step 25 M4)
 
 The suite bites or it doesn't. This table is the evidence that it does: for **each implementor**
-(the socket mock, and the reqwest reference adapter `bolted-http-linux`) a set of behaviour
-mutations that a correct suite must catch, the row(s) that caught each, and the exact typed
-`FailureReason` observed. Two mutations survived — each is discharged on the *first* hypothesis (the
-mutant was semantically identical) per [[a-surviving-mutation-is-two-hypotheses]], not left as a
-false "blind spot". One genuine blind spot was found and fixed (a new committed row); one
-positive-control gap was filled.
+(the socket mock, the reqwest reference adapter `bolted-http-linux`, and — step 25 — the Apple
+URLSession adapter `BoltedHttp.swift`) a set of behaviour mutations that a correct suite must catch,
+the row(s) that caught each, and the exact typed `FailureReason` observed. Survivors are discharged
+under [[a-surviving-mutation-is-two-hypotheses]] — never left as a false "blind spot" without proving
+the mutant differs from the original first. The step-25 Apple pass is in its own section below; step
+24's mock + reqwest pass follows.
 
 **The mutations themselves are not committed** — they were applied one at a time, run, recorded, and
 reverted; the working tree ends clean except the suite-strengthening (`c1.rs`, `mod.rs`, `netmock.rs`)
@@ -146,3 +146,127 @@ No surviving mutation is left unexplained; both survivors are proven hypothesis 
 identical to the suite), not blind spots. The suite strengthening — the redirect-trace row + its two
 `FailureReason`s, and the two new mock knobs with their red-twin tests — is committed; the mutations
 are not.
+
+---
+
+# The Apple adapter (`BoltedHttp.swift`) — step 25 M4
+
+The step-24 pass covered the mock and the reqwest reference. Step 25 adds the Apple URLSession
+adapter as the third implementor. The subject is the hand-written Swift adapter
+(`apple/bolted-http/Sources/BoltedHttp/BoltedHttp.swift`); two mutations land on the FFI bridge
+(`crates/bolted-http-apple-ffi/src/lib.rs`) where its token routing is load-bearing. Each mutation
+was applied one at a time, the full `mise run test:apple:http` suite run, the red row + typed
+`FailureReason` recorded, then the mutation **reverted** — the committed adapter + FFI crate have
+**zero** diff (verified with `git status`); only the suite-strengthening (below) is committed.
+
+Rows are attributed from a real run: the driver prints `M2 [RED] <row> — <reason>` for the failing
+row (and the A6 sweep re-reds it). The deadline/cancel mutations that produce `NoCompletion` leak the
+`/stall` handler for its bounded server-side hold, so those runs were driven under a pseudo-tty
+(line-buffered) and read from the A6-sweep row failures — same suite, same `mise` task, just observed
+live rather than after a long teardown.
+
+## The Apple adapter — the syntheses and classifications the suite claims to pin
+
+| # | Mutation | Site (what changed) | Expected catcher | Caught by / reason observed | Result |
+|---|----------|---------------------|------------------|-----------------------------|--------|
+| MA1 | Pin comparison bypassed (accept any leaf) | Swift trust delegate: `pins.contains(leafPin) \|\| true` | rule-10 / key-pin-mismatch | C1/rule-10 + C2/key-pin-mismatch `ExpectedErrorGotSuccess{PinMismatch,200}` | **caught** |
+| MA2 | Wrong leaf SPKI (DER field 6→5) | Swift `subjectPublicKeyInfoDER` `children[5]→[4]` | rule-10 (positive leg) | C1/rule-10 `ExpectedSuccessGotError{PinMismatch}` (good pin now fails) | **caught** |
+| MA3 | `PinMismatch` conflated with `Tls` | Swift `didComplete` `.pinMismatch ⇒ .tls` | key-pin-mismatch | C1/rule-10 + C2/key-pin-mismatch `WrongErrorKey{expected:PinMismatch, got:Tls}` | **caught** |
+| MA4 | Chain/hostname evaluation skipped | Swift `SecTrustEvaluateWithError(...) \|\| true` | key-tls | C2/key-tls `ExpectedErrorGotSuccess{Tls,200}` (untrusted cert accepted) | **caught** |
+| MA5 | Total-deadline synthesis removed | Swift `if false` guards the `DispatchSource` timer | rule-03 / key-timeout | C1/rule-02, C1/rule-03, C2/key-timeout `NoCompletion` | **caught** |
+| MA6 | Per-idle timeout instead of total | Swift set `urlRequest.timeoutInterval` + neuter total timer | rule-03 | **SURVIVED** → blind spot (see below) | survived → fixed |
+| MA7 | Cancel silenced (never cancels the task) | Swift `cancel()` drops `task?.cancel()` | rule-09 / key-cancelled | C1/rule-02, C1/rule-09, C2/key-cancelled `NoCompletion` | **caught** |
+| MA8 | Caller cancel classified as timeout | Swift `mapError` `.callerCancel ⇒ .timeout` | rule-02 / key-cancelled | C1/rule-02 `KeysNotDistinct{Timeout}`; C1/rule-09 + C2/key-cancelled `WrongErrorKey{Cancelled←Timeout}` | **caught** |
+| MA9 | https→http downgrade followed | Swift `willPerformHTTPRedirection` `if false` on the refusal branch | rule-04 / key-insecure-redirect | C1/rule-04 + C2/key-insecure-redirect `ExpectedErrorGotSuccess{InsecureRedirect,200}` | **caught** |
+| MA10 | Redirect hop dropped from trace | Swift drop `ctx.hops.append(hop)` | redirect-trace row | C1/row-redirect-trace `WrongHopTrace{got:0,expected:2}` | **caught** |
+| MA11 | `final_url` misreported (original request URL) | Swift `finalUrl: requestURL` | redirect-trace row | C1/row-redirect-trace `WrongFinalUrl` | **caught** |
+| MA12 | Upload progress non-monotone | Swift terminal top-up reports `total` then `total/2` | rule-11 | C1/rule-11 `ProgressNotMonotone{prev:256,got:128}` | **caught** |
+| MA13 | Upload progress stops one short | Swift terminal top-up reports `total - 1` | rule-11 | C1/rule-11 `ProgressNotTerminal{got:255,expected:256}` | **caught** |
+| MA14 | File sink skips the atomic rename | Swift `didFinishDownloadingTo` drops the final `moveItem(tmp→dest)` | row-15 / key-io | C1/row-15 `WrongSink` (dest never written) | **caught** |
+| MA15 | Memory/File correspondence broken | Swift `outcomePath = ""` (always a Memory outcome) | row-15 | C1/row-15 `WrongSink` (File request delivered as Memory) | **caught** |
+| MA16 | Two error keys swapped (connect ↔ name-resolution) | Swift `mapError` swaps `.cannotFindHost`/`.cannotConnectToHost` targets | key-connect / key-name-resolution | C2/key-connect `WrongErrorKey{Connect←NameResolution}`; C2/key-name-resolution `WrongErrorKey{NameResolution←Connect}` | **caught** |
+| MA17 | Dishonest `content_length` under decoding | **FFI** `to_http_response` memory `Some(len)` → `Some(len + 1)` | rule-07 | C1/rule-07 `DishonestContentLength{got:74,decoded:73}` | **caught** |
+| MA18 | Wrong negotiated version | Swift `mapVersion` `http/1.1 ⇒ .http2` | (none before M4) | **SURVIVED** → blind spot (see below) | survived → fixed |
+| MA19 | Token-parked-sink lookup broken | **FFI** `report_progress` `pending.get(&token.wrapping_add(1))` | rule-11 | C1/rule-11 `ProgressNotTerminal{got:0,expected:256}` (no samples routed) | **caught** |
+| MA20 | Priority mapping swapped (High → low) | Swift `taskPriority(.high/.critical) ⇒ lowPriority` | A5 acceptance test | `testA5PriorityAcceptanceOnTheTask` fails: task carries `0.25` not `0.75` | **caught** |
+
+**18 of 20 caught.** The two survivors (MA6, MA18) are **genuine blind spots**, not vacuous mutants
+— each was fixed with a new committed row watched red first.
+
+## Survivors — the two-hypotheses discharge
+
+Both survivors were checked against the memory lesson before being called blind spots: is the mutant
+**observably different** from the correct adapter? For each, yes — so hypothesis 1 (the suite was
+blind to a real behaviour), and each is fixed with a new row, **not** left unexplained and **not**
+"fixed" by a test that asserts the mutant's own behaviour.
+
+### MA6 — per-idle timeout instead of the total deadline (survived → fixed)
+
+The adapter deliberately does **not** derive URLSession's `timeoutInterval` (a *per-idle* timer) from
+the contract deadline; it synthesises the *total* deadline with a `DispatchSource` timer (the A3
+hazard the M1/M2 notes flag). MA6 substitutes the per-idle timer and removes the total one — and
+**passed the entire suite** (all 23 rows green, 0 A6 divergences, in normal time). Why: the only
+deadline fixture was `/stall`, which sends one burst (`start`) then holds the socket silent, so a
+per-idle timer fires at ~the deadline anyway — identical, on that fixture, to a total deadline.
+
+**Two-hypotheses check:** the mutant *is* observably different from a correct adapter — on a body
+that **trickles** (a byte arriving faster than the idle interval), a per-idle timer is continually
+reset and never fires, while the total deadline still must. `/stall` cannot exercise that. Hypothesis
+1 (a real behaviour the suite was blind to), not a vacuous mutant.
+
+**The fix (committed):** a new `/drip?count=N&interval_ms=M` test-server endpoint (dribbles one byte
+every `M` ms so the connection is never idle for more than `M`) and a new C1-adjacent row
+`C1/row-deadline-total-not-per-idle` driving `/drip?count=40&interval_ms=50` with a 300 ms deadline,
+requiring `Timeout` within budget. Watched red two ways: the mock red-twin `arm_deadline=false`
+(`deadline_total_red_under_per_idle` — the trickle runs to completion ⇒ `ExpectedErrorGotSuccess`),
+and, re-applying MA6 on the real adapter, the drip row went red with
+`ExpectedErrorGotSuccess{Timeout,200}` **while every `/stall`-based deadline row stayed green** — the
+precise signature of the blind spot. Correct mock, reqwest, and the real Apple adapter all pass the
+new row green (their total deadline fires mid-trickle).
+
+### MA18 — wrong negotiated version (survived → fixed)
+
+`HttpResponse::version()` is a contract observable (feature-matrix row 11, CORE — every surface
+always reports it), and the Apple adapter reads it from `URLSessionTaskMetrics`. MA18 reports `Http2`
+for the HTTP/1.1 test server — and **passed the entire suite**: a grep confirmed **no** C1/C2/C3 row
+ever referenced `version()`. This is the exact shape of step 24's redirect-trace blind spot, for the
+version field.
+
+**Two-hypotheses check:** the mutant reports `Http2` where the correct adapter (and mock, and
+reqwest) reports `Http1_1` against the same HTTP/1.1 server — observably different. Hypothesis 1.
+
+**The fix (committed):** a new C1-adjacent row `C1/row-negotiated-version-observable` driving `/ok`
+and asserting `version() == Http1_1` (the test server speaks 1.1), with a new
+`FailureReason::WrongHttpVersion { got, expected }`. Watched red two ways: the mock red-twin
+`honest_version=false` (`negotiated_version_red_when_wrong` ⇒ `WrongHttpVersion`), and, re-applying
+MA18 on the real adapter, the row went red with `WrongHttpVersion{got:Http2, expected:Http1_1}`.
+Correct mock, reqwest, and the real Apple adapter all pass green.
+
+## The blind spots found and fixed (committed suite strengthening)
+
+Both fixes run against **all three implementors** (mock via `extra_rows`, reqwest via its
+`extra_rows` chain, Apple via the driver's `run_extra_rows`) and are green on each; both are watched
+red by a committed mock red-twin (`mise run check`) **and** confirmed red by the real Apple survivor
+mutation:
+
+- `C1/row-negotiated-version-observable` + `FailureReason::WrongHttpVersion` + mock knob
+  `honest_version` (+ red-twin `negotiated_version_red_when_wrong`).
+- `C1/row-deadline-total-not-per-idle` + `/drip` server endpoint (+ red-twin
+  `deadline_total_red_under_per_idle`, reusing the `arm_deadline` knob).
+
+No new `content_length`-observable blind spot was found: rule-07 already reads `content_length` and
+MA17 (a dishonest memory-sink length) was caught by it. The File-sink `content_length` is `None`
+(unobservable and correctly so — the body is on disk); no honest positive control exists, so no row
+asserts it (recorded, not a blind spot).
+
+## Summary
+
+| Implementor | Mutations | Caught | Survived | Blind spots fixed |
+|-------------|-----------|--------|----------|-------------------|
+| Apple `BoltedHttp.swift` (+ 2 on the FFI bridge) | 20 | 18 | 2 (MA6, MA18 — both hypothesis 1) | 2 (per-idle deadline via `/drip`; negotiated version) |
+
+Both survivors are genuine blind spots (hypothesis 1), each fixed with a committed row watched red
+first (mock red-twin) **and** confirmed to catch the real Apple mutation. The mutations themselves
+are **not** committed — the adapter (`BoltedHttp.swift`) and FFI crate (`lib.rs`) have zero diff; only
+the two rows, the `WrongHttpVersion` reason, the `/drip` endpoint, and the `honest_version` knob (with
+its red-twin) are committed.
