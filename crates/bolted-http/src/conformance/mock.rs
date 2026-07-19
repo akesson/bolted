@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use super::AdapterFactory;
-use crate::capability::{CancelToken, CompletionSink, Http, RequestHandle};
+use crate::capability::{CancelToken, CompletionSink, Http, RequestHandle, UploadProgressSink};
 use crate::error::HttpError;
 use crate::request::HttpRequest;
 use crate::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
@@ -33,7 +33,14 @@ impl MockHttp {
 }
 
 impl Http for MockHttp {
-    fn send(&self, request: HttpRequest, completion: Box<dyn CompletionSink>) -> RequestHandle {
+    fn send(
+        &self,
+        request: HttpRequest,
+        completion: Box<dyn CompletionSink>,
+        _upload_progress: Option<Box<dyn UploadProgressSink>>,
+    ) -> RequestHandle {
+        // The scripted mock performs no upload; it ignores the progress sink (a legal choice for an
+        // adapter with no body to hand off). The socket mock exercises the progress surface.
         let token = CancelToken::new();
         if let Some(outcome) = (self.script)(&request) {
             completion.complete(outcome);
@@ -132,7 +139,7 @@ mod tests {
         let req =
             HttpRequest::builder(crate::request::Method::Get, url, Duration::from_secs(30)).build();
         let (tx, rx) = mpsc::channel();
-        let _h = adapter.send(req, Box::new(CollectSink(tx)));
+        let _h = adapter.send(req, Box::new(CollectSink(tx)), None);
         let outcome = rx.recv_timeout(Duration::from_secs(1)).expect("completed");
         assert_eq!(outcome.expect("ok").status(), StatusCode::OK);
     }

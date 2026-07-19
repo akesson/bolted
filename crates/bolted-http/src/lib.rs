@@ -31,6 +31,7 @@ pub mod conformance;
 
 pub use capability::{
     CancelToken, CompletionSink, Http, Metrics, MetricsTier, PriorityHint, RequestHandle,
+    UploadProgressSink,
 };
 pub use error::{HttpError, HttpErrorKey, TlsErrorKind};
 pub use header::{
@@ -38,8 +39,8 @@ pub use header::{
     RequestHeaderName, RequestHeaders,
 };
 pub use request::{
-    FileRef, HttpRequest, Method, PinSet, Priority, RequestBody, RequestBuilder, SpkiPin, Url,
-    UrlError,
+    FileRef, HttpRequest, Method, PinSet, Priority, RequestBody, RequestBuilder, ResponseSink,
+    SpkiPin, Url, UrlError,
 };
 pub use response::{BodyOutcome, HttpResponse, HttpVersion, ResponseBuilder, StatusCode};
 

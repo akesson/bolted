@@ -112,6 +112,25 @@ pub enum RequestBody {
     File(FileRef),
 }
 
+/// Where the caller wants the response body delivered (feature-matrix row 15, the sink model —
+/// the **request-side** selector). Default [`ResponseSink::Memory`]. `File` requests the adapter
+/// sink the decoded body straight to `FileRef` without buffering (temp-file-lifetime semantics are
+/// adapter-side, §5.10). The adapter contract: the delivered [`crate::BodyOutcome`] must correspond
+/// to the requested sink — a `Memory` request yields `BodyOutcome::Memory`, a `File(path)` request
+/// yields `BodyOutcome::File(path)` (a file-sink write failure is [`crate::HttpError::Io`]).
+///
+/// `#[non_exhaustive]`: the streaming sink (row 16, gated on the S-FFI verdict) attaches here
+/// alongside the `BodyOutcome` streaming variant without a breaking change.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ResponseSink {
+    /// Buffer the decoded body in memory (the default).
+    #[default]
+    Memory,
+    /// Sink the decoded body to this file (`downloadTask`-style; synthesised by copy elsewhere).
+    File(FileRef),
+}
+
 /// A priority hint (feature-matrix row 12). **CAP** (decided 2026-07-19): honored only where an
 /// adapter implements [`crate::PriorityHint`] (Apple, Cronet/HttpEngine); legally ignored
 /// elsewhere. The hint *data* rides every request regardless; the trait signals honouring.
@@ -180,6 +199,7 @@ pub struct HttpRequest {
     deadline: Duration,
     priority: Option<Priority>,
     pins: Option<PinSet>,
+    response_sink: ResponseSink,
 }
 
 impl HttpRequest {
@@ -194,6 +214,7 @@ impl HttpRequest {
             deadline,
             priority: None,
             pins: None,
+            response_sink: ResponseSink::Memory,
         }
     }
 
@@ -238,6 +259,13 @@ impl HttpRequest {
     pub fn pins(&self) -> Option<&PinSet> {
         self.pins.as_ref()
     }
+
+    /// Where the caller wants the response body delivered (row 15). Defaults to
+    /// [`ResponseSink::Memory`].
+    #[must_use]
+    pub fn response_sink(&self) -> &ResponseSink {
+        &self.response_sink
+    }
 }
 
 /// Builder for [`HttpRequest`].
@@ -251,6 +279,7 @@ pub struct RequestBuilder {
     deadline: Duration,
     priority: Option<Priority>,
     pins: Option<PinSet>,
+    response_sink: ResponseSink,
 }
 
 impl RequestBuilder {
@@ -278,6 +307,13 @@ impl RequestBuilder {
         self
     }
 
+    /// Select where the response body is delivered (row 15). Defaults to
+    /// [`ResponseSink::Memory`].
+    pub fn response_sink(mut self, sink: ResponseSink) -> Self {
+        self.response_sink = sink;
+        self
+    }
+
     /// Finish building.
     #[must_use]
     pub fn build(self) -> HttpRequest {
@@ -289,6 +325,7 @@ impl RequestBuilder {
             deadline: self.deadline,
             priority: self.priority,
             pins: self.pins,
+            response_sink: self.response_sink,
         }
     }
 }
@@ -324,5 +361,19 @@ mod tests {
         assert_eq!(req.deadline(), Duration::from_secs(30));
         assert_eq!(req.priority(), Some(Priority::High));
         assert_eq!(req.pins().map(PinSet::pins).map(<[_]>::len), Some(1));
+    }
+
+    #[test]
+    fn response_sink_defaults_to_memory_and_is_selectable() {
+        let url = Url::https("https://example.test/").expect("valid url");
+        let default =
+            HttpRequest::builder(Method::Get, url.clone(), Duration::from_secs(5)).build();
+        assert_eq!(default.response_sink(), &ResponseSink::Memory);
+
+        let sink = ResponseSink::File(FileRef::new("/tmp/out.bin"));
+        let to_file = HttpRequest::builder(Method::Get, url, Duration::from_secs(5))
+            .response_sink(sink.clone())
+            .build();
+        assert_eq!(to_file.response_sink(), &sink);
     }
 }
