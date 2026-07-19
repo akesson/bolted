@@ -15,7 +15,8 @@ where the design is upstream's call. This README now tracks upstream status.
 | 03 | bindgen silently ignores macro-generated FFI items | ALIVE | RFC [#665](https://github.com/boltffi/boltffi/issues/665) | folded into the RFC's source-re-scan bug family (listed there as "unfiled, repro to follow"); **standalone repro issue still to file** |
 | 04 | DTO wire ser/de is `internal` — unreachable from a shell | ALIVE | issue [#666](https://github.com/boltffi/boltffi/issues/666) | open, no maintainer response yet. As-filed text: `04-issue.md` |
 | 05 | A throwing method cannot return a class handle | NOT REPRODUCIBLE | not filed | correctly withheld — 4 faithful controls compile at 0.27.3 and 0.27.5 |
-| 06 | C# `[MarshalAs(I1)]` on an `FfiBuf` return → `run_*_check` throws | ALIVE | PR [#662](https://github.com/boltffi/boltffi/pull/662) | **FIXED ON MAIN** — #654 merged 2026-07-16 (`53aecd1`). Verified 2026-07-19 against main's source: `return_marshal_i1` is derived per `ReturnPlan` — `true` only for a direct `Primitive(Bool)` return, explicitly `false` for encoded `FfiBuf` returns (`boltffi_backend/src/target/csharp/render/mod.rs`); the exact bug shape is a covered fixture (`check_enabled: Result<bool, LoadError>` in `tests/fixtures/source/callback/async_callback_return_shapes.rs`) and the C# DemoTest exercises throwing async callbacks e2e. **Not in any release yet** (latest 0.27.5 predates the merge) — our tripwire (`mise run test:csharp`) confirms on the next pin bump |
+| 06 | C# `[MarshalAs(I1)]` on an `FfiBuf` return → `run_*_check` throws | ALIVE | PR [#662](https://github.com/boltffi/boltffi/pull/662) | **FIXED — verified locally** (step 23 M1, 2026-07-19): at git rev `23cf2ec` the tripwire went **red for the right reason** (`Expected: <MarshalDirectiveException> But was: null` — `run_username_check` now returns its bool via an `out` param, no return-MarshalAs; the attribute survives only on the genuinely-bool `is_live`). Source-level confirmation: `return_marshal_i1` derived per `ReturnPlan` in `boltffi_backend/src/target/csharp/render/mod.rs`; fixture `check_enabled: Result<bool, LoadError>` upstream. **Not in any release yet** — and the same PR introduced finding 07, so the pin was killed anyway (step-23 report) |
+| 07 | C# IR backend collapses same-named `#[ffi_stream]` methods across classes — draft stream silently lost | NEW (regression at `23cf2ec`, introduced by #654) | not filed — **owner files** | Found by step 23 M1 (KC3 kill): `draft.Snapshots()` routes to the *store's* stream runtime; C header + dylib export both symbols, generated C# `NativeMethods` lacks the draft's. Worked at 0.27.5; Swift green at the same rev (C#-only). Draft + repro sketch: `07-csharp-ir-backend-collapses-same-named-streams.md` |
 
 Also filed, beyond the drafts:
 
@@ -25,11 +26,14 @@ Also filed, beyond the drafts:
   retiring the source re-scan inside the metadata build. Open; this is the root-cause umbrella
   over draft 03 and the cfg-eval family (#630/#618).
 
-**Watch list (updated 2026-07-19):** #654 **merged** 2026-07-16 and #657 **merged** 2026-07-15 —
-the next release after 0.27.5 now picks up all three merged fixes (#663, #654/06, #657); watching
-for that release (the C# resume rides it, or a git pin if it drags). Still open: maintainer
-response on #664/#665/#666. Remaining TODO on our side: the standalone
-macro-items repro issue promised in #665 for draft 03.
+**Watch list (updated 2026-07-19, post step-23 kill):** the git-pin attempt at `23cf2ec` was
+**killed on step-23 KC3** — #654 fixes 06 but regresses streams (finding 07), so the C# resume
+now waits on an upstream fix for 07 (owner to file it first), then a new rev or the release
+carrying both. Do NOT re-pin main without confirming 07 is fixed — the step-23 M0 machinery
+(rev-parameterized setup:boltffi + doctor rev cross-pin, parked on branch
+`step/23-boltffi-git-pin`) reuses with only the rev literal changed. Still open: maintainer
+response on #664/#665/#666; merged and waiting on a release: #663, #654, #657, #693. Remaining
+TODO on our side: the standalone macro-items repro issue promised in #665 for draft 03.
 
 ## What the bump itself proved (context for filing)
 
