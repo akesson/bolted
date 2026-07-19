@@ -1,11 +1,11 @@
 ---
 name: csharp-backend-check-driver-broken
-description: "BoltFFI C# backend — run_*_check threw MarshalDirectiveException (MarshalAs(I1) on an FfiBuf return); killed step 14; FIXED ON boltffi MAIN 2026-07-16 (#654, verified), NOT YET RELEASED (0.27.5 predates it) — C# resume rides the next pin bump; §6/D26 amended (v1.7)"
+description: "BoltFFI C# backend saga — the MarshalAs(I1) bug (killed step 14) is FIXED at git rev 23cf2ec (tripwire-verified, step 23 M1), but the same PR #654 REGRESSED C# streams (same-named ffi_stream collapse, upstream finding 07) → step 23 killed on KC3; C# resume waits on an upstream 07 fix; §6/D26 amended (v1.7)"
 metadata: 
   node_type: memory
   type: project
   originSessionId: ddcc2f3b-af09-4980-882e-723913127f3b
-  modified: 2026-07-19T06:59:52.768Z
+  modified: 2026-07-19T08:12:00.424Z
 ---
 
 Step 14 (the C# port) **stopped on kill criterion 1**: on BoltFFI 0.27.3's C# backend, three of the
@@ -42,7 +42,21 @@ diagnostics. **Gotcha:** `cargo install boltffi_cli --version 0.27.3` no longer 
 `--locked`, so a plain 0.27.3 rollback would fail. The §6/D26 findings below are **law** (ARCHITECTURE
 v1.7). Note: crates.io API needs a User-Agent header or returns a policy error.
 
-**Update (2026-07-19, design session):** the fix is **on boltffi main** — PR #654 ("Migrate C# to
+**Update (2026-07-19 evening, step 23 — KILLED on KC3):** the git pin at `23cf2ec` was run.
+Two-sided verdict: (1) the tripwire went **red for the right reason** — the MarshalAs bug is
+dead; the IR backend moved the bool to an `out` param (no return-MarshalAs on the FfiBuf
+envelope), and step-14's parked D23 probe would come alive. (2) **#654 also regressed C#
+streams**: the IR backend dedupes `#[ffi_stream]` bindings by unqualified method name, so the
+store's and draft's same-named `snapshots` collapse into the store's — `draft.Snapshots()`
+silently subscribes to the wrong stream (C header + dylib carry both symbols; generated
+`NativeMethods` lacks the draft's; Swift green at the same rev; worked on C# at 0.27.5).
+Upstream finding **07** drafted (`upstream/boltffi/07-…-same-named-streams.md`, owner files).
+Step 23 stopped on KC3; M0's rev-parameterized pin machinery is parked on branch
+`step/23-boltffi-git-pin` (resume = one rev-literal change once 07 is fixed upstream). Churn
+note for the resume: C# namespace renamed `GenProfileFfi` → `Gen_profile_ffi`, monolith split
+into ~35 files, `run_*_check` ABI now out-param. See `docs/steps/step-23-report.md`.
+
+**Earlier update (2026-07-19, design session):** the fix is **on boltffi main** — PR #654 ("Migrate C# to
 the new IR backend") merged 2026-07-16 (`53aecd1`). Verified against main's source, not just the
 label: `return_marshal_i1` is derived per `ReturnPlan` in
 `boltffi_backend/src/target/csharp/render/mod.rs` — `true` only for a direct `Primitive(Bool)`
