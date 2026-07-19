@@ -413,16 +413,61 @@ fn judge_progress(samples: &[(u64, Option<u64>)], body_len: u64) -> RowResult {
     }
 }
 
-/// The row-15 response-sink-correspondence rows (C1-adjacent; the eleven §7 rules stay in [`rows`]).
+/// The C1-adjacent matrix rows (the eleven §7 rules stay in [`rows`]): the row-15 response-sink
+/// correspondence row and the M4 redirect-trace row (the `final_url` + `hops` observables).
 #[must_use]
 pub fn extra_rows() -> &'static [ConformanceRow] {
     &SINK_ROWS
 }
 
-static SINK_ROWS: [ConformanceRow; 1] = [row(
-    "C1/row-15-response-sink-correspondence",
-    row_15_sink_correspondence,
-)];
+static SINK_ROWS: [ConformanceRow; 2] = [
+    row(
+        "C1/row-15-response-sink-correspondence",
+        row_15_sink_correspondence,
+    ),
+    row(
+        "C1/row-redirect-trace-final-url-and-hops",
+        redirect_trace_correspondence,
+    ),
+];
+
+/// The redirect-trace row (M4 — the redirect-trace blind spot fix): a followed `302` chain reports
+/// the chain's tail as `final_url` and records every intermediate hop. Until M4 **no** rule
+/// referenced either observable, so an adapter that followed redirects yet misreported the final URL
+/// or dropped the hop trace passed the entire suite. Drives `/redirect-chain?n=2` — two `302` hops,
+/// then a terminal `200`.
+fn redirect_trace_correspondence(ctx: &ConformanceCtx) -> RowResult {
+    let url = match http_url(ctx, "/redirect-chain?n=2") {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    let req = HttpRequest::builder(Method::Get, url, Duration::from_secs(5)).build();
+    match drive_once(ctx.factory.new_adapter().as_ref(), req, BUDGET) {
+        Some(Ok(r)) => {
+            if r.status().as_u16() != 200 {
+                return RowResult::Fail(FailureReason::UnexpectedStatus {
+                    expected: 200,
+                    got: r.status().as_u16(),
+                });
+            }
+            // Two 302 hops precede the terminal 200.
+            if r.hops().len() != 2 {
+                return RowResult::Fail(FailureReason::WrongHopTrace {
+                    got: r.hops().len(),
+                    expected: 2,
+                });
+            }
+            // The terminal URL is the chain's tail (`n=0`), never the original request (`n=2`) or a
+            // pre-terminal hop.
+            if !r.final_url().as_str().contains("n=0") {
+                return RowResult::Fail(FailureReason::WrongFinalUrl);
+            }
+            RowResult::Pass
+        }
+        Some(Err(e)) => RowResult::Fail(FailureReason::ExpectedSuccessGotError { got: e.key() }),
+        None => RowResult::Fail(FailureReason::NoCompletion),
+    }
+}
 
 /// Unique-per-drive suffix for the file-sink temp path (avoids collisions across parallel rows).
 static SINK_NONCE: AtomicU64 = AtomicU64::new(0);
@@ -657,6 +702,33 @@ mod tests {
         assert!(matches!(
             row_15_sink_correspondence(&ctx_of(&f, &ep)),
             RowResult::Fail(FailureReason::WrongSink)
+        ));
+    }
+
+    #[test]
+    fn redirect_trace_red_when_trace_dropped() {
+        // M4 blind-spot fix: the trace-drop break reports the original request URL as final and
+        // drops the hops. Before this row it survived the whole suite; now the hop count is wrong.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honest_redirect_trace = false);
+        assert!(matches!(
+            redirect_trace_correspondence(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::WrongHopTrace {
+                got: 0,
+                expected: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn rule_11_red_when_progress_stops_short() {
+        // The forgot-the-last-chunk break: monotone but terminally inconsistent progress. This is
+        // the positive control the monotonicity twin never provided for `ProgressNotTerminal`.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.terminal_upload_progress = false);
+        assert!(matches!(
+            rule_11(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::ProgressNotTerminal { .. })
         ));
     }
 }

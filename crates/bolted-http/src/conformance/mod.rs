@@ -156,6 +156,20 @@ pub enum FailureReason {
         /// The body length the final `sent` had to reach.
         expected: u64,
     },
+    /// A followed redirect chain did not record the terminal URL: the response's `final_url` still
+    /// pointed at a pre-terminal hop (or the original request URL) instead of the chain's tail. The
+    /// suite had no positive control for the `final_url` observable until M4 — the redirect-trace
+    /// blind spot (an adapter could follow redirects yet lie about where it ended up and pass every
+    /// row).
+    WrongFinalUrl,
+    /// A followed redirect chain recorded the wrong number of hops (the `hops` observable — the
+    /// other half of the M4 redirect-trace blind spot).
+    WrongHopTrace {
+        /// The hop count the adapter reported.
+        got: usize,
+        /// The hop count the chain required.
+        expected: usize,
+    },
 }
 
 /// Why a row could not be expressed (recorded, for the report — never a silent pass). As of M1.5
