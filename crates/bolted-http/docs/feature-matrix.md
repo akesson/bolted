@@ -441,8 +441,11 @@ cost, and the suite is where it is paid:
 - **Pinning-on-Linux feasibility** (§5.14) — the gate on row 19; spike S-LX2 decides.
 - **Cookie capability shape** (§5.20) — design session, when a feature needs it.
 - **WebSocket family** (§2) — protected possibility, undesigned.
-- **`FileRef`** (§5.10) — kept as a newtype over a path; its home (bolted-core? bolted-http?)
-  is a structural question for a design session, not this doc.
+- ~~**`FileRef`** (§5.10) — its home (bolted-core? bolted-http?)~~ — **decided 2026-07-19
+  (design session, step-24 authoring): `FileRef` lives in `bolted-http`**, a newtype over a
+  path, kept opaque-ready (§9's OPFS case is why). Rationale: bolted-http is its only
+  consumer; if the durable-effects family (background transfer, replay) ever needs it
+  core-side, lifting a newtype is a re-export exercise, not a break.
 - **Background family full contract** (§6) — unchanged §9 status, better-informed.
 - ~~Whether the priority hint (§5.8) survives Henrik's review as CORE~~ — **decided 2026-07-19
   (Henrik): CAP**, with only Apple + Cronet/HttpEngine honoring (row 12 updated).
