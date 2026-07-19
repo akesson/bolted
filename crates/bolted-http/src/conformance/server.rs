@@ -8,6 +8,10 @@
 //! - `/ok` — constant `200` (rule 1 determinism baseline).
 //! - `/echo` — `200`, echoes each request header back as `x-echo-<name>` (rule 6 runtime half).
 //! - `/delay?ms=N` — sleep then `200`.
+//! - `/chunked?count=N&delay_us=U` — `200` with a `Transfer-Encoding: chunked` body of N
+//!   application chunks (`chunk-NNNNNN\n` per HTTP chunk), each flushed with `delay_us` between
+//!   them so chunk boundaries arrive incrementally on the client. Drives the A1 response-streaming
+//!   probe (step 25); paced by `delay_us` (0 = burst).
 //! - `/stall` — `200` with `Content-Length: 1000`, a few bytes, then holds the socket open
 //!   (bounded). Drives the deadline (rule 3) and cancellation (rule 9) syntheses.
 //! - `/truncate` — `200` with `Content-Length: 1000`, 10 bytes, then closes → `Transport`.
@@ -265,6 +269,11 @@ fn dispatch(
             thread::sleep(Duration::from_millis(ms));
             write_response(stream, 200, "OK", &[], b"ok");
         }
+        "/chunked" => {
+            let count = query_int(query, "count").unwrap_or(0);
+            let delay_us = query_int(query, "delay_us").unwrap_or(0);
+            chunked(stream, count, delay_us);
+        }
         "/stall" => stall(stream),
         "/truncate" => truncate(stream),
         "/flaky" => {
@@ -342,6 +351,35 @@ fn write_response(
     out.extend_from_slice(b"connection: close\r\n\r\n");
     out.extend_from_slice(body);
     let _ = stream.write_all(&out);
+    let _ = stream.flush();
+}
+
+/// Stream `count` application chunks as a `Transfer-Encoding: chunked` body — one line
+/// `chunk-NNNNNN\n` per HTTP chunk, flushed with `delay_us` between them so chunk boundaries
+/// arrive incrementally on the client (the A1 response-streaming probe, step 25). `delay_us == 0`
+/// writes them back-to-back (burst; the max drain-loop stress). Mirrors the step-24 S-FFI probe's
+/// chunk server, now hosted in the harness-owned test server.
+fn chunked(stream: &mut impl Write, count: u64, delay_us: u64) {
+    let head = b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\
+                 transfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+    if stream.write_all(head).is_err() {
+        return;
+    }
+    let _ = stream.flush();
+    for n in 1..=count {
+        let line = format!("chunk-{n:06}\n");
+        // One HTTP chunk = <hexlen>\r\n<data>\r\n.
+        let framed = format!("{:X}\r\n{}\r\n", line.len(), line);
+        if stream.write_all(framed.as_bytes()).is_err() {
+            return;
+        }
+        let _ = stream.flush();
+        if delay_us > 0 {
+            thread::sleep(Duration::from_micros(delay_us));
+        }
+    }
+    // The terminating zero-length chunk.
+    let _ = stream.write_all(b"0\r\n\r\n");
     let _ = stream.flush();
 }
 

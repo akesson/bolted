@@ -51,7 +51,7 @@ use bolted_http::conformance::{
     AdapterFactory, ConformanceCtx, ConformanceRow, Endpoints, FailureReason, RowResult, c1, c2,
     c3, run,
 };
-use bolted_http::request::{FileRef, HttpRequest, Method, RequestBody, ResponseSink};
+use bolted_http::request::{FileRef, HttpRequest, Method, Priority, RequestBody, ResponseSink};
 use bolted_http::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
 use bolted_http::{HeaderName, HeaderValue, Headers, HttpError, TlsErrorKind, Url};
 
@@ -89,6 +89,20 @@ pub enum FfiResponseSink {
     File { path: String },
 }
 
+/// The request's priority hint (feature-matrix row 12, CAP), mirrored across the boundary. Every
+/// request carries the *data* regardless (defaulting to [`FfiPriority::Normal`] when unset); the
+/// adapter honours it by mapping to `URLSessionTask.priority` (A5, acceptance-only — the RFC 9218
+/// wire behaviour is FLAGGED lore and deliberately NOT conformance-tested). Mirrors [`Priority`].
+#[data]
+#[derive(Clone, Copy)]
+pub enum FfiPriority {
+    Throttled,
+    Low,
+    Normal,
+    High,
+    Critical,
+}
+
 /// A request effect flattened for the boundary. `token` is the single-flight identity: the
 /// completion must carry the same token to be matched to its parked sink.
 #[data]
@@ -105,6 +119,9 @@ pub struct FfiRequest {
     pub pins: Vec<FfiPin>,
     /// Where the response body is delivered (row 15, M2). `Memory` (default) or `File { path }`.
     pub sink: FfiResponseSink,
+    /// The request's priority hint (row 12, CAP; A5). The adapter maps this to
+    /// `URLSessionTask.priority`. Defaults to [`FfiPriority::Normal`] when the request set none.
+    pub priority: FfiPriority,
 }
 
 /// The negotiated HTTP version, mirrored across the boundary (feature-matrix row 11). M1 drops the
@@ -208,6 +225,20 @@ pub struct RowReport {
     pub passed: bool,
     pub skipped: bool,
     pub message: String,
+}
+
+/// One response-body chunk crossing the FFI in the **A1 streaming probe** (step 25, probe-grade —
+/// no contract surface; the streaming core-seam is deliberately unfrozen, freeze-agenda Q2).
+/// Mirrors the step-24 S-FFI `Chunk`. `t_send_ns` is stamped by Swift
+/// (`DispatchTime.now().uptimeNanoseconds`) immediately before the deliver call so the consumer can
+/// compute per-chunk delivery latency on one clock; `last` marks the final chunk.
+#[data]
+#[derive(Clone)]
+pub struct Chunk {
+    pub seq: u64,
+    pub bytes: Vec<u8>,
+    pub t_send_ns: u64,
+    pub last: bool,
 }
 
 // =====================================================================================
@@ -350,11 +381,23 @@ impl AdapterFactory for SwiftFactory {
 // The exported harness: construction, server lifecycle, completion re-entry, the driver.
 // =====================================================================================
 
+/// The A1 chunk-stream ring capacity — chosen well above any probe's chunk count so the SPSC ring
+/// never drops even when the consumer lags the burst producer (drop would be a false loss).
+const CHUNK_STREAM_CAPACITY: usize = 1024;
+
 /// The Rust half of the bridge Swift drives. Constructed with the Swift adapter; owns the shared
 /// registry and (once started) the in-process test server.
 pub struct HttpHarness {
     shared: Arc<Shared>,
     server: Mutex<Option<(TestServer, Endpoints)>>,
+    /// A1 streaming probe (step 25): the `ffi_stream` a live Swift consumer drains. Chunks pushed by
+    /// [`HttpHarness::deliver_chunk`] are re-delivered here off the producer thread (F1 async push).
+    /// Capacity generously exceeds any probe's chunk count so the SPSC ring never drops (a drop
+    /// would be a *false* loss; the probe measures real completeness, not ring pressure).
+    chunk_stream: Arc<EventSubscription<Chunk>>,
+    /// How many chunks entered the core through [`HttpHarness::deliver_chunk`] (the completeness
+    /// numerator source-of-truth, independent of what the consumer received).
+    chunk_ingested: AtomicU64,
 }
 
 #[export]
@@ -369,6 +412,8 @@ impl HttpHarness {
                 next_token: AtomicU64::new(1),
             }),
             server: Mutex::new(None),
+            chunk_stream: Arc::new(EventSubscription::new(CHUNK_STREAM_CAPACITY)),
+            chunk_ingested: AtomicU64::new(0),
         }
     }
 
@@ -467,6 +512,45 @@ impl HttpHarness {
         };
         c3::divergence(&factory).render()
     }
+
+    // -- A1 streaming probe (step 25, probe-grade). ---------------------------------------------
+    // A streamed response through the step-24 S-FFI-chosen mechanism (F1 `ffi_stream` async push)
+    // inside a real http round-trip on the Apple path: the Swift URLSession streaming consumer
+    // reads the test server's `/chunked` endpoint and pushes each chunk here via `deliver_chunk`;
+    // a live Swift consumer drains `chunk_stream` and proves ordered/lossless/complete delivery.
+    // NO contract surface is added — the streaming core seam is deliberately unfrozen (freeze Q2).
+
+    /// A1 deliver: a response-body chunk crossing the FFI from the Swift streaming consumer re-enters
+    /// here and is pushed out to the live consumer through the `ffi_stream` (F1). Increments the
+    /// ingest counter (the completeness numerator). The push cannot drop: the ring capacity exceeds
+    /// any probe's chunk count.
+    pub fn deliver_chunk(&self, chunk: Chunk) {
+        self.chunk_ingested.fetch_add(1, Ordering::Relaxed);
+        self.chunk_stream.push_event(chunk);
+    }
+
+    /// A1: how many chunks entered the core through [`HttpHarness::deliver_chunk`] — the ingest
+    /// source-of-truth. Equal to the chunk count when the http round-trip + cross-FFI ingest are
+    /// whole; the consumer's received count is the *separate* re-delivery-completeness measure.
+    pub fn chunk_ingested(&self) -> u64 {
+        self.chunk_ingested.load(Ordering::Relaxed)
+    }
+
+    /// A1: the live response-stream the Swift consumer drains as an `AsyncStream<Chunk>` (F1 —
+    /// `ffi_stream` async push). Its built-in async hop means the consumer resumes OFF the producer
+    /// (adapter) thread — the F1 re-entrancy rationale the step-24 verdict rests on.
+    #[ffi_stream(item = Chunk)]
+    pub fn chunk_stream(&self) -> Arc<EventSubscription<Chunk>> {
+        Arc::clone(&self.chunk_stream)
+    }
+
+    /// A1: close the chunk stream so its live consumer terminates promptly (the `AsyncStream` ends,
+    /// the consumer task finishes). The probe calls this after each run so a completed — or, under
+    /// load, a still-draining — consumer does not linger as a dead subscription in the shared
+    /// `ffi_stream` runtime and starve the next run's consumer. Idempotent.
+    pub fn close_chunk_stream(&self) {
+        self.chunk_stream.unsubscribe();
+    }
 }
 
 impl HttpHarness {
@@ -544,6 +628,14 @@ fn to_ffi_request(token: u64, request: &HttpRequest) -> FfiRequest {
         },
         _ => FfiResponseSink::Memory,
     };
+    // The priority hint (row 12, CAP; A5). Absent ⇒ `Normal` — the hint data rides every request.
+    let priority = match request.priority() {
+        Some(Priority::Throttled) => FfiPriority::Throttled,
+        Some(Priority::Low) => FfiPriority::Low,
+        Some(Priority::Normal) | None => FfiPriority::Normal,
+        Some(Priority::High) => FfiPriority::High,
+        Some(Priority::Critical) => FfiPriority::Critical,
+    };
     FfiRequest {
         token,
         method: method_str(request.method()).to_owned(),
@@ -553,6 +645,7 @@ fn to_ffi_request(token: u64, request: &HttpRequest) -> FfiRequest {
         deadline_ms: u64::try_from(request.deadline().as_millis()).unwrap_or(u64::MAX),
         pins,
         sink,
+        priority,
     }
 }
 

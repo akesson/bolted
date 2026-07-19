@@ -38,13 +38,31 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
     private static let timerQueue = DispatchQueue(label: "bolted.http.deadline", attributes: .concurrent)
 
     private var session: URLSession!
-    /// Guards `contexts`, and every mutation of a `RequestContext` after it is registered.
+    /// Guards `contexts`, `_lastTaskPriority`, and every mutation of a `RequestContext` after it is
+    /// registered.
     private let lock = NSLock()
     /// In-flight requests, keyed by the FFI token (the delegate re-derives the token from
     /// `URLSessionTask.taskDescription`).
     private var contexts: [UInt64: RequestContext] = [:]
 
-    public override init() {
+    /// A5 acceptance (step 25): the `URLSessionTask.priority` the adapter last applied, recorded so
+    /// the acceptance test can assert the task CARRIED the mapped value. Acceptance-only — the
+    /// RFC 9218 wire behaviour is FLAGGED lore and deliberately NOT conformance-tested.
+    private var _lastTaskPriority: Float?
+    public var lastTaskPriority: Float? {
+        lock.lock(); defer { lock.unlock() }; return _lastTaskPriority
+    }
+
+    /// The no-argument initializer used everywhere except the A6 sweep: OS-default loading mode.
+    public override convenience init() {
+        self.init(classicLoading: nil)
+    }
+
+    /// A6 (step 25): the classic-loading-mode sweep. `classicLoading == nil` leaves the OS default
+    /// (used by every normal test); the sweep constructs the adapter with `false` to force the new
+    /// (non-classic) loading path and records whether the suite diverges. One flag on the adapter —
+    /// the adapter is NOT forked.
+    public init(classicLoading: Bool?) {
         super.init()
         // Contract defaults: cookie-less, cache-less (architecture.md §2).
         let config = URLSessionConfiguration.ephemeral
@@ -52,6 +70,9 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
         config.httpShouldSetCookies = false
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        if let classic = classicLoading, #available(macOS 15.4, iOS 18.4, *) {
+            config.usesClassicLoadingMode = classic
+        }
         // A serial delegate queue: within the conformance driver at most one request is in flight,
         // and serialising the delegate callbacks keeps progress-before-completion ordering (rule 11).
         let queue = OperationQueue()
@@ -100,6 +121,9 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
             task = session.dataTask(with: urlRequest)
         }
         task.taskDescription = String(request.token)
+        // A5 (row 12, CAP): honour the request's priority hint by mapping it to the task priority.
+        // Acceptance-only; the RFC 9218 wire behaviour is FLAGGED lore, not conformance-tested.
+        task.priority = Self.taskPriority(for: request.priority)
 
         let ctx = RequestContext(token: request.token, requestURL: request.url)
         ctx.task = task
@@ -110,6 +134,8 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
 
         lock.lock()
         contexts[request.token] = ctx
+        // Record the applied priority (read back off the task) for the A5 acceptance assertion.
+        _lastTaskPriority = task.priority
         lock.unlock()
 
         // Total-deadline synthesis (rule 3): a single timer over the whole request. On expiry we
@@ -506,6 +532,23 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
             return .http3
         default:
             return .http11
+        }
+    }
+
+    // MARK: - Priority (A5, row 12 CAP — acceptance-only)
+
+    /// Map the request's priority hint to `URLSessionTask.priority`. The five contract levels fold
+    /// onto URLSession's three named buckets (the platform constants — no magic priority numbers):
+    /// `Throttled`/`Low` → low, `Normal` → default, `High`/`Critical` → high. Acceptance-only: the
+    /// adapter honours the hint by carrying it on the task; the RFC 9218 wire effect is FLAGGED lore.
+    public static func taskPriority(for priority: FfiPriority) -> Float {
+        switch priority {
+        case .throttled, .low:
+            return URLSessionTask.lowPriority
+        case .normal:
+            return URLSessionTask.defaultPriority
+        case .high, .critical:
+            return URLSessionTask.highPriority
         }
     }
 
