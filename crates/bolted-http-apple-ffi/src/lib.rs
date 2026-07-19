@@ -43,14 +43,15 @@ use std::time::Duration;
 use boltffi::*;
 
 use bolted_http::capability::{
-    CancelToken, CompletionSink, Http, RequestHandle, UploadProgressSink,
+    CancelToken, CompletionSink, Http, Metrics, MetricsTier, PriorityHint, RequestHandle,
+    UploadProgressSink,
 };
 use bolted_http::conformance::server::TestServer;
 use bolted_http::conformance::{
     AdapterFactory, ConformanceCtx, ConformanceRow, Endpoints, FailureReason, RowResult, c1, c2,
-    run,
+    c3, run,
 };
-use bolted_http::request::{HttpRequest, Method, RequestBody};
+use bolted_http::request::{FileRef, HttpRequest, Method, RequestBody, ResponseSink};
 use bolted_http::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
 use bolted_http::{HeaderName, HeaderValue, Headers, HttpError, TlsErrorKind, Url};
 
@@ -67,6 +68,27 @@ pub struct FfiHeader {
     pub value: String,
 }
 
+/// One SHA-256-of-SPKI pin the request carries (32 bytes; feature-matrix §5.14, rule 10). The Swift
+/// adapter computes the presented leaf certificate's SPKI SHA-256 and checks membership — a mismatch
+/// is [`FfiHttpError::PinMismatch`]. Mirrors the request's `PinSet` across the boundary (M2).
+#[data]
+pub struct FfiPin {
+    /// The 32-byte SHA-256 of a certificate's SubjectPublicKeyInfo.
+    pub hash: Vec<u8>,
+}
+
+/// Where the caller wants the response body delivered (feature-matrix row 15, the request-side
+/// selector). Mirrors [`ResponseSink`] across the boundary (M2): `Memory` buffers, `File` sinks the
+/// decoded body to `path` (`downloadTask` + synchronous move under the delegate threading, atomic
+/// finalize; a write failure is [`FfiHttpError::Io`]).
+#[data]
+pub enum FfiResponseSink {
+    /// Buffer the decoded body in memory (the default).
+    Memory,
+    /// Sink the decoded body to this path.
+    File { path: String },
+}
+
 /// A request effect flattened for the boundary. `token` is the single-flight identity: the
 /// completion must carry the same token to be matched to its parked sink.
 #[data]
@@ -78,6 +100,11 @@ pub struct FfiRequest {
     pub body: Vec<u8>,
     /// One total deadline in milliseconds (the only timeout the portable contract carries).
     pub deadline_ms: u64,
+    /// The request's SPKI pins (empty ⇒ no pinning requested); rule 10 (M2). The adapter enforces
+    /// these in its trust-evaluation delegate on top of the real chain/hostname check.
+    pub pins: Vec<FfiPin>,
+    /// Where the response body is delivered (row 15, M2). `Memory` (default) or `File { path }`.
+    pub sink: FfiResponseSink,
 }
 
 /// The negotiated HTTP version, mirrored across the boundary (feature-matrix row 11). M1 drops the
@@ -104,6 +131,14 @@ pub struct FfiResponse {
     /// The negotiated HTTP version, read from `URLSessionTaskMetrics` (row 11). No longer a
     /// placeholder.
     pub http_version: FfiHttpVersion,
+    /// The redirect hop trace (row 7, M2): every intermediate URL the chain traversed, in order,
+    /// excluding the final URL. Empty when no redirect occurred. Captured in
+    /// `willPerformHTTPRedirection`.
+    pub hops: Vec<String>,
+    /// The file-sink destination when the response was sunk to a file (row 15, M2). Empty ⇒ a
+    /// `Memory` outcome carrying `body`; non-empty ⇒ a `File` outcome at this path (the body was
+    /// written there, not buffered).
+    pub sink_path: String,
 }
 
 /// The typed error keys the Swift adapter maps native failures to. M1 covers the full C2 taxonomy
@@ -121,8 +156,23 @@ pub enum FfiHttpError {
     NameResolution,
     /// A connection could not be established.
     Connect,
-    /// A TLS failure (handshake / trust). The pin-vs-trust kind split is M2.
+    /// A TLS failure (handshake / trust). The pin-vs-trust split lands in M2: a real chain/hostname
+    /// failure is `Tls`, a declarative SPKI pin mismatch is [`FfiHttpError::PinMismatch`] — mirroring
+    /// the Linux verifier's split exactly, never conflated.
     Tls,
+    /// A declarative SPKI pin did not match the presented leaf (rule 10 / row 19, M2). The chain +
+    /// hostname verification *passed*; only the pin failed — distinct from [`FfiHttpError::Tls`].
+    PinMismatch,
+    /// An `https → http` redirect was refused (rule 4 / row 6, M2). `to` is the cleartext target
+    /// that was refused (informational; the key is what the rows inspect).
+    InsecureRedirect { to: String },
+    /// A local I/O failure handling the response — e.g. a file-sink write failed (row 15 / the `Io`
+    /// positive control, M2).
+    Io,
+    /// The OS refused permission for the request (Apple Local Network privacy / a sandbox network
+    /// denial surfacing as POSIX `EPERM`). Distinct from a network failure (§5.15). Platform-gated
+    /// on the macOS host tier — see the M2 notes; the adapter maps a genuine `EPERM` here.
+    PermissionDenied,
     /// The redirect chain exceeded the limit (`URLError.httpTooManyRedirects`). `limit` is the
     /// ceiling that fired; URLSession enforces its own internal cap in M1 (the request carries no
     /// redirect limit and the delegate-driven policy is M2), so `0` is the "adapter-internal cap"
@@ -255,6 +305,20 @@ impl Http for SwiftAdapter {
     }
 }
 
+/// Row 12 (CAP): the URLSession adapter honours the request's priority hint (mapped to
+/// `URLSessionTask.priority`). Marker-only — its presence is the C3 signal; the acceptance assertion
+/// is A5 (M3). Implementing it here is what makes the Apple C3 column report `priority-hint present`.
+impl PriorityHint for SwiftAdapter {}
+
+/// Row 18 (CAP, tiered): URLSession exposes per-phase timings via `URLSessionTaskMetrics`
+/// (DNS/connect/TLS/first-byte), so the honest tier is [`MetricsTier::Phase`] — richer than
+/// reqwest's whole-request tier. The C3 Apple column reads this off the trait impl.
+impl Metrics for SwiftAdapter {
+    fn tier(&self) -> MetricsTier {
+        MetricsTier::Phase
+    }
+}
+
 /// The factory the suite reads adapters from. Each `new_adapter()` shares the same `Shared`.
 struct SwiftFactory {
     shared: Arc<Shared>,
@@ -266,7 +330,20 @@ impl AdapterFactory for SwiftFactory {
             shared: Arc::clone(&self.shared),
         })
     }
-    // priority_hint() / metrics() default to absent for M0 (the C3 Apple column is M2).
+
+    /// Present: the URLSession adapter honours priority (row 12, CAP) — the C3 Apple column.
+    fn priority_hint(&self) -> Option<Box<dyn PriorityHint>> {
+        Some(Box::new(SwiftAdapter {
+            shared: Arc::clone(&self.shared),
+        }))
+    }
+
+    /// Present at the [`MetricsTier::Phase`] tier (row 18, CAP tiered) — `URLSessionTaskMetrics`.
+    fn metrics(&self) -> Option<Box<dyn Metrics>> {
+        Some(Box::new(SwiftAdapter {
+            shared: Arc::clone(&self.shared),
+        }))
+    }
 }
 
 // =====================================================================================
@@ -373,6 +450,23 @@ impl HttpHarness {
     pub fn run_c2(&self) -> Vec<RowReport> {
         self.run_rows(c2::rows())
     }
+
+    /// Run the C1-adjacent extra rows (row-15 response-sink correspondence, the redirect hop trace)
+    /// against the adapter — the M2 syntheses (file sink + hop trace) they exercise (structured
+    /// results). Requires a started server.
+    pub fn run_extra_rows(&self) -> Vec<RowReport> {
+        self.run_rows(c1::extra_rows())
+    }
+
+    /// The C3 divergence table for the Apple adapter, rendered from the capability traits (row 12
+    /// `priority-hint present`, row 18 `metrics present (Phase)`). No server needed — it reads the
+    /// factory's type-checked capability self-report.
+    pub fn run_c3(&self) -> String {
+        let factory = SwiftFactory {
+            shared: Arc::clone(&self.shared),
+        };
+        c3::divergence(&factory).render()
+    }
 }
 
 impl HttpHarness {
@@ -429,6 +523,27 @@ fn to_ffi_request(token: u64, request: &HttpRequest) -> FfiRequest {
         RequestBody::File(file) => std::fs::read(file.as_path()).unwrap_or_default(),
         _ => Vec::new(),
     };
+    // The request's SPKI pins (empty when unpinned) — the adapter enforces them in its trust
+    // delegate (rule 10, M2).
+    let pins = request
+        .pins()
+        .map(|set| {
+            set.pins()
+                .iter()
+                .map(|p| FfiPin {
+                    hash: p.as_bytes().to_vec(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // The response-sink selector (row 15, M2). `ResponseSink` is `#[non_exhaustive]`; anything that
+    // is not `File` (Memory today, a future streaming sink) mirrors as `Memory`.
+    let sink = match request.response_sink() {
+        ResponseSink::File(file) => FfiResponseSink::File {
+            path: file.as_path().to_string_lossy().into_owned(),
+        },
+        _ => FfiResponseSink::Memory,
+    };
     FfiRequest {
         token,
         method: method_str(request.method()).to_owned(),
@@ -436,6 +551,8 @@ fn to_ffi_request(token: u64, request: &HttpRequest) -> FfiRequest {
         headers,
         body,
         deadline_ms: u64::try_from(request.deadline().as_millis()).unwrap_or(u64::MAX),
+        pins,
+        sink,
     }
 }
 
@@ -454,20 +571,38 @@ fn to_http_response(response: &FfiResponse) -> Result<HttpResponse, HttpError> {
             headers.append(name, value);
         }
     }
-    // M1: the version is the adapter's real `URLSessionTaskMetrics` observable, not a placeholder.
-    // `content_length` is the decoded in-memory body length — always honest for a `Memory` sink
-    // (`Some(n)` promises `n` decoded bytes), so rule 7's decoded-gzip length check is satisfied
-    // without ever reporting the compressed transport figure (§5.12).
-    let built = HttpResponse::builder(
+    // Row 15 sink correspondence (M2): a non-empty `sink_path` is a `File` outcome at that path (the
+    // body was written there, not buffered) — `content_length` is not meaningful for a file sink, so
+    // it is `None`. A `Memory` sink reports the decoded in-memory length, honest for a buffered body
+    // (`Some(n)` promises `n` decoded bytes) — satisfying rule 7 without the compressed figure
+    // (§5.12). The version is the adapter's real `URLSessionTaskMetrics` observable (row 11).
+    let (body, content_length) = if response.sink_path.is_empty() {
+        (
+            BodyOutcome::Memory(response.body.clone()),
+            Some(response.body.len() as u64),
+        )
+    } else {
+        (
+            BodyOutcome::File(FileRef::new(response.sink_path.clone())),
+            None,
+        )
+    };
+    let mut built = HttpResponse::builder(
         StatusCode::new(response.status),
         url,
         to_http_version(response.http_version),
-        BodyOutcome::Memory(response.body.clone()),
+        body,
     )
     .headers(headers)
-    .content_length(Some(response.body.len() as u64))
-    .build();
-    Ok(built)
+    .content_length(content_length);
+    // Redirect hop trace (row 7, M2): each intermediate URL, in traversal order. A hop that fails to
+    // re-type is dropped rather than faulting the whole completion (every real hop parses).
+    for hop in &response.hops {
+        if let Some(hop_url) = parse_final_url(hop) {
+            built = built.hop(hop_url);
+        }
+    }
+    Ok(built.build())
 }
 
 /// Map the FFI version mirror to the contract [`HttpVersion`].
@@ -490,6 +625,14 @@ fn to_http_error(error: &FfiHttpError) -> HttpError {
         FfiHttpError::Tls => HttpError::Tls {
             kind: TlsErrorKind::HandshakeFailure,
         },
+        FfiHttpError::PinMismatch => HttpError::PinMismatch,
+        // The cleartext target always re-types; a malformed one falls back to `Transport` rather
+        // than an `unwrap` (no row inspects `to`, only the key).
+        FfiHttpError::InsecureRedirect { to } => Url::cleartext_dev(to)
+            .map(|to| HttpError::InsecureRedirect { to })
+            .unwrap_or(HttpError::Transport),
+        FfiHttpError::Io => HttpError::Io,
+        FfiHttpError::PermissionDenied => HttpError::PermissionDenied,
         FfiHttpError::TooManyRedirects { limit } => HttpError::TooManyRedirects { limit: *limit },
         FfiHttpError::Transport { .. } => HttpError::Transport,
     }

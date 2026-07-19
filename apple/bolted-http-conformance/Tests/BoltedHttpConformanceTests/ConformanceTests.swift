@@ -5,11 +5,15 @@ import BoltedHttpApple
 ///
 /// - **M0** (`testC1Rule01…`): the harness bridge can carry a green (real adapter) and a red
 ///   (deliberately-broken adapter). Retained as the bridge's fail-ability proof.
-/// - **M1 green** (`testM1RowsAreGreenExceptTheM2Syntheses`): the real `BoltedHttp` adapter drives
-///   the full C1 + C2 suite. Every row M1 owns is green; the A2/A4 syntheses (file sink, pinning, hop
-///   trace, https→http refusal, Io) stay red and are printed, not asserted — they land in M2.
-/// - **M1 watched-red** (`testWatchedRedBaseline`): every M1-green row is first shown RED under a
-///   broken adapter — the anti-vacuous-green baseline the notes record.
+/// - **M2 full green** (`testFullSuiteIsGreenOnTheRealAdapter`): the real `BoltedHttp` adapter drives
+///   the ENTIRE suite — all C1 rows, the C1-adjacent extra rows (row-15 sink correspondence, the
+///   redirect hop trace), and every C2 key — green, plus the pinned C3 Apple column. The A2/A4
+///   syntheses (file sink, SPKI pinning, hop trace, https→http refusal, Io) that were red in M1 are
+///   now green.
+/// - **Watched-red** (`testWatchedRedBaseline`): every green row is first shown RED under a broken
+///   adapter — the anti-vacuous-green baseline the notes record.
+/// - **PermissionDenied mapping** (`testPermissionDeniedMapping`): the load-bearing EPERM→key mapping
+///   proven at the unit level (a live host control is platform-gated; see the M2 notes).
 final class ConformanceTests: XCTestCase {
     /// The composition-root dance: adapter first, harness second, then the weak back-reference.
     private func makeHarness(_ adapter: HttpAdapter) -> HttpHarness {
@@ -55,90 +59,78 @@ final class ConformanceTests: XCTestCase {
         print("M0 RED-HALF rule-01 message: \(r.message)")
     }
 
-    // MARK: - Row classification
+    // MARK: - Rows that expect a `Transport` error (BrokenHttp cannot red them)
 
-    /// Rows M1 owns — every one must be green on the real adapter. (rule-05's real 304 comes free
-    /// from the ephemeral session — the A3 note's prediction, so it is an M1 green, not M2.)
-    private static let m1Green: [String] = [
-        "rule-01", "rule-02", "rule-03", "rule-05", "rule-06", "rule-07", "rule-08", "rule-09",
-        "rule-11",
-        "key-timeout", "key-cancelled", "key-tls", "key-name-resolution", "key-connect",
-        "key-transport", "key-too-many-redirects",
-    ]
+    /// The two rows whose contract outcome IS `Transport` — a blanket-Transport broken adapter makes
+    /// them GREEN, so `AlwaysOkHttp` (always 200) is the adapter that reds them instead.
+    private static let transportExpectingRows: Set<String> = ["rule-08", "key-transport"]
 
-    /// Rows deferred to M2 (https→http refusal / pinning / file-sink Io). Asserted red so a premature
-    /// green is caught; the watched-red record for the M2 syntheses.
-    private static let m2Red: [String] = [
-        "rule-04", "rule-10", "key-pin-mismatch", "key-insecure-redirect", "key-io",
-    ]
+    // MARK: - M2 gate (the whole suite, real adapter)
 
-    // MARK: - M1 gate (the real adapter across C1 + C2)
-
-    func testM1RowsAreGreenExceptTheM2Syntheses() {
-        let adapter = BoltedHttp()
+    /// Run every driver row (C1 + extra rows + C2) against `adapter` over a fresh server. The trust
+    /// anchor is installed for the HTTPS rows.
+    private func runFullSuite(_ adapter: HttpAdapter) -> (reports: [RowReport], c3: String) {
         let harness = makeHarness(adapter)
         let info = harness.startServer()
         XCTAssertFalse(info.httpBase.isEmpty, "the in-process test server failed to start")
-        defer { harness.stopServer() }
-
-        // Install the good cert as the adapter's trust anchor (anchor-only, M1): the HTTPS rows
-        // evaluate the self-signed test endpoint against it. Handed over by startServer().
         XCTAssertFalse(info.goodCertDer.isEmpty, "startServer must export the good cert DER anchor")
-        adapter.trustAnchorDER = info.goodCertDer
-
-        let reports = harness.runC1() + harness.runC2()
-
-        // Full status dump — the green/red evidence for the M1 notes.
-        for r in reports.sorted(by: { $0.id < $1.id }) {
-            let mark = r.passed ? "GREEN" : (r.skipped ? "SKIP " : "RED  ")
-            print("M1 [\(mark)] \(r.id)\(r.message.isEmpty ? "" : " — \(r.message)")")
-        }
-
-        for needle in Self.m1Green {
-            guard let r = row(reports, needle) else {
-                XCTFail("expected M1 row \(needle) not among reports: \(reports.map(\.id))")
-                continue
-            }
-            XCTAssertTrue(r.passed, "M1 row \(r.id) must be green — message: \(r.message)")
-            XCTAssertFalse(r.skipped, "M1 row \(r.id) must run, not skip")
-        }
-
-        for needle in Self.m2Red {
-            guard let r = row(reports, needle) else {
-                XCTFail("expected M2 row \(needle) not among reports: \(reports.map(\.id))")
-                continue
-            }
-            XCTAssertFalse(r.passed, "M2 synthesis \(r.id) is not expected green until M2")
-        }
+        if let real = adapter as? BoltedHttp { real.trustAnchorDER = info.goodCertDer }
+        defer { harness.stopServer() }
+        let reports = harness.runC1() + harness.runExtraRows() + harness.runC2()
+        return (reports, harness.runC3())
     }
 
-    // MARK: - M1 watched-red baseline
+    func testFullSuiteIsGreenOnTheRealAdapter() {
+        let (reports, c3) = runFullSuite(BoltedHttp())
 
-    /// Every M1-green row is shown RED first (anti-vacuous-green). Two broken adapters cover the two
-    /// row polarities: `BrokenHttp` (always errors `Transport`) reds every success- or specific-error-
-    /// expecting row; `AlwaysOkHttp` (always `200`) reds the rows that require an error — rule-08 and
-    /// key-transport — which `BrokenHttp`'s Transport happens to satisfy.
+        // Full status dump — the green/red evidence for the M2 notes.
+        for r in reports.sorted(by: { $0.id < $1.id }) {
+            let mark = r.passed ? "GREEN" : (r.skipped ? "SKIP " : "RED  ")
+            print("M2 [\(mark)] \(r.id)\(r.message.isEmpty ? "" : " — \(r.message)")")
+        }
+
+        XCTAssertFalse(reports.isEmpty, "no rows ran")
+        for r in reports {
+            XCTAssertTrue(r.passed, "row \(r.id) must be green on the real adapter — message: \(r.message)")
+            XCTAssertFalse(r.skipped, "row \(r.id) must run, not skip")
+        }
+
+        // The pinned C3 Apple column, generated from the capability traits (row 12 present, row 18
+        // Phase). A drift here means a capability impl changed without updating this expectation.
+        let expectedC3 = """
+        capability     | presence
+        ---------------+-----------------------
+        priority-hint  | present
+        metrics        | present (Phase)
+        """
+        XCTAssertEqual(c3, expectedC3, "C3 Apple column drifted:\n\(c3)")
+        print("M2 C3 Apple column:\n\(c3)")
+    }
+
+    // MARK: - Watched-red baseline (anti-vacuous-green)
+
+    /// Every green row is shown RED first. Two broken adapters cover the two row polarities:
+    /// `BrokenHttp` (always errors `Transport`) reds every success- or specific-error-expecting row;
+    /// `AlwaysOkHttp` (always `200`) reds the `Transport`-expecting rows `BrokenHttp` cannot.
     func testWatchedRedBaseline() {
-        // BrokenHttp reds all M1-green rows except the two that expect Transport.
-        let brokenReds = Self.m1Green.filter { $0 != "rule-08" && $0 != "key-transport" }
+        // BrokenHttp reds all rows except the two that expect Transport.
         let brokenHarness = makeHarness(BrokenHttp())
         XCTAssertFalse(brokenHarness.startServer().httpBase.isEmpty)
-        let brokenReports = brokenHarness.runC1() + brokenHarness.runC2()
+        let brokenReports = brokenHarness.runC1() + brokenHarness.runExtraRows() + brokenHarness.runC2()
         brokenHarness.stopServer()
         for r in brokenReports.sorted(by: { $0.id < $1.id }) where !r.passed {
             print("RED-BASELINE [broken] \(r.id) — \(r.message)")
         }
-        for needle in brokenReds {
-            guard let r = row(brokenReports, needle) else { continue }
+        for r in brokenReports where !Self.transportExpectingRows.contains(where: { r.id.contains($0) }) {
             XCTAssertFalse(r.passed, "watched-red: \(r.id) must be red under BrokenHttp — got green")
         }
 
-        // AlwaysOkHttp reds the error-expecting rows BrokenHttp cannot.
+        // AlwaysOkHttp reds the Transport-expecting rows BrokenHttp cannot.
         let okHarness = makeHarness(AlwaysOkHttp())
         XCTAssertFalse(okHarness.startServer().httpBase.isEmpty)
-        let okReports = okHarness.runC1() + okHarness.runC2()
+        let okReports = okHarness.runC1() + okHarness.runExtraRows() + okHarness.runC2()
         okHarness.stopServer()
-        for needle in ["rule-08", "key-transport"] {
+        for needle in Self.transportExpectingRows {
             guard let r = row(okReports, needle) else {
                 XCTFail("row \(needle) missing under AlwaysOkHttp")
                 continue
@@ -146,6 +138,22 @@ final class ConformanceTests: XCTestCase {
             print("RED-BASELINE [always-ok] \(r.id) — \(r.message)")
             XCTAssertFalse(r.passed, "watched-red: \(r.id) must be red under AlwaysOkHttp — got green")
         }
+    }
+
+    // MARK: - PermissionDenied (the mapping control; live host control platform-gated)
+
+    /// `PermissionDenied` has no hermetic host control on the macOS SwiftPM test tier (the genuine
+    /// causes — Apple Local Network privacy, an App-Sandbox network denial — need a GUI / an
+    /// entitlement-signed sandboxed bundle, both non-gating for this step). So its positive control is
+    /// the load-bearing MAPPING itself: a genuine POSIX `EPERM` maps to `PermissionDenied`, and a
+    /// non-permission errno does not (the negative control — the mapping is not vacuous).
+    func testPermissionDeniedMapping() {
+        XCTAssertEqual(BoltedHttp.permissionKeyForPOSIX(EPERM), .permissionDenied,
+                       "a genuine EPERM must map to PermissionDenied")
+        XCTAssertNil(BoltedHttp.permissionKeyForPOSIX(ECONNREFUSED),
+                     "a connection-refused errno is not permission-shaped")
+        XCTAssertNil(BoltedHttp.permissionKeyForPOSIX(ETIMEDOUT),
+                     "a timeout errno is not permission-shaped")
     }
 }
 
@@ -179,7 +187,9 @@ final class AlwaysOkHttp: HttpAdapter {
                 headers: [],
                 body: Data("ok".utf8),
                 finalUrl: request.url,
-                httpVersion: .http11
+                httpVersion: .http11,
+                hops: [],
+                sinkPath: ""
             )
         )
     }
