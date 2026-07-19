@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "boltffi"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518e741409a5e7393ac9ac76f87e97416cfa472d2cb617ec915daa1d00996a0d"
+checksum = "e61338c33a204aa5f4cf87e3b8201183e4830843da05d8ff180d8e26525fc9bd"
 dependencies = [
  "boltffi_core",
  "boltffi_macros",
@@ -14,18 +14,18 @@ dependencies = [
 
 [[package]]
 name = "boltffi_ast"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48533cd893eed51ad8515d17cf8e986e70a56a213a7252c4c99a7dcc4f49c242"
+checksum = "2484f4fd135a65fec8c0bec3f0a03a53ffe041256606f4327d3d0674ecd38f2e"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "boltffi_binding"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "699b590e9fddf4c9c6a8c00a752cd2d473e8d16b49f9d294b7e5cbf16bb2a4fb"
+checksum = "2f3c5cccb928af9c7d99c571db8d36356f0f803c3dfa5e1311d65e835e2b360d"
 dependencies = [
  "boltffi_ast",
  "serde",
@@ -34,9 +34,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_core"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfc0069a909bab140ecfa716c89dbff72086f6ead56c42ace35805f9fc9512d6"
+checksum = "f3019b792fdafad272abb6c06e4b7962477e361b7d3db12e32e6ad928f17bd42"
 dependencies = [
  "boltffi_macros",
  "url",
@@ -45,9 +45,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_ffi_rules"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aabfea19d8b5eb76dc4d0acae838be81edffd44c872bed909b79efff23c9ea75"
+checksum = "f42a27b71d834d484306828b900579b15ba07713bbd3fbdd96a6aa277c9b1717"
 dependencies = [
  "serde",
  "serde_json",
@@ -57,9 +57,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_macros"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c58aee3ffa446cf5f30d40ac29e416395d1534041fb8fe2585c93482aca35bf"
+checksum = "812ea2e32b5358a67099e97d156eb0969c0ec2536330dcf6e39acd79f70062d7"
 dependencies = [
  "boltffi_ast",
  "boltffi_binding",
@@ -72,9 +72,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_scan"
-version = "0.27.4"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e11b8f64fd309d778c38f0d17bdafcacb5130115c1efd42e017dd8d4d013c613"
+checksum = "07da53372d2211ed6b7927a6ecd5043914c498b1208bdc7917edc0c8bfbf15c6"
 dependencies = [
  "boltffi_ast",
  "proc-macro2",
