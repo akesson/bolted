@@ -5,6 +5,7 @@ members = [
     "crates/bolted-decl",
     "crates/bolted-http",
     "crates/bolted-http-linux",
+    "crates/bolted-http-apple-ffi",
     "crates/bolted-macros",
     "crates/bolted-check",
     "crates/bolted-conformance",
