@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.13, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, and the bolted-http go pass).** Phase 1 validated this design against
+**Status: FROZEN (v1.14, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, and the post-step-24 error-wording/freeze-scheduling pass).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -57,7 +57,14 @@ in place, no new decision row: web leaves the adapter list — it was never part
 win/lin/mac/android/ios surface (Henrik, 2026-07-18; feature-matrix §9 maps how it would fit if
 it ever joins) — and scheduling is resolved (Henrik, 2026-07-19): the implementation goes ahead,
 with `crates/bolted-http/docs/spike-plan.md` as the step sequence's raw material. The contract
-*freeze* stays a §9 item, gated on the spike verdicts (S-FFI streaming, S-LX2 Linux pinning). A
+*freeze* stays a §9 item, gated on the spike verdicts (S-FFI streaming, S-LX2 Linux pinning).
+**v1.14** is wording only, no design change (Henrik, 2026-07-19, post step 24): §2's error
+invariant now says what D1/D20 always enforced — errors are **typed enums** projecting to
+key+params data (`ErrorData`), never strings — so `bolted-http`'s `HttpError` reads as an
+instance of the rule, not a divergence; its remaining freeze-agenda residue is the
+`Into<ErrorData>` bridge. The same pass re-schedules the contract freeze: the spike verdicts
+are in (step 24), and the freeze lands **after the Apple adapter** (S-AP) — one more real
+implementor before commitment. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -189,8 +196,10 @@ and have no generated seam; C16 is their floor too.
 forbidden. (A core-side error-visibility policy layer was considered and deliberately deferred —
 see §8.)
 
-**Errors are data, never strings.** Every error is a key + structured params
-(`TooLong { max: 30, actual: 45 }`); shells localize. Ties into the future i18n battery.
+**Errors are typed enums bridging to key+params data, never strings.** The enum
+(`TooLong { max: 30, actual: 45 }`) is the Rust-side authority; it crosses boundaries as
+key + structured params (`ErrorData`-shaped); shells localize. Ties into the future i18n
+battery.
 
 ## 3. Field: validity × sync
 
@@ -590,16 +599,19 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   parameters, and the windowing etiquette (overscan, threshold refetch — §6's frame-loop rule,
   D36, already governs the scroll side).
 - **`bolted-http` contract freeze** — *scheduled at v1.13 (2026-07-19): implementation proceeds
-  along `crates/bolted-http/docs/spike-plan.md`; the freeze lands when the spike verdicts are in.*
-  The D38 shape is decided; still genuinely open before a freeze: the FFI streaming mechanism
-  (S-FFI — decides whether response streaming makes the portable core or falls back to
-  `Memory | File` sinks), SPKI pinning feasibility on Linux (S-LX2 — decides matrix row 19's
-  CORE(adapter) status), the cookie capability's shape,
+  along `crates/bolted-http/docs/spike-plan.md`. Re-scheduled at v1.14 (Henrik, 2026-07-19):
+  the spike verdicts are in — S-FFI: response streaming is CORE via `ffi_stream` async push
+  (row 16); S-LX2: Linux SPKI pinning feasible, row 19's CORE(adapter) stands (step-24
+  report) — and the freeze lands after the Apple adapter (S-AP), one more real implementor
+  before commitment.*
+  The D38 shape is decided; still genuinely open before the freeze: the streaming-body core
+  seam (step-24 report Q2 — the mechanism is decided, its contract surface is not; `BodyOutcome`
+  carries the named seam), the `HttpError → ErrorData` bridge (v1.14 residue), the cookie
+  capability's shape,
   whether Android's declarative `<pin-set>` binds OkHttp/Cronet, and `BackgroundTransfer` — a
   separate optional effect family whose precondition (effects as durable, serializable data with
   stable identities) is shared with interaction replay (below) and the draft stash; nothing may
-  foreclose it. Response streaming, the old gate's hardest question, now has evidence: both
-  step-02 probes' stream machinery converges at boltffi 0.27.5.
+  foreclose it.
 - **Interaction replay (protected possibility, unscheduled).** The contract boundary is a natural
   record seam: every mutation enters the core as a typed, serializable call (draft verbs, commands,
   canonical pushes, check completions), so logging those calls and re-driving the log against a
