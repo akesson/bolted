@@ -111,6 +111,11 @@ run = [
   "cargo fmt --all --check",
   "cargo clippy --workspace --all-targets -- -D warnings",
   "cargo test --workspace",
+  # Step 24 M0: the conformance harness lives behind a per-crate feature (bolted-http), which
+  # `--workspace` does not enable. Exercise it explicitly so the suite skeleton (and the mock, and
+  # the fail-correctly demonstrations) are clippy-clean and tested by `check`.
+  "cargo clippy -p bolted-http --features conformance --all-targets -- -D warnings",
+  "cargo test -p bolted-http --features conformance",
 ]
 
 # Step 22: the environment report for what mise CANNOT pin (VISION risk 5 — Xcode, the Android
