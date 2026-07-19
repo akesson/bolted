@@ -270,3 +270,146 @@ first (mock red-twin) **and** confirmed to catch the real Apple mutation. The mu
 are **not** committed — the adapter (`BoltedHttp.swift`) and FFI crate (`lib.rs`) have zero diff; only
 the two rows, the `WrongHttpVersion` reason, the `/drip` endpoint, and the `honest_version` knob (with
 its red-twin) are committed.
+
+---
+
+# The Android adapter (`BoltedHttp.kt`) — step 26 M4
+
+The fourth implementor: the hand-written Android OkHttp adapter
+(`android/bolted-http/.../BoltedHttp.kt`); two mutations land on the FFI bridge
+(`crates/bolted-http-android-ffi/src/lib.rs`) where its token routing is load-bearing, and one on the
+bridge's `content_length` derivation. Every mutation was applied to a scratch copy, the full
+`mise run test:android:http` suite run on the headless `dev34` GMD (aosp_atd android-34 arm64), the red
+row(s) + typed `FailureReason` read from the on-device per-test logcat + the JUnit XML, then **reverted**
+— the shipped adapter (`BoltedHttp.kt`) and FFI crate (`lib.rs`) end with **zero** diff (verified with
+`git diff`); only the one suite-strengthening (a new `WrongHopOrder` row assertion + the mock
+`honest_redirect_hop_order` knob + its red-twin) is committed.
+
+Row outcomes are attributed from `theFullSuiteIsGreenOnTheRealAdapter`'s logcat (`M2 [RED] <row> —
+<reason>`, printed for every row before the assertion trips) plus the failing `@Test` names in the
+JUnit XML. Independent mutations reding **distinct** rows were batched into one run and attributed by
+row (each row's typed reason pinpoints its mutation); the pin-conflation and cancel/deadline mutations
+that touch shared rows were run one at a time.
+
+## The syntheses and classifications the suite pins
+
+| # | Mutation | Site (what changed) | Caught by / reason observed | Result |
+|---|----------|---------------------|-----------------------------|--------|
+| MK1 | Pin comparison corrupted (truncated leaf SPKI) | `PinningTrustManager`: `spkiSha256(leaf)` → `.copyOf(31)` | C1/rule-10 `ExpectedSuccessGotError{PinMismatch}` (good pin now mismatches; +rule-04, key-insecure-redirect `WrongErrorKey`, +split unit test) | **caught** |
+| MK2 | `PinMismatch` conflated with `Tls` | `classify`: `ctx.pinMismatch ⇒ Tls` | C1/rule-10 + C2/key-pin-mismatch `WrongErrorKey{expected:PinMismatch, got:Tls}` | **caught** |
+| MK3 | `Tls` conflated with `PinMismatch` (vice-versa) | `classify`: `is SSLException ⇒ PinMismatch` | C2/key-tls `WrongErrorKey{expected:Tls, got:PinMismatch}` | **caught** |
+| MK4 | Any-one-matches broken (require ALL pins) | `PinningTrustManager`: `pins.none{…}` → `!pins.all{…}` | N3 unit `theServerTrustManagerSplitIsCauseNotConflated` FAILS (the any-one arm fires a mismatch) | **caught** |
+| MK5 | Drop the chain-first ordering (pin check before the delegate chain check) | `PinningTrustManager`: swap the two statements | **SURVIVED** → hypothesis 2 (vacuous; see below) | survived |
+| MK6 | Deadline: `callTimeout` → `readTimeout` (per-idle regression) | `execute`: `DeadlineMode.Total ⇒ readTimeout` | C1/row-deadline-total-not-per-idle `ExpectedErrorGotSuccess{Timeout,200}` + M1 `theTotalDeadlineIsCallTimeoutNotPerIdle` FAILS — the `/drip` trickle row | **caught** |
+| MK7 | Drop the deadline entirely | `execute`: neuter the `when(deadlineMode)` block | M1 `theTotalDeadlineIsCallTimeoutNotPerIdle` FAILS (`/drip` Total arm `ExpectedErrorGotSuccess`); the `/stall` C1/C2 rows not observable — no-deadline leaks crash the ART tier (F-M4-1) | **caught** |
+| MK8 | Cancel leaked as `Transport` | `classify`: drop `if (ctx.callerCancelled) return Cancelled` | C1/rule-09 + C2/key-cancelled `WrongErrorKey{expected:Cancelled, got:Transport}` (rule-02 stays green — distinct from Timeout) | **caught** |
+| MK9 | Cancel reported as `Timeout` | `classify`: `callerCancelled ⇒ Timeout` | C1/rule-02 `KeysNotDistinct{Timeout}`; C1/rule-09 + C2/key-cancelled `WrongErrorKey{Cancelled←Timeout}` | **caught** |
+| MK10 | https→http downgrade followed (drop the refusal) | `insecureDowngradeTarget` disabled / `classify` too-many prefix — see MK11 | (see redirect rows) | — |
+| MK11 | Too-many-redirects classification broken | `classify`: the `TOO_MANY_REDIRECTS_PREFIX` match never matches | C2/key-too-many-redirects `WrongErrorKey{expected:TooManyRedirects, got:Transport}` | **caught** |
+| MK12 | Hop trace truncated (drop every hop) | `redirectHops`: drop `hops.add(…)` | C1/row-redirect-trace `WrongHopTrace{got:0, expected:2}` | **caught** |
+| MK13 | Hop trace **reordered** (drop the traversal-order reversal) | `redirectHops`: drop `hops.reverse()` | **SURVIVED** → hypothesis 1 blind spot → **fixed** (see below) | survived → fixed |
+| MK14 | File sink skips the atomic rename | `sinkBodyToFile`: drop `tmp.renameTo(dest)` | C1/row-15 `WrongSink` (dest never written) | **caught** |
+| MK15 | File sink buffers the whole body in memory | `sinkBodyToFile`: `writeAll(source)` → `write(source.readByteArray())` | **SURVIVED** → hypothesis 2 (unobservable; see below) | survived |
+| MK16 | Memory outcome for a File request | (swallow, MK17) — the File/Memory correspondence is pinned via MK14 (`WrongSink`) | C1/row-15 `WrongSink` | **caught** |
+| MK17 | Write failure swallowed (`Io` → success) | onResponse File branch: `catch(IOException){ false }` → `true` | C2/key-io `ExpectedErrorGotSuccess{Io, status:200}` | **caught** |
+| MK18 | Wrong negotiated version (fixed `Http2`) | `mapVersion`: `HTTP_1_1 ⇒ Http2` | C1/row-negotiated-version `WrongHttpVersion{got:Http2, expected:Http1_1}` | **caught** |
+| MK19 | Content-length dishonest under decoding | **FFI** `to_http_response` memory `Some(len)` → `Some(len+1)` | C1/rule-07 `DishonestContentLength{got:74, decoded:73}` | **caught** |
+| MK20 | Upload total faked | `ProgressBody`: report `(total*2)` as the progress total | **SURVIVED** → recorded (total-accuracy is not the row-11 judgement; see below) | survived |
+| MK21 | Bridge routes progress to the wrong token | **FFI** `report_progress`: `pending.get(&token.wrapping_add(1))` | C1/rule-11 `ProgressNotTerminal{got:0, expected:256}` (no samples routed) | **caught** |
+| MK22 | Bridge delivers the completion to the wrong token | **FFI** `complete_ok`: `take_pending(response.token.wrapping_add(1))` | every success-expecting row `NoCompletion` (rule-01/05/06/07/10-pos/11/row-15/version/redirect-trace + the M0 gate); error rows stay green (`complete_err` routes correctly) | **caught** |
+| MK23 | Bridge double-completes a parked sink | **FFI** `complete_ok`: call `pending.completion.complete(…)` twice | **structurally impossible** — `cargo check` fails `E0382: use of moved value: pending.completion` | finding |
+
+**19 of 22 behavioural mutations caught; MK23 is a compile-enforced structural guarantee.** The three
+survivors are discharged below. (MK10 is folded into the redirect rows: the shipped
+`followSslRedirects(false)` + `insecureDowngradeTarget` refusal is pinned by rule-04 / key-insecure-redirect,
+watched red in M1/M2; MK1's corruption already reds rule-04 as collateral.)
+
+## Survivors — the two-hypotheses discharge
+
+Per [[a-surviving-mutation-is-two-hypotheses]], each survivor is checked: is the mutant **observably
+different** from the correct adapter? MK5/MK15 are hypothesis 2 (nothing observable changed — no test
+added, as adding one would assert the mutant's own behaviour). MK13 is hypothesis 1 (a real behaviour
+the suite was blind to) and is fixed. MK20 is observably different but pins a value the row-11 contract
+deliberately does not judge — recorded, not silently "fixed".
+
+### MK5 — drop the chain-first ordering (survived → hypothesis 2)
+
+The adapter's `PinningTrustManager` does the real chain check (`delegate.checkServerTrusted`) **first**,
+then ANDs the SPKI pin compare on top of a passing chain. MK5 swaps the order (pin check first). It
+**passed the entire suite**. Two-hypotheses check: the order matters only for a request that sends a
+**non-matching pin to a cert that also fails the chain** — chain-first reports `Tls` (the trust failure
+wins), pin-first reports `PinMismatch`. **No fixture constructs that combination**: every pinned row
+(rule-04, rule-10, key-pin-mismatch, key-insecure-redirect) targets the *good* (chain-valid) cert, and
+key-tls (the only bad-chain fixture) carries *no* pins. On the good cert both orders are identical
+(pin matches ⇒ no throw either way; pin mismatches ⇒ `PinMismatch` either way, the delegate would have
+passed). So the mutant is behaviourally identical on every fixture the suite drives — hypothesis 2.
+**No row added**: a "pinned request to an untrusted cert ⇒ Tls" row is *not* expressible as shared
+conformance code — the socket mock models pinning as trust-*replacement* (`netmock.rs`: with pins
+present the pin set **is** the anchor, no separate chain check), so the correct mock would report
+`PinMismatch`/accept, never `Tls`, and such a row would break the mock. The ordering is an
+adapter-local invariant, recorded here, not a shared-suite blind spot.
+
+### MK15 — buffer the whole body in memory (survived → hypothesis 2)
+
+`sinkBodyToFile` streams the body segment-by-segment (Okio `writeAll(source)`); MK15 reads the whole
+body into a `ByteArray` first, then writes it. The **file contents are identical**; the in-process
+suite reads the file back and sees the same bytes. Streaming vs buffering is a *memory-footprint*
+guarantee, not a correctness one the suite can observe (mirrors the reqwest A4b `fsync` and A6
+pooled-retry survivors — hypothesis 2 by construction). **No test added.**
+
+### MK20 — fake the upload total (survived → recorded, not a shared blind spot)
+
+`ProgressBody` reports `(sent, total)`; MK20 doubles the reported `total`. `judge_progress` (rule 11)
+ignores `total` entirely — it judges **monotonicity of `sent`** + **terminal equality of `sent` with
+the known body length**, never the total. This is deliberate and uniform: feature-matrix §5.9 / row 14
+fixes the progress judgement as "indicative, monotone per attempt, **not wire-truth**", and `total` is
+an `Option` best-effort hint (legitimately `None` for an unknown-length body) that every implementor
+(mock, reqwest, Apple) forwards but **no row asserts**. So MK20 is observably different but pins a
+property the contract's progress judgement does not cover on *any* implementor — not an Android-specific
+hole. Adding a total-accuracy assertion would **expand the row-11 progress contract**, an ARCHITECTURE
+§7-invariant question resolved in a design session, not unilaterally in a mutation pass. **Recorded, no
+row added** (mirrors the Apple pass leaving the File-sink `content_length` unasserted with rationale).
+
+## The blind spot found and fixed — hop **order** (committed)
+
+### The redirect hop trace had no order control
+
+**What survived (MK13):** an adapter that follows the redirect chain and records the right hop **count**
+and the right terminal `final_url` but reports the hops in **reverse order** passed the *entire* suite.
+The redirect-trace row (`C1/row-redirect-trace-final-url-and-hops`) asserted `hops().len() == 2` and
+`final_url` contains `n=0`, but **nothing referenced hop order**. OkHttp's `priorResponse` chain is
+last-hop-first, so the adapter reverses it to traversal order (`redirectHops`); dropping that
+`hops.reverse()` flips the order while keeping count + tail — invisible to the row.
+
+**Two-hypotheses check:** the mutant is observably different — the correct adapter (and mock, reqwest,
+Apple) reports `hops = [.../n=2, .../n=1]` (traversal order, first hop first) for `/redirect-chain?n=2`,
+while the mutant reports `[.../n=1, .../n=2]`. Same count (2), same tail (`n=0`). Hypothesis 1 — a real
+behaviour the suite was blind to, not a vacuous mutant. Hop traversal order is an already-**documented**
+observable (feature-matrix §5.5 "report final URL + hop count", netmock "first hop first"), so asserting
+it is suite-strengthening for a shipped property, not a contract expansion.
+
+**The fix (committed):** the redirect-trace row now also asserts the hops are in traversal order
+(`hops[0]` contains `n=2`, `hops[1]` contains `n=1`), reporting a new typed
+`FailureReason::WrongHopOrder`. Watched **red** two ways:
+
+- mock: new knob `honest_redirect_hop_order = false` reverses the hops → `WrongHopOrder`
+  (`redirect_trace_red_when_hops_reordered`, committed; `mise run check` green).
+- Android: re-applying MK13 on the real adapter with the new assertion present →
+  `C1/row-redirect-trace-final-url-and-hops — WrongHopOrder` (exactly one row red).
+
+Correct mock, reqwest (`mise run test`), Apple (`mise run test:apple:http`), and the real Android
+adapter (final clean `mise run test:android:http`, 14/14) all pass the strengthened row green — the fix
+runs against all four implementors and breaks none.
+
+## Summary
+
+| Implementor | Mutations | Caught | Survived | Blind spot fixed |
+|-------------|-----------|--------|----------|------------------|
+| Android `BoltedHttp.kt` (+ 3 on the FFI bridge, 1 structural) | 22 behavioural + MK23 structural | 19 + MK23 (compile-enforced) | 3 (MK5, MK15 — hypothesis 2; MK20 — recorded non-assertion) | 1 (redirect hop **order** via `WrongHopOrder`) |
+
+No surviving mutation is left unexplained: MK5/MK15 are proven hypothesis 2 (behaviourally identical to
+the suite), MK20 is a deliberate, uniform non-assertion (recorded, not a hole), and MK13 is a genuine
+hypothesis-1 blind spot fixed with a committed row watched red first (mock red-twin) **and** confirmed
+against the real Android mutation, green on all four implementors. The mutations themselves are **not**
+committed — `BoltedHttp.kt` and the FFI `lib.rs` have zero diff; only the `WrongHopOrder` reason, the
+row's order assertion, and the `honest_redirect_hop_order` mock knob (with its red-twin) are committed.

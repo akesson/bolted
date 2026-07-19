@@ -170,6 +170,12 @@ pub enum FailureReason {
         /// The hop count the chain required.
         expected: usize,
     },
+    /// A followed redirect chain recorded the hops in the wrong **order**. The trace must be in
+    /// traversal order (first hop first — feature-matrix §5.5 / netmock docs); an adapter that
+    /// reports the right count and tail but reverses the order passed the redirect-trace row until
+    /// the step-26 M4 Android pass (dropping OkHttp's `priorResponse`-walk reversal survived count +
+    /// `final_url` but flips the order — the hop-order blind spot).
+    WrongHopOrder,
     /// The negotiated HTTP version observable (feature-matrix row 11) did not match what the
     /// server actually spoke. Until the step-25 M4 version row, **no** C1/C2/C3 row referenced
     /// `HttpResponse::version()`, so an adapter that reported the wrong negotiated protocol passed

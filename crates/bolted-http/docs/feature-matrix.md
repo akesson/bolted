@@ -165,6 +165,38 @@ M4 mutation pass confirms each synthesis is genuinely pinned on this surface (no
   pass found that *no* row read `version()` (a blind spot) and added `C1/row-negotiated-version-observable`;
   Apple reports the real `URLSessionTaskMetrics` protocol.
 
+**Android / OkHttp leg proven (step 26 S-AN, 2026-07-20).** The hand-written OkHttp adapter
+(`android/bolted-http/.../BoltedHttp.kt`) passes the full C1/C2/C3 conformance suite on the headless
+ART tier (aosp_atd android-34 GMD), and the step-26 M4 mutation pass confirms each synthesis is
+genuinely pinned on this surface (19 of 22 behavioural mutations caught, 1 structural guarantee
+compile-enforced, 3 survivors dispositioned):
+
+- **CORE(adapter) syntheses proven on Android** — row 4 (total-deadline via OkHttp `callTimeout`, cancel
+  by recorded cause; the *per-idle vs total* distinction pinned by the `/drip` row — the
+  `callTimeout⇒readTimeout` mutation caught), row 6 (`followSslRedirects(false)` + downgrade-refusal —
+  follow-the-downgrade / broken-too-many-redirects mutations caught), row 7 (`priorResponse` hop trace —
+  drop-a-hop, **reorder-the-hops** (a new blind spot), and misreport-`final_url` mutations caught), row
+  14 (`ForwardingSink` upload progress — wrong-token-routing and terminal mutations caught), row 15
+  (Okio file sink with temp-then-`renameTo` — skip-rename, Memory-for-File, and swallow-`Io` mutations
+  caught), row 19 (SPKI pinning split in the custom `X509TrustManager` — corrupt-SPKI, require-all, and
+  both directions of the `PinMismatch`-vs-`Tls` conflation caught). Row 2 (bodies) exercised via the
+  row-11 POST upload.
+- **Row 11 (negotiated version)** — Android reports the real OkHttp `Response.protocol`; the
+  fixed-wrong-version mutation is caught by `C1/row-negotiated-version-observable` (the step-25 M4 row).
+- **Row 12 (priority hint, CAP)** — **absent** on the C3 Android column (the decided Apple/Android
+  divergence): OkHttp exposes no per-`Call` priority knob, so the adapter legally ignores the hint.
+- **Row 16 (response streaming)** — the A1 probe (F1 `ffi_stream` async push) delivers ordered/lossless/
+  complete over a real OkHttp round-trip, whole + ordered even under CPU saturation (M3); probe-grade.
+- **The M4 blind spot (redirect hop *order*)** — the redirect-trace row asserted hop *count* + `final_url`
+  but not *order*; the Android `redirectHops` (which reverses OkHttp's last-first `priorResponse` chain)
+  drop-the-reversal mutation survived the whole suite. Fixed on every implementor:
+  `C1/row-redirect-trace-final-url-and-hops` now asserts traversal order → new `FailureReason::WrongHopOrder`
+  + mock `honest_redirect_hop_order` knob.
+- **Bridge single-flight** — the FFI completion registry is token-keyed and single-flight; misrouting a
+  completion/progress to the wrong token is caught (`NoCompletion` / `ProgressNotTerminal`), and
+  **double-completion is structurally impossible** (`CompletionSink::complete(self: Box<Self>)` +
+  remove-and-return `take_pending` ⇒ a second completion fails to compile).
+
 ## 5. Dimension notes — the evidence behind each row
 
 ### 5.1 Headers (row 1)

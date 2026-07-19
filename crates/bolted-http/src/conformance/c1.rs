@@ -517,6 +517,15 @@ fn redirect_trace_correspondence(ctx: &ConformanceCtx) -> RowResult {
                     expected: 2,
                 });
             }
+            // The hops are in traversal order (first hop first): the original request (`n=2`)
+            // precedes the intermediate hop (`n=1`). A trace reported in *reverse* order still has
+            // the right count and tail, so only this ordering check catches it — the M4 Android
+            // hop-order blind spot (OkHttp's `priorResponse` chain is last-first; dropping the
+            // reversal survives count + `final_url`).
+            let hops = r.hops();
+            if !hops[0].as_str().contains("n=2") || !hops[1].as_str().contains("n=1") {
+                return RowResult::Fail(FailureReason::WrongHopOrder);
+            }
             // The terminal URL is the chain's tail (`n=0`), never the original request (`n=2`) or a
             // pre-terminal hop.
             if !r.final_url().as_str().contains("n=0") {
@@ -777,6 +786,20 @@ mod tests {
                 got: 0,
                 expected: 2
             })
+        ));
+    }
+
+    #[test]
+    fn redirect_trace_red_when_hops_reordered() {
+        // M4 Android hop-order blind-spot fix: the reorder break reports the hops reversed — the
+        // right count (2) and the right tail (`n=0`), only the ORDER is wrong. Before the order
+        // assertion this survived the whole suite (found by the Android `redirectHops` drop-the-
+        // reversal mutation, step-26 M4).
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honest_redirect_hop_order = false);
+        assert!(matches!(
+            redirect_trace_correspondence(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::WrongHopOrder)
         ));
     }
 

@@ -87,6 +87,11 @@ pub struct MockBehavior {
     /// ⇒ report `Http2` for the 1.1 server — the version-observable break, invisible to every rule
     /// until the step-25 M4 negotiated-version row.
     pub honest_version: bool,
+    /// Report the redirect hops in traversal order (first hop first). Off ⇒ report them reversed —
+    /// the right count and tail, wrong order (the step-26 M4 Android hop-order break: OkHttp's
+    /// `priorResponse` chain is last-first, so an adapter that forgets to reverse it flips the
+    /// order while keeping count + `final_url`). Only takes effect on the honest-trace path.
+    pub honest_redirect_hop_order: bool,
 }
 
 impl MockBehavior {
@@ -110,6 +115,7 @@ impl MockBehavior {
             terminal_upload_progress: true,
             honest_redirect_trace: true,
             honest_version: true,
+            honest_redirect_hop_order: true,
         }
     }
 }
@@ -283,11 +289,15 @@ impl SocketMock {
             };
 
             // The trace-drop break: report the original request URL as final and drop the hops.
-            let (final_url, hops) = if self.behavior.honest_redirect_trace {
+            let (final_url, mut hops) = if self.behavior.honest_redirect_trace {
                 (current.clone(), hops)
             } else {
                 (request.url().clone(), Vec::new())
             };
+            // The hop-order break: report the hops reversed (right count + tail, wrong order).
+            if !self.behavior.honest_redirect_hop_order {
+                hops.reverse();
+            }
             // The negotiated version observable (row 11): the test server speaks HTTP/1.1. The
             // version break reports `Http2` for the 1.1 server (invisible to every rule until the
             // step-25 M4 negotiated-version row).
