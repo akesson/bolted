@@ -147,13 +147,26 @@ run = """
 set -eu
 want="0.27.5"
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-if command -v boltffi >/dev/null 2>&1 && boltffi --version 2>/dev/null | grep -q "$want"; then
-  echo "boltffi $want already installed"
+home="$(cd -P "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null && pwd || echo "${CARGO_HOME:-$HOME/.cargo}")"
+# The early-exit guard must reject a GIT-installed CLI, not only a wrong version string: the killed
+# step-23 git build reports the SAME `0.27.5` version (F-M0-4). `cargo install --list` records the
+# source — a `?rev=` on the boltffi_cli line means a git build, which must be replaced by the
+# registry one. Only skip the reinstall when the version matches AND the source is the registry.
+git_installed=""
+if CARGO_HOME="$home" cargo install --list 2>/dev/null \
+    | grep -E '^boltffi_cli ' | grep -q '?rev='; then
+  git_installed="yes"
+fi
+if [ -z "$git_installed" ] && command -v boltffi >/dev/null 2>&1 \
+    && boltffi --version 2>/dev/null | grep -q "$want"; then
+  echo "boltffi $want already installed (registry)"
   exit 0
 fi
-home="$(cd -P "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null && pwd || echo "${CARGO_HOME:-$HOME/.cargo}")"
+if [ -n "$git_installed" ]; then
+  echo "boltffi_cli is a git (?rev=) build — forcing the registry $want reinstall ..."
+fi
 echo "Installing boltffi_cli@$want (CARGO_HOME=$home) ..."
-CARGO_HOME="$home" cargo install boltffi_cli --version "$want"
+CARGO_HOME="$home" cargo install boltffi_cli --version "$want" --force
 """
 
 [tasks."pack:apple"]

@@ -37,6 +37,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use boltffi::*;
 
@@ -45,7 +47,8 @@ use bolted_http::capability::{
 };
 use bolted_http::conformance::server::TestServer;
 use bolted_http::conformance::{
-    AdapterFactory, ConformanceCtx, Endpoints, FailureReason, RowResult, c1, run,
+    AdapterFactory, ConformanceCtx, ConformanceRow, Endpoints, FailureReason, RowResult, c1, c2,
+    run,
 };
 use bolted_http::request::{HttpRequest, Method, RequestBody};
 use bolted_http::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
@@ -77,6 +80,18 @@ pub struct FfiRequest {
     pub deadline_ms: u64,
 }
 
+/// The negotiated HTTP version, mirrored across the boundary (feature-matrix row 11). M1 drops the
+/// M0 `Http1_1` placeholder: the Swift adapter reads the real protocol from `URLSessionTaskMetrics`
+/// (`networkProtocolName`) and reports it here.
+#[data]
+#[derive(Clone, Copy)]
+pub enum FfiHttpVersion {
+    Http1_0,
+    Http1_1,
+    Http2,
+    Http3,
+}
+
 /// A successful response re-entering the core as a typed completion input.
 #[data]
 pub struct FfiResponse {
@@ -86,34 +101,53 @@ pub struct FfiResponse {
     pub body: Vec<u8>,
     /// The final URL after any redirects (rule 6). Empty is treated as a bridge error.
     pub final_url: String,
+    /// The negotiated HTTP version, read from `URLSessionTaskMetrics` (row 11). No longer a
+    /// placeholder.
+    pub http_version: FfiHttpVersion,
 }
 
-/// The typed error keys the Swift adapter maps native failures to. A deliberately small,
-/// M0-sized set (the full C2 taxonomy mapping is M1); each maps to a [`HttpError`] variant so the
-/// adapter reports keys, never strings.
+/// The typed error keys the Swift adapter maps native failures to. M1 covers the full C2 taxonomy
+/// the URLSession adapter can reach on the host tier; each maps to a [`HttpError`] variant so the
+/// adapter reports keys, never strings. The pin/insecure-redirect/permission/io keys are the M2
+/// syntheses and attach to this enum then (additive).
 #[data]
 #[derive(Clone)]
 pub enum FfiHttpError {
-    /// The deadline elapsed.
+    /// The deadline elapsed (synthesized total-deadline timer, or `URLError.timedOut`).
     Timeout,
-    /// The caller cancelled the in-flight effect.
+    /// The caller cancelled the in-flight effect (`URLError.cancelled`, not deadline-caused).
     Cancelled,
     /// DNS / name resolution failed.
     NameResolution,
     /// A connection could not be established.
     Connect,
-    /// A TLS failure (handshake / trust). The kind split is M1.
+    /// A TLS failure (handshake / trust). The pin-vs-trust kind split is M2.
     Tls,
+    /// The redirect chain exceeded the limit (`URLError.httpTooManyRedirects`). `limit` is the
+    /// ceiling that fired; URLSession enforces its own internal cap in M1 (the request carries no
+    /// redirect limit and the delegate-driven policy is M2), so `0` is the "adapter-internal cap"
+    /// sentinel — no conformance row inspects it, only the key.
+    TooManyRedirects { limit: u32 },
     /// Any other post-connection transport failure. `message` is informational only.
     Transport { message: String },
 }
 
-/// The three test-server base URLs handed to Swift on [`HttpHarness::start_server`].
+/// The three test-server base URLs handed to Swift on [`HttpHarness::start_server`], plus the TLS
+/// material the HTTPS rows need: the good cert's DER (a trust anchor the adapter installs so its
+/// server-trust evaluation accepts the self-signed test endpoint — anchor-only for M1) and the
+/// good / untrusted SPKI hashes (32 bytes each; the pin **enforcement** that consumes them is M2,
+/// but they cross now so M2 adds no data surface).
 #[data]
 pub struct ServerInfo {
     pub http_base: String,
     pub https_base: String,
     pub https_untrusted_base: String,
+    /// The good (trusted) endpoint's certificate, DER-encoded — the adapter's trust anchor.
+    pub good_cert_der: Vec<u8>,
+    /// SHA-256 of the good cert's SubjectPublicKeyInfo (the pin that matches `https_base`).
+    pub good_spki: Vec<u8>,
+    /// SHA-256 of the untrusted cert's SPKI (a *wrong* pin for `https_base` — the rule-10 mismatch).
+    pub untrusted_spki: Vec<u8>,
 }
 
 /// One conformance row's structured outcome. `message` is the `Debug` render of the typed
@@ -138,6 +172,11 @@ pub trait HttpAdapter: Send + Sync {
     /// Dispatch a request effect. Must return promptly (URLSession `resume()` is non-blocking);
     /// the completion is delivered later, carrying the request's `token`.
     fn execute(&self, request: FfiRequest);
+
+    /// Forward a caller cancellation to the in-flight task identified by `token` (rule 9 — the
+    /// adapter cancels the `URLSessionTask`, which completes with `URLError.cancelled`, which the
+    /// adapter maps to [`FfiHttpError::Cancelled`]). A no-op if the token is unknown / already done.
+    fn cancel(&self, token: u64);
 }
 
 // =====================================================================================
@@ -147,9 +186,9 @@ pub trait HttpAdapter: Send + Sync {
 /// A parked row completion, keyed by token until the Swift adapter delivers.
 struct Pending {
     completion: Box<dyn CompletionSink>,
-    /// The row's upload-progress sink, if any. Parked for M1 (the M0 skeleton never reports
-    /// progress, so a progress-driven row terminates inconsistently — a legitimate red).
-    _progress: Option<Box<dyn UploadProgressSink>>,
+    /// The row's upload-progress sink, if any (rule 11). The Swift adapter's `didSendBodyData`
+    /// delegate re-enters [`HttpHarness::report_progress`], which forwards to this sink.
+    progress: Option<Box<dyn UploadProgressSink>>,
 }
 
 /// State shared between the `Http` shim (which needs the Swift adapter + the token registry) and
@@ -180,15 +219,39 @@ impl Http for SwiftAdapter {
                 token,
                 Pending {
                     completion,
-                    _progress: upload_progress,
+                    progress: upload_progress,
                 },
             );
         }
         // Rust → Swift: performs the request asynchronously and returns immediately.
         self.shared.adapter.execute(ffi);
-        // Cancellation is not wired to Swift in M0 (rule 9 is an M1 row); a fresh token means a
-        // cancel is a no-op, and the cancel rows report red — the honest M0 state.
-        RequestHandle::for_token(CancelToken::new())
+
+        // Bridge the contract's poll-based cancellation to the Swift task: a detached watcher polls
+        // the returned token (the Linux adapter's 10 ms poll, mirrored) and, on cancellation,
+        // forwards `adapter.cancel(token)` across the FFI so the URLSessionTask is cancelled. The
+        // watcher self-terminates when the request completes (its pending entry is removed) so no
+        // thread outlives its request.
+        let cancel_token = CancelToken::new();
+        let watcher = cancel_token.clone();
+        let shared = Arc::clone(&self.shared);
+        thread::spawn(move || {
+            loop {
+                if watcher.is_cancelled() {
+                    shared.adapter.cancel(token);
+                    break;
+                }
+                let still_pending = shared
+                    .pending
+                    .lock()
+                    .map(|p| p.contains_key(&token))
+                    .unwrap_or(false);
+                if !still_pending {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        RequestHandle::for_token(cancel_token)
     }
 }
 
@@ -243,6 +306,9 @@ impl HttpHarness {
                     http_base: server.http_base(),
                     https_base: server.https_base(),
                     https_untrusted_base: server.https_untrusted_base(),
+                    good_cert_der: endpoints.good_cert_der().to_vec(),
+                    good_spki: endpoints.good_spki().to_vec(),
+                    untrusted_spki: endpoints.untrusted_spki().to_vec(),
                 };
                 if let Ok(mut slot) = self.server.lock() {
                     *slot = Some((server, endpoints));
@@ -253,6 +319,9 @@ impl HttpHarness {
                 http_base: String::new(),
                 https_base: String::new(),
                 https_untrusted_base: String::new(),
+                good_cert_der: Vec::new(),
+                good_spki: Vec::new(),
+                untrusted_spki: Vec::new(),
             },
         }
     }
@@ -281,10 +350,44 @@ impl HttpHarness {
         pending.completion.complete(Err(to_http_error(&error)));
     }
 
-    /// Run the eleven C1 conformance rows against the registered Swift adapter and return each
-    /// row's structured result. Requires a started server; without one, every row reports the
-    /// missing-server state rather than panicking.
+    /// Upload-progress re-entry (rule 11): forward the Swift adapter's `didSendBodyData` figures to
+    /// the parked [`UploadProgressSink`] **without** removing the pending entry (progress is
+    /// repeatable; only a completion consumes the entry). `total` is `None` when the body length is
+    /// not known up front (`NSURLSessionTransferSizeUnknown`).
+    pub fn report_progress(&self, token: u64, sent: u64, total: Option<u64>) {
+        if let Ok(pending) = self.shared.pending.lock()
+            && let Some(entry) = pending.get(&token)
+            && let Some(sink) = entry.progress.as_ref()
+        {
+            sink.progress(sent, total);
+        }
+    }
+
+    /// Run the eleven C1 conformance rows against the registered Swift adapter (structured results).
+    /// Requires a started server; without one, reports the missing-server state rather than panicking.
     pub fn run_c1(&self) -> Vec<RowReport> {
+        self.run_rows(c1::rows())
+    }
+
+    /// Run the C2 error-taxonomy rows (one positive control per reachable key) against the adapter.
+    pub fn run_c2(&self) -> Vec<RowReport> {
+        self.run_rows(c2::rows())
+    }
+}
+
+impl HttpHarness {
+    /// Remove and return the parked completion for `token`, if present.
+    fn take_pending(&self, token: u64) -> Option<Pending> {
+        self.shared
+            .pending
+            .lock()
+            .ok()
+            .and_then(|mut p| p.remove(&token))
+    }
+
+    /// Drive `rows` against the registered Swift adapter over the started server, projecting each
+    /// [`RowResult`] onto a structured [`RowReport`]. Shared by [`HttpHarness::run_c1`] / `run_c2`.
+    fn run_rows(&self, rows: &[ConformanceRow]) -> Vec<RowReport> {
         let guard = match self.server.lock() {
             Ok(g) => g,
             Err(_) => return vec![no_server_report()],
@@ -299,21 +402,10 @@ impl HttpHarness {
             factory: &factory,
             endpoints,
         };
-        run(c1::rows(), &ctx)
+        run(rows, &ctx)
             .into_iter()
             .map(|(id, result)| to_row_report(id, &result))
             .collect()
-    }
-}
-
-impl HttpHarness {
-    /// Remove and return the parked completion for `token`, if present.
-    fn take_pending(&self, token: u64) -> Option<Pending> {
-        self.shared
-            .pending
-            .lock()
-            .ok()
-            .and_then(|mut p| p.remove(&token))
     }
 }
 
@@ -362,16 +454,30 @@ fn to_http_response(response: &FfiResponse) -> Result<HttpResponse, HttpError> {
             headers.append(name, value);
         }
     }
-    // M0 reports the version as HTTP/1.1 unconditionally (the real observable is an M1 concern).
+    // M1: the version is the adapter's real `URLSessionTaskMetrics` observable, not a placeholder.
+    // `content_length` is the decoded in-memory body length — always honest for a `Memory` sink
+    // (`Some(n)` promises `n` decoded bytes), so rule 7's decoded-gzip length check is satisfied
+    // without ever reporting the compressed transport figure (§5.12).
     let built = HttpResponse::builder(
         StatusCode::new(response.status),
         url,
-        HttpVersion::Http1_1,
+        to_http_version(response.http_version),
         BodyOutcome::Memory(response.body.clone()),
     )
     .headers(headers)
+    .content_length(Some(response.body.len() as u64))
     .build();
     Ok(built)
+}
+
+/// Map the FFI version mirror to the contract [`HttpVersion`].
+fn to_http_version(version: FfiHttpVersion) -> HttpVersion {
+    match version {
+        FfiHttpVersion::Http1_0 => HttpVersion::Http1_0,
+        FfiHttpVersion::Http1_1 => HttpVersion::Http1_1,
+        FfiHttpVersion::Http2 => HttpVersion::Http2,
+        FfiHttpVersion::Http3 => HttpVersion::Http3,
+    }
 }
 
 /// Map the FFI error key to the contract [`HttpError`].
@@ -384,6 +490,7 @@ fn to_http_error(error: &FfiHttpError) -> HttpError {
         FfiHttpError::Tls => HttpError::Tls {
             kind: TlsErrorKind::HandshakeFailure,
         },
+        FfiHttpError::TooManyRedirects { limit } => HttpError::TooManyRedirects { limit: *limit },
         FfiHttpError::Transport { .. } => HttpError::Transport,
     }
 }
