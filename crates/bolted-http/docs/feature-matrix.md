@@ -121,10 +121,10 @@ contract, the rest in types):
 | 13 | Download progress (total = `Option`) | CORE | Portable, but totals lie under compression — total is always optional (§5.9) |
 | 14 | Upload progress | CORE(adapter) | Upgraded from CAP: OS-fed on Apple; sink/stream wrapping on OkHttp/.NET/reqwest (§5.9) |
 | 15 | Response body sink: `Memory` \| `File` | CORE(adapter) | Native `downloadTask` on Apple; stream-copy synthesis on the other three (§5.10) |
-| 16 | Response streaming (chunked delivery) | CORE, gated | Platform-portable everywhere; the remaining gate is FFI mechanism at boltffi ≥0.27.5 (§5.11) |
+| 16 | Response streaming (chunked delivery) | CORE — decided | Gate cleared (step 24 S-FFI, 2026-07-19): all three shapes 100/100 at 0.27.5 in the http round-trip; mechanism = `ffi_stream` async push (F1), callback push (F2) recorded as perf alternative — `crates/spike-http-ffi/docs/sffi-streaming-verdict.md`. Core seam (chunk re-entry, back-pressure, end-of-body) is freeze-session work (§5.11) |
 | 17 | Decoded bodies; `content_length` advisory | CORE | Adapters must normalize (gzip/brotli/zstd transport-owned) (§5.12) |
 | 18 | Metrics (phase timings, TLS detail) | CAP (tiered) | Rich Apple/.NET/OkHttp; coarse Linux — reqwest has no phase seam to synthesize from (§5.13) |
-| 19 | Pinning (declarative SPKI) | CORE(adapter), gated | Upgraded from CAP: native on Android; adapter code on Apple/.NET/Linux — Linux feasibility spike-gated (§5.14) |
+| 19 | Pinning (declarative SPKI) | CORE(adapter) — decided | Linux gate cleared (step 24 L2, 2026-07-19): rustls custom verifier = real WebPKI chain+hostname AND SHA-256-SPKI pins, mismatch ⇒ typed `PinMismatch`; proven in `bolted-http-linux` against real certs. Native on Android; adapter code on Apple/.NET (§5.14) |
 | 20 | Errors as typed keys | CORE | Taxonomy grows: permission-denied, cancelled-vs-timeout (§5.15) |
 | 21 | Cancellation of in-flight effects | CORE | Everywhere; pause/resume of foreground calls exists nowhere (§5.16) |
 | 22 | Retry | split | Connection-level recovery = CFG; request-level retry = the core's job (§5.17) |
@@ -437,8 +437,11 @@ cost, and the suite is where it is paid:
 
 ## 8. Still open after this round
 
-- **FFI streaming mechanism** (§5.11) — the one gate on row 16; spike S-FFI decides.
-- **Pinning-on-Linux feasibility** (§5.14) — the gate on row 19; spike S-LX2 decides.
+- ~~**FFI streaming mechanism** (§5.11)~~ — **decided by S-FFI (step 24, 2026-07-19): F1
+  `ffi_stream` async push**; row 16 is CORE. The *core seam* (chunk re-entry, back-pressure,
+  end-of-body) is the freeze session's.
+- ~~**Pinning-on-Linux feasibility** (§5.14)~~ — **decided by S-LX2 (step 24, 2026-07-19):
+  feasible**; row 19 stands as CORE(adapter).
 - **Cookie capability shape** (§5.20) — design session, when a feature needs it.
 - **WebSocket family** (§2) — protected possibility, undesigned.
 - ~~**`FileRef`** (§5.10) — its home (bolted-core? bolted-http?)~~ — **decided 2026-07-19
