@@ -28,6 +28,25 @@ pub trait CompletionSink: MaybeSend {
     fn complete(self: Box<Self>, outcome: Result<HttpResponse, HttpError>);
 }
 
+/// An observer of upload progress for one request (feature-matrix row 14, §5.9, rule 11).
+///
+/// **Repeatable** (unlike [`CompletionSink`], which is one-shot): `progress` is called zero or more
+/// times as the request body is handed off, then the request terminates through `completion`.
+///
+/// Contract semantics (rule 11 — the suite pins exactly this, no more):
+/// - `sent` is **monotone non-decreasing** within one attempt.
+/// - Terminally **consistent with the completion**: on success, the final `sent` equals the body
+///   length when that length is known (`total = Some(len)`).
+/// - **Indicative, not wire-truth.** Synthesized figures measure buffer hand-off, not bytes on the
+///   wire (Apple's `didSendBodyData` is OS-fed; OkHttp/.NET/reqwest wrap the body sink). The
+///   contract never promises wire bytes, so the suite never asserts them.
+///
+/// `total` is `Some(len)` when the body length is known up front, `None` otherwise.
+pub trait UploadProgressSink: MaybeSend {
+    /// Report cumulative bytes handed off (`sent`) against the optional known total.
+    fn progress(&self, sent: u64, total: Option<u64>);
+}
+
 /// The HTTP capability: dispatch a request effect; the adapter performs it (out of this crate)
 /// and delivers the completion to `completion`.
 ///
@@ -35,8 +54,14 @@ pub trait CompletionSink: MaybeSend {
 pub trait Http: MaybeSend {
     /// Dispatch `request`. Returns immediately with a [`RequestHandle`] for cancellation; the
     /// terminal outcome arrives later (or synchronously, for an in-memory adapter) via
-    /// `completion`.
-    fn send(&self, request: HttpRequest, completion: Box<dyn CompletionSink>) -> RequestHandle;
+    /// `completion`. When `upload_progress` is `Some`, the adapter reports body hand-off progress
+    /// through it (row 14 / rule 11) — repeatable, terminating consistently with `completion`.
+    fn send(
+        &self,
+        request: HttpRequest,
+        completion: Box<dyn CompletionSink>,
+        upload_progress: Option<Box<dyn UploadProgressSink>>,
+    ) -> RequestHandle;
 }
 
 /// A cooperative cancellation flag shared between the caller (via [`RequestHandle`]) and the

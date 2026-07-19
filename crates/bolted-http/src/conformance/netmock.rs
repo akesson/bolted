@@ -28,9 +28,11 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use super::AdapterFactory;
 use super::wire::{self, ReadWrite};
-use crate::capability::{CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle};
+use crate::capability::{
+    CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, UploadProgressSink,
+};
 use crate::error::{HttpError, TlsErrorKind};
-use crate::request::{HttpRequest, RequestBody, SpkiPin, Url};
+use crate::request::{HttpRequest, RequestBody, ResponseSink, SpkiPin, Url};
 use crate::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
 
 /// Global nonce source for the non-deterministic red-twin (rule 1). Every read is unique.
@@ -61,6 +63,16 @@ pub struct MockBehavior {
     pub retry_on_transport: bool,
     /// The redirect-follow ceiling (TooManyRedirects beyond it).
     pub redirect_limit: u32,
+    /// Honour a [`ResponseSink::File`] request by writing the body to the path (row 15). Off ⇒ the
+    /// sink is ignored and a `Memory` outcome is returned for a `File` request (the sink-drop break;
+    /// it also makes the `Io` positive control unreachable, since no file write is attempted).
+    pub honor_file_sink: bool,
+    /// Report an honest `content_length` under decoding — `None` for a gzip body (rule 7 / §5.12).
+    /// Off ⇒ the compressed transport length is reported under decoding (the dishonesty break).
+    pub honest_content_length: bool,
+    /// Report monotone, terminally-consistent upload progress (rule 11). Off ⇒ a non-monotone
+    /// 100%-jump-then-drop sequence (the naïve-wrapper break).
+    pub honest_upload_progress: bool,
 }
 
 impl MockBehavior {
@@ -78,6 +90,9 @@ impl MockBehavior {
             deterministic: true,
             retry_on_transport: false,
             redirect_limit: 10,
+            honor_file_sink: true,
+            honest_content_length: true,
+            honest_upload_progress: true,
         }
     }
 }
@@ -139,14 +154,19 @@ impl Metrics for SocketMock {
 }
 
 impl Http for SocketMock {
-    fn send(&self, request: HttpRequest, completion: Box<dyn CompletionSink>) -> RequestHandle {
+    fn send(
+        &self,
+        request: HttpRequest,
+        completion: Box<dyn CompletionSink>,
+        upload_progress: Option<Box<dyn UploadProgressSink>>,
+    ) -> RequestHandle {
         let token = CancelToken::new();
         let worker_token = token.clone();
         let me = self.clone();
         // One worker thread per request: it may block on I/O, and the caller needs the handle back
         // immediately to be able to cancel (rule 9). Not an async runtime — one thread, one effect.
         thread::spawn(move || {
-            let outcome = me.perform(&request, &worker_token);
+            let outcome = me.perform(&request, &worker_token, upload_progress.as_deref());
             completion.complete(outcome);
         });
         RequestHandle::for_token(token)
@@ -173,6 +193,7 @@ impl SocketMock {
         &self,
         request: &HttpRequest,
         token: &CancelToken,
+        progress: Option<&dyn UploadProgressSink>,
     ) -> Result<HttpResponse, HttpError> {
         let start = Instant::now();
         let deadline_at = self
@@ -185,7 +206,7 @@ impl SocketMock {
 
         loop {
             let parsed = parse_url(current.as_str()).ok_or(HttpError::Connect)?;
-            let exchange = self.exchange(request, &current, &parsed, deadline_at, token);
+            let exchange = self.exchange(request, &current, &parsed, deadline_at, token, progress);
             let head = exchange?;
 
             if let Some(location) = redirect_location(head.status, &head.headers_raw) {
@@ -212,10 +233,21 @@ impl SocketMock {
 
             // Terminal response.
             let mut body = head.body;
+            // Honest content_length (rule 7 / §5.12): the wire length is honest for an un-decoded
+            // body; under gzip decoding it would be a lie, so the honest answer is None.
+            let mut content_length: Option<u64> =
+                content_length(&head.headers_raw).map(|n| n as u64);
             if self.behavior.decode_gzip
                 && header_has(&head.headers_raw, "content-encoding", "gzip")
             {
+                let compressed_len = body.len() as u64;
                 body = wire::gunzip(&body).map_err(|_| HttpError::Transport)?;
+                content_length = if self.behavior.honest_content_length {
+                    None
+                } else {
+                    // The dishonesty break: report the compressed transport length under decoding.
+                    Some(compressed_len)
+                };
             }
             if !self.behavior.deterministic {
                 // The nondeterminism break: two identical requests now differ (rule 1).
@@ -223,12 +255,23 @@ impl SocketMock {
                 body.extend_from_slice(format!("#{n}").as_bytes());
             }
 
+            // Deliver to the requested sink (row 15). A File-sink write failure is Io; the
+            // ignore-file-sink break wrongly returns Memory for a File request.
+            let outcome = match request.response_sink() {
+                ResponseSink::File(file_ref) if self.behavior.honor_file_sink => {
+                    std::fs::write(file_ref.as_path(), &body).map_err(|_| HttpError::Io)?;
+                    BodyOutcome::File(file_ref.clone())
+                }
+                _ => BodyOutcome::Memory(body),
+            };
+
             let mut resp = HttpResponse::builder(
                 StatusCode::new(head.status),
                 current.clone(),
                 HttpVersion::Http1_1,
-                BodyOutcome::Memory(body),
-            );
+                outcome,
+            )
+            .content_length(content_length);
             for h in hops {
                 resp = resp.hop(h);
             }
@@ -254,10 +297,11 @@ impl SocketMock {
         parsed: &ParsedUrl,
         deadline_at: Option<Instant>,
         token: &CancelToken,
+        progress: Option<&dyn UploadProgressSink>,
     ) -> Result<Head, HttpError> {
-        let mut last = self.exchange_once(request, url, parsed, deadline_at, token);
+        let mut last = self.exchange_once(request, url, parsed, deadline_at, token, progress);
         if self.behavior.retry_on_transport && matches!(last, Err(HttpError::Transport)) {
-            last = self.exchange_once(request, url, parsed, deadline_at, token);
+            last = self.exchange_once(request, url, parsed, deadline_at, token, progress);
         }
         last
     }
@@ -269,6 +313,7 @@ impl SocketMock {
         parsed: &ParsedUrl,
         deadline_at: Option<Instant>,
         token: &CancelToken,
+        progress: Option<&dyn UploadProgressSink>,
     ) -> Result<Head, HttpError> {
         // Resolve first: a name that will not resolve is NameResolution, distinct from a refused
         // connection (Connect).
@@ -295,7 +340,7 @@ impl SocketMock {
         );
 
         let tls_reject: Arc<Mutex<Option<TlsReject>>> = Arc::new(Mutex::new(None));
-        let result = self.exchange_io(request, url, parsed, &tls_reject, &tcp);
+        let result = self.exchange_io(request, url, parsed, &tls_reject, &tcp, progress);
 
         done.store(true, Ordering::SeqCst);
         let _ = watchdog.join();
@@ -314,6 +359,7 @@ impl SocketMock {
         parsed: &ParsedUrl,
         tls_reject: &Arc<Mutex<Option<TlsReject>>>,
         tcp: &TcpStream,
+        progress: Option<&dyn UploadProgressSink>,
     ) -> io::Result<Head> {
         let mut transport: Box<dyn ReadWrite> = match parsed.scheme {
             Scheme::Http => Box::new(tcp.try_clone()?),
@@ -354,8 +400,9 @@ impl SocketMock {
         };
         out.extend_from_slice(format!("content-length: {}\r\n", body_bytes.len()).as_bytes());
         out.extend_from_slice(b"connection: close\r\n\r\n");
-        out.extend_from_slice(body_bytes);
+        // Head first, then the body in chunks so upload progress reflects the hand-off (rule 11).
         t.write_all(&out)?;
+        self.write_body_with_progress(t, body_bytes, progress)?;
         t.flush()?;
 
         // Response head + body.
@@ -384,6 +431,42 @@ impl SocketMock {
             headers_raw,
             body,
         })
+    }
+
+    /// Write the request body, reporting upload progress as it is handed off (row 14 / rule 11).
+    /// The correct mock reports a monotone, terminally-consistent sequence (cumulative `sent`,
+    /// ending exactly at the body length); the `honest_upload_progress = false` twin reports a
+    /// non-monotone 100%-jump-then-drop sequence, the naïve-wrapper bug the rule must catch.
+    fn write_body_with_progress(
+        &self,
+        t: &mut dyn ReadWrite,
+        body: &[u8],
+        progress: Option<&dyn UploadProgressSink>,
+    ) -> io::Result<()> {
+        let total = body.len() as u64;
+        if body.is_empty() {
+            return Ok(());
+        }
+        // A handful of chunks so honest progress is a real monotone sequence, not one point.
+        let chunk = (body.len() / 4).max(1);
+        let mut sent = 0u64;
+        for piece in body.chunks(chunk) {
+            t.write_all(piece)?;
+            sent += piece.len() as u64;
+            if let Some(p) = progress
+                && self.behavior.honest_upload_progress
+            {
+                p.progress(sent, Some(total));
+            }
+        }
+        if let Some(p) = progress
+            && !self.behavior.honest_upload_progress
+        {
+            p.progress(total, Some(total));
+            p.progress(0, Some(total));
+            p.progress(total, Some(total));
+        }
+        Ok(())
     }
 }
 

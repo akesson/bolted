@@ -27,7 +27,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::capability::{CompletionSink, Http, Metrics, PriorityHint};
+use std::sync::{Arc, Mutex};
+
+use crate::capability::{CompletionSink, Http, Metrics, PriorityHint, UploadProgressSink};
 use crate::error::HttpError;
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
@@ -126,12 +128,43 @@ pub enum FailureReason {
         /// How many connections the endpoint saw.
         connections: usize,
     },
+    /// The delivered body sink did not correspond to the requested [`crate::ResponseSink`]
+    /// (row 15): a `File` request came back as `Memory`, or vice versa, or the file contents
+    /// did not match the body.
+    WrongSink,
+    /// A decoded body reported a dishonest `content_length` (rule 7 / §5.12): under decoding the
+    /// only honest answers are `None` or the decoded length; the adapter reported the compressed
+    /// figure instead.
+    DishonestContentLength {
+        /// The length the adapter reported.
+        got: u64,
+        /// The decoded body length (the only honest non-`None` value).
+        decoded: u64,
+    },
+    /// Upload progress went backwards within one attempt (rule 11 — not monotone).
+    ProgressNotMonotone {
+        /// The previously reported cumulative `sent`.
+        prev: u64,
+        /// The lower value reported after it.
+        got: u64,
+    },
+    /// Upload progress did not terminate consistently with the completion (rule 11): the final
+    /// `sent` did not equal the known body length.
+    ProgressNotTerminal {
+        /// The final `sent` reported (0 when no progress arrived at all).
+        got: u64,
+        /// The body length the final `sent` had to reach.
+        expected: u64,
+    },
 }
 
-/// Why a row could not be expressed (recorded, for the report — never a silent pass).
+/// Why a row could not be expressed (recorded, for the report — never a silent pass). As of M1.5
+/// no C1/C2 row skips — the M1 contract gaps (response-sink selector, upload-progress surface) are
+/// closed — but the variant stays: a later adapter row (e.g. a platform-only behaviour) may still
+/// have no host-expressible surface, and recording that beats a silently-green needle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SkipReason {
-    /// The M0 contract has no surface for this behaviour yet (e.g. upload-progress observation).
+    /// The contract has no host-expressible surface for this behaviour; recorded, not skipped.
     NoContractSurface {
         /// A short identifier of the missing surface.
         capability: &'static str,
@@ -272,8 +305,52 @@ pub(crate) fn drive_once(
     budget: Duration,
 ) -> Option<Result<HttpResponse, HttpError>> {
     let (tx, rx) = mpsc::channel();
-    let _handle = adapter.send(request, Box::new(ChannelSink(tx)));
+    let _handle = adapter.send(request, Box::new(ChannelSink(tx)), None);
     rx.recv_timeout(budget).ok()
+}
+
+/// A recorded upload-progress sequence: `(sent, total)` samples in call order (rule 11).
+pub(crate) type ProgressSamples = Vec<(u64, Option<u64>)>;
+
+/// A [`UploadProgressSink`] that records every `(sent, total)` reported, for rule 11's judgement.
+#[derive(Clone, Default)]
+pub(crate) struct RecordingProgress(Arc<Mutex<ProgressSamples>>);
+
+impl RecordingProgress {
+    pub(crate) fn new() -> Self {
+        RecordingProgress(Arc::new(Mutex::new(Vec::new())))
+    }
+
+    /// The recorded `(sent, total)` samples, in call order.
+    pub(crate) fn samples(&self) -> ProgressSamples {
+        self.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
+impl UploadProgressSink for RecordingProgress {
+    fn progress(&self, sent: u64, total: Option<u64>) {
+        if let Ok(mut g) = self.0.lock() {
+            g.push((sent, total));
+        }
+    }
+}
+
+/// Send one request with an attached [`RecordingProgress`] sink; return the completion and the
+/// recorded progress samples. `None` completion if nothing arrives within `budget`.
+pub(crate) fn drive_with_progress(
+    adapter: &dyn Http,
+    request: HttpRequest,
+    budget: Duration,
+) -> (Option<Result<HttpResponse, HttpError>>, ProgressSamples) {
+    let (tx, rx) = mpsc::channel();
+    let recorder = RecordingProgress::new();
+    let _handle = adapter.send(
+        request,
+        Box::new(ChannelSink(tx)),
+        Some(Box::new(recorder.clone())),
+    );
+    let outcome = rx.recv_timeout(budget).ok();
+    (outcome, recorder.samples())
 }
 
 /// Send one request, cancel it after `cancel_after`, and collect the completion (or `None` if the
@@ -285,7 +362,7 @@ pub(crate) fn drive_cancel(
     budget: Duration,
 ) -> Option<Result<HttpResponse, HttpError>> {
     let (tx, rx) = mpsc::channel();
-    let handle = adapter.send(request, Box::new(ChannelSink(tx)));
+    let handle = adapter.send(request, Box::new(ChannelSink(tx)), None);
     thread::sleep(cancel_after);
     handle.cancel();
     rx.recv_timeout(budget).ok()

@@ -12,7 +12,7 @@ use std::time::Duration;
 use super::{Cluster, ConformanceCtx, ConformanceRow, FailureReason, RowResult};
 use super::{drive_cancel, drive_once};
 use crate::error::HttpErrorKey;
-use crate::request::{HttpRequest, Method, PinSet, Url};
+use crate::request::{FileRef, HttpRequest, Method, PinSet, ResponseSink, Url};
 
 /// Every taxonomy key, in a stable order. The [`reachability`] match is the real completeness
 /// guard; this list drives the coverage test.
@@ -54,15 +54,13 @@ pub fn reachability(key: HttpErrorKey) -> Reachability {
         HttpErrorKey::Transport => Reachability::Reachable,
         HttpErrorKey::InsecureRedirect => Reachability::Reachable,
         HttpErrorKey::TooManyRedirects => Reachability::Reachable,
+        // M1.5: the request-side response-sink selector ([`crate::ResponseSink::File`]) makes a
+        // file-sink write failure reachable — drive a File sink at an unwritable path.
+        HttpErrorKey::Io => Reachability::Reachable,
         HttpErrorKey::PermissionDenied => Reachability::AdapterOnly(
             "OS local-network permission (Android 16→17 EPERM / Apple Local Network prompt): a host \
              test server cannot make the OS deny permission. Positive control lands in the Apple / \
              Android adapter suites (steps 25/26).",
-        ),
-        HttpErrorKey::Io => Reachability::ContractGap(
-            "no request-side response-sink selector in the M0 contract (row 15's Memory|File sink is \
-             a response outcome, not a request choice), so the mock never performs response file I/O \
-             that could fail. Reachable once the sink selector exists, else adapter-only.",
         ),
     }
 }
@@ -73,7 +71,7 @@ pub fn rows() -> &'static [ConformanceRow] {
     &ROWS
 }
 
-static ROWS: [ConformanceRow; 9] = [
+static ROWS: [ConformanceRow; 10] = [
     row("C2/key-timeout", HttpErrorKey::Timeout, c2_timeout),
     row("C2/key-cancelled", HttpErrorKey::Cancelled, c2_cancelled),
     row(
@@ -99,6 +97,7 @@ static ROWS: [ConformanceRow; 9] = [
         HttpErrorKey::TooManyRedirects,
         c2_too_many_redirects,
     ),
+    row("C2/key-io", HttpErrorKey::Io, c2_io),
 ];
 
 const fn row(
@@ -244,6 +243,23 @@ fn c2_too_many_redirects(ctx: &ConformanceCtx) -> RowResult {
     drive_expect_key(ctx, req, HttpErrorKey::TooManyRedirects, None)
 }
 
+/// The `Io` positive control (M1.5): a successful response driven into a [`ResponseSink::File`] at
+/// an **unwritable** path (a parent directory that does not exist) must surface `Io`, not success.
+fn c2_io(ctx: &ConformanceCtx) -> RowResult {
+    let url = match err_row(Url::cleartext_dev(&ctx.endpoints.http("/ok")).map_err(|_| ())) {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    // A path whose parent directory does not exist ⇒ the file write fails ⇒ Io.
+    let unwritable = std::env::temp_dir()
+        .join(format!("bolted-http-nonexistent-{}", std::process::id()))
+        .join("out.bin");
+    let req = HttpRequest::builder(Method::Get, url, Duration::from_secs(5))
+        .response_sink(ResponseSink::File(FileRef::new(unwritable)))
+        .build();
+    drive_expect_key(ctx, req, HttpErrorKey::Io, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,14 +289,15 @@ mod tests {
             rows().len(),
             "every reachable key must have exactly one positive-control row"
         );
-        // The two deliberately-unreachable keys, pinned so a silent regression is caught.
+        // PermissionDenied stays adapter-only (no host control); Io is now reachable via the
+        // request-side File sink (M1.5). Pinned so a silent regression is caught.
         assert!(matches!(
             reachability(HttpErrorKey::PermissionDenied),
             Reachability::AdapterOnly(_)
         ));
         assert!(matches!(
             reachability(HttpErrorKey::Io),
-            Reachability::ContractGap(_)
+            Reachability::Reachable
         ));
     }
 
@@ -405,5 +422,13 @@ mod tests {
             c2_too_many_redirects(&ctx_of(&f, &ep)),
             RowResult::Fail(_)
         ));
+    }
+
+    #[test]
+    fn io_red_when_file_sink_ignored() {
+        // The ignore-file-sink break skips the write ⇒ a Memory success where Io was required.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honor_file_sink = false);
+        assert!(matches!(c2_io(&ctx_of(&f, &ep)), RowResult::Fail(_)));
     }
 }

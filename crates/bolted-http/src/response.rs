@@ -68,6 +68,7 @@ pub struct HttpResponse {
     final_url: Url,
     hops: Vec<Url>,
     version: HttpVersion,
+    content_length: Option<u64>,
 }
 
 impl HttpResponse {
@@ -86,6 +87,7 @@ impl HttpResponse {
             final_url,
             hops: Vec::new(),
             version,
+            content_length: None,
         }
     }
 
@@ -125,6 +127,15 @@ impl HttpResponse {
     pub fn version(&self) -> HttpVersion {
         self.version
     }
+
+    /// The advisory body length (feature-matrix row 13/17, §5.12). **`None`-or-honest**: bodies are
+    /// always decoded, and a transport length that would lie under decoding (gzip/brotli/zstd strip
+    /// or invalidate `Content-Length`) is reported as `None`, never the compressed figure. `Some(n)`
+    /// is a promise the delivered body is `n` decoded bytes. Never a "raw body" length.
+    #[must_use]
+    pub fn content_length(&self) -> Option<u64> {
+        self.content_length
+    }
 }
 
 /// Builder for [`HttpResponse`].
@@ -137,6 +148,7 @@ pub struct ResponseBuilder {
     final_url: Url,
     hops: Vec<Url>,
     version: HttpVersion,
+    content_length: Option<u64>,
 }
 
 impl ResponseBuilder {
@@ -152,6 +164,13 @@ impl ResponseBuilder {
         self
     }
 
+    /// Set the advisory decoded body length (row 13/17). `None` (the default) is the honest answer
+    /// whenever a transport length would be a lie under decoding (§5.12).
+    pub fn content_length(mut self, content_length: Option<u64>) -> Self {
+        self.content_length = content_length;
+        self
+    }
+
     /// Finish building.
     #[must_use]
     pub fn build(self) -> HttpResponse {
@@ -162,6 +181,7 @@ impl ResponseBuilder {
             final_url: self.final_url,
             hops: self.hops,
             version: self.version,
+            content_length: self.content_length,
         }
     }
 }
@@ -191,5 +211,20 @@ mod tests {
         assert_eq!(resp.version(), HttpVersion::Http2);
         assert!(resp.hops().is_empty());
         assert!(resp.headers().is_empty());
+        assert_eq!(resp.content_length(), None);
+    }
+
+    #[test]
+    fn content_length_is_none_or_honest() {
+        let url = Url::https("https://example.test/").expect("valid url");
+        let honest = HttpResponse::builder(
+            StatusCode::OK,
+            url,
+            HttpVersion::Http2,
+            BodyOutcome::Memory(vec![0u8; 12]),
+        )
+        .content_length(Some(12))
+        .build();
+        assert_eq!(honest.content_length(), Some(12));
     }
 }

@@ -165,4 +165,17 @@ metrics        | absent";
         let table = divergence(&MockFactory::correct());
         assert_eq!(table.render(), EXPECTED_SCRIPTED_MOCK);
     }
+
+    /// The three M1.5 additions (response-sink selector, upload-progress sink, `content_length`) are
+    /// **CORE** request/response/callback surfaces, not optional capability traits — so the
+    /// divergence columns are unchanged. `UploadProgressSink` is a per-request callback passed to
+    /// `Http::send`, not an `AdapterFactory` capability; it must never grow a `Capability` column.
+    #[test]
+    fn m1_5_additions_are_core_not_capabilities() {
+        assert_eq!(Capability::ALL.len(), 2);
+        assert_eq!(
+            Capability::ALL,
+            &[Capability::PriorityHint, Capability::Metrics]
+        );
+    }
 }

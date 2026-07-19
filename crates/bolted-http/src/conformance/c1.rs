@@ -8,15 +8,21 @@
 //!
 //! Rule 6's compile-time half is proven by M0's `compile_fail` doctest on `RequestHeaderName`;
 //! this module's rule-6 row covers the runtime half (a permitted header is never silently dropped).
-//! Rule 11 (upload progress) is [`RowResult::Skipped`]: the M0 contract exposes no progress
-//! observation surface — recorded, not silently green (see the M5 report).
+//! Rule 11 (upload progress) drives a real POST upload and pins monotonicity + terminal consistency
+//! against a recording progress sink (M1.5 closed the M1 contract gap — the progress surface now
+//! exists on [`crate::Http::send`]). No C1 row skips.
+//!
+//! Beyond the eleven §7 rules, [`extra_rows`] carries the **row-15 response-sink correspondence**
+//! row (a `Memory` request yields a `Memory` outcome, a `File` request yields a `File` outcome with
+//! matching contents) — a C1-adjacent matrix row, watched red the same way.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use super::{Cluster, ConformanceCtx, ConformanceRow, FailureReason, RowResult, SkipReason};
-use super::{drive_cancel, drive_once};
+use super::{Cluster, ConformanceCtx, ConformanceRow, FailureReason, RowResult};
+use super::{drive_cancel, drive_once, drive_with_progress};
 use crate::error::HttpErrorKey;
-use crate::request::{HttpRequest, Method, PinSet, Url};
+use crate::request::{FileRef, HttpRequest, Method, PinSet, RequestBody, ResponseSink, Url};
 use crate::response::{BodyOutcome, HttpResponse};
 
 /// The eleven C1 rows.
@@ -245,16 +251,26 @@ fn rule_06(ctx: &ConformanceCtx) -> RowResult {
     }
 }
 
-/// Rule 7: a gzip body is decoded to the identical plaintext bytes.
+/// Rule 7: a gzip body is decoded to the identical plaintext bytes, and `content_length` is honest
+/// under decoding — `None` or the decoded length, never the compressed transport figure (§5.12).
 fn rule_07(ctx: &ConformanceCtx) -> RowResult {
     let url = match http_url(ctx, "/gzip") {
         Ok(u) => u,
         Err(e) => return e,
     };
     let req = HttpRequest::builder(Method::Get, url, Duration::from_secs(5)).build();
+    let decoded_len = super::server::GZIP_PLAINTEXT.len() as u64;
     match drive_once(ctx.factory.new_adapter().as_ref(), req, BUDGET) {
         Some(Ok(r)) => match memory(&r) {
-            Some(body) if body == super::server::GZIP_PLAINTEXT => RowResult::Pass,
+            Some(body) if body == super::server::GZIP_PLAINTEXT => match r.content_length() {
+                // Honest: absent, or exactly the decoded length. A compressed figure is a lie.
+                None => RowResult::Pass,
+                Some(n) if n == decoded_len => RowResult::Pass,
+                Some(n) => RowResult::Fail(FailureReason::DishonestContentLength {
+                    got: n,
+                    decoded: decoded_len,
+                }),
+            },
             _ => RowResult::Fail(FailureReason::WrongBody),
         },
         Some(Err(e)) => RowResult::Fail(FailureReason::ExpectedSuccessGotError { got: e.key() }),
@@ -355,13 +371,107 @@ fn rule_10(ctx: &ConformanceCtx) -> RowResult {
     }
 }
 
-/// Rule 11: upload progress is monotone per attempt and terminally consistent — **not expressible
-/// against the M0 contract** (no progress-observation surface on `Http::send`; row 14 / §5.9 is a
-/// CORE(adapter) synthesis whose contract API is unbuilt). Recorded, not silently green.
-fn rule_11(_ctx: &ConformanceCtx) -> RowResult {
-    RowResult::Skipped(SkipReason::NoContractSurface {
-        capability: "upload-progress",
-    })
+/// Rule 11: upload progress is monotone per attempt and terminally consistent with the completion.
+/// Drives a real POST upload with a recording progress sink; the suite never asserts wire-truth,
+/// only monotonicity + the terminal equality with the known body length (§5.9, row 14).
+fn rule_11(ctx: &ConformanceCtx) -> RowResult {
+    let url = match http_url(ctx, "/echo") {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    let body = vec![b'u'; 256];
+    let body_len = body.len() as u64;
+    let req = HttpRequest::builder(Method::Post, url, Duration::from_secs(5))
+        .body(RequestBody::Bytes(body))
+        .build();
+    let (outcome, samples) = drive_with_progress(ctx.factory.new_adapter().as_ref(), req, BUDGET);
+    match outcome {
+        Some(Ok(_)) => judge_progress(&samples, body_len),
+        Some(Err(e)) => RowResult::Fail(FailureReason::ExpectedSuccessGotError { got: e.key() }),
+        None => RowResult::Fail(FailureReason::NoCompletion),
+    }
+}
+
+/// Judge a recorded progress sequence against rule 11: monotone non-decreasing `sent`, and a final
+/// `sent` equal to the known body length (terminal consistency). Never compares to wire bytes.
+fn judge_progress(samples: &[(u64, Option<u64>)], body_len: u64) -> RowResult {
+    let mut prev = 0u64;
+    for &(sent, _total) in samples {
+        if sent < prev {
+            return RowResult::Fail(FailureReason::ProgressNotMonotone { prev, got: sent });
+        }
+        prev = sent;
+    }
+    let final_sent = samples.last().map(|&(s, _)| s).unwrap_or(0);
+    if final_sent == body_len {
+        RowResult::Pass
+    } else {
+        RowResult::Fail(FailureReason::ProgressNotTerminal {
+            got: final_sent,
+            expected: body_len,
+        })
+    }
+}
+
+/// The row-15 response-sink-correspondence rows (C1-adjacent; the eleven §7 rules stay in [`rows`]).
+#[must_use]
+pub fn extra_rows() -> &'static [ConformanceRow] {
+    &SINK_ROWS
+}
+
+static SINK_ROWS: [ConformanceRow; 1] = [row(
+    "C1/row-15-response-sink-correspondence",
+    row_15_sink_correspondence,
+)];
+
+/// Unique-per-drive suffix for the file-sink temp path (avoids collisions across parallel rows).
+static SINK_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Row 15: the delivered [`BodyOutcome`] corresponds to the requested [`ResponseSink`] — a `Memory`
+/// request yields `Memory`, a `File(path)` request yields `File(path)` with the body written there.
+fn row_15_sink_correspondence(ctx: &ConformanceCtx) -> RowResult {
+    // Memory sink ⇒ Memory outcome.
+    let mem_url = match http_url(ctx, "/ok") {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    let mem_req = HttpRequest::builder(Method::Get, mem_url, Duration::from_secs(5))
+        .response_sink(ResponseSink::Memory)
+        .build();
+    match drive_once(ctx.factory.new_adapter().as_ref(), mem_req, BUDGET) {
+        Some(Ok(r)) if matches!(r.body(), BodyOutcome::Memory(_)) => {}
+        Some(Ok(_)) => return RowResult::Fail(FailureReason::WrongSink),
+        Some(Err(e)) => {
+            return RowResult::Fail(FailureReason::ExpectedSuccessGotError { got: e.key() });
+        }
+        None => return RowResult::Fail(FailureReason::NoCompletion),
+    }
+
+    // File sink ⇒ File outcome at that path, with the response body written there.
+    let file_url = match http_url(ctx, "/ok") {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+    let n = SINK_NONCE.fetch_add(1, Ordering::SeqCst);
+    let path =
+        std::env::temp_dir().join(format!("bolted-http-sink-{}-{n}.bin", std::process::id()));
+    let file_req = HttpRequest::builder(Method::Get, file_url, Duration::from_secs(5))
+        .response_sink(ResponseSink::File(FileRef::new(path.clone())))
+        .build();
+    let result = match drive_once(ctx.factory.new_adapter().as_ref(), file_req, BUDGET) {
+        Some(Ok(r)) => match r.body() {
+            BodyOutcome::File(got) if got.as_path() == path.as_path() => match std::fs::read(&path)
+            {
+                Ok(bytes) if bytes == b"ok" => RowResult::Pass,
+                _ => RowResult::Fail(FailureReason::WrongSink),
+            },
+            _ => RowResult::Fail(FailureReason::WrongSink),
+        },
+        Some(Err(e)) => RowResult::Fail(FailureReason::ExpectedSuccessGotError { got: e.key() }),
+        None => RowResult::Fail(FailureReason::NoCompletion),
+    };
+    let _ = std::fs::remove_file(&path);
+    result
 }
 
 #[cfg(test)]
@@ -394,14 +504,12 @@ mod tests {
             factory: &factory,
             endpoints: &ep,
         };
-        let results = run(rows(), &ctx);
-        for (id, result) in &results {
-            match result {
-                RowResult::Pass => {}
-                RowResult::Skipped(SkipReason::NoContractSurface { .. })
-                    if *id == "C1/rule-11-upload-progress-monotone" => {}
-                other => panic!("row {id} did not pass: {other:?}"),
-            }
+        // The eleven §7 rules plus the C1-adjacent row-15 sink row all pass; none skips.
+        for (id, result) in run(rows(), &ctx)
+            .iter()
+            .chain(run(extra_rows(), &ctx).iter())
+        {
+            assert_eq!(*result, RowResult::Pass, "row {id} did not pass");
         }
     }
 
@@ -516,6 +624,39 @@ mod tests {
         assert!(matches!(
             rule_10(&ctx_of(&f, &ep)),
             RowResult::Fail(FailureReason::ExpectedErrorGotSuccess { .. })
+        ));
+    }
+
+    #[test]
+    fn rule_07_red_when_content_length_lies_under_decoding() {
+        // The body is still decoded correctly, but content_length reports the compressed figure.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honest_content_length = false);
+        assert!(matches!(
+            rule_07(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::DishonestContentLength { .. })
+        ));
+    }
+
+    #[test]
+    fn rule_11_red_when_progress_not_monotone() {
+        // The naïve-wrapper break: a 100%-jump-then-drop sequence violates monotonicity.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honest_upload_progress = false);
+        assert!(matches!(
+            rule_11(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::ProgressNotMonotone { .. })
+        ));
+    }
+
+    #[test]
+    fn row_15_sink_red_when_file_sink_ignored() {
+        // The sink-drop break: a File request comes back as Memory.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honor_file_sink = false);
+        assert!(matches!(
+            row_15_sink_correspondence(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::WrongSink)
         ));
     }
 }
