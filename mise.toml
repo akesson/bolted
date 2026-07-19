@@ -116,6 +116,11 @@ run = [
   # the fail-correctly demonstrations) are clippy-clean and tested by `check`.
   "cargo clippy -p bolted-http --features conformance --all-targets -- -D warnings",
   "cargo test -p bolted-http --features conformance",
+  # Step 24 M3: the reqwest reference adapter (`bolted-http-linux`) + the full conformance suite run
+  # against it (C1/C2/C3, L2 pinning, L3 retry-off). Its tests dev-depend on `bolted-http/conformance`,
+  # so `--workspace` already builds them, but an explicit `-p` keeps the tier visible (M0/M1 precedent).
+  "cargo clippy -p bolted-http-linux --all-targets -- -D warnings",
+  "cargo test -p bolted-http-linux",
 ]
 
 # Step 22: the environment report for what mise CANNOT pin (VISION risk 5 — Xcode, the Android

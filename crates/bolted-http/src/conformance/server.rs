@@ -40,6 +40,7 @@ pub struct TestServer {
     https_untrusted_addr: SocketAddr,
     good_spki: [u8; 32],
     untrusted_spki: [u8; 32],
+    good_cert_der: Vec<u8>,
     shutdown: Arc<AtomicBool>,
     hits: Arc<Mutex<HashMap<String, usize>>>,
     handles: Vec<JoinHandle<()>>,
@@ -49,11 +50,19 @@ impl TestServer {
     /// Start the server. Errors only on cert generation / bind failure.
     pub fn start() -> Result<Self, ServerError> {
         wire::install_crypto_provider();
-        let good = wire::generate_cert(vec!["localhost".into()]).map_err(|_| ServerError::Cert)?;
-        let untrusted =
-            wire::generate_cert(vec!["localhost".into()]).map_err(|_| ServerError::Cert)?;
+        // The certs carry a `127.0.0.1` IP SAN alongside the `localhost` DNS name: the socket mock's
+        // verifier ignores hostnames (SPKI allowlist), but the reqwest reference adapter
+        // (`bolted-http-linux`) does *real* rustls chain + hostname verification, and the endpoints
+        // are `https://127.0.0.1:PORT`. Without the IP SAN, real hostname verification would reject
+        // the loopback address (harness-mechanical; SPKI/pin values are unchanged by SANs).
+        let sans = || vec!["localhost".to_string(), "127.0.0.1".to_string()];
+        let good = wire::generate_cert(sans()).map_err(|_| ServerError::Cert)?;
+        let untrusted = wire::generate_cert(sans()).map_err(|_| ServerError::Cert)?;
         let good_spki = good.spki_sha256;
         let untrusted_spki = untrusted.spki_sha256;
+        // The good cert DER, so a real adapter can add it as a trust anchor (real chain verification
+        // needs the actual root, not only its SPKI hash — the mock trusts by SPKI allowlist instead).
+        let good_cert_der = good.cert_der.as_ref().to_vec();
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let hits: Arc<Mutex<HashMap<String, usize>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -81,6 +90,7 @@ impl TestServer {
             https_untrusted_addr,
             good_spki,
             untrusted_spki,
+            good_cert_der,
             shutdown,
             hits,
             handles,
@@ -116,6 +126,14 @@ impl TestServer {
     #[must_use]
     pub fn untrusted_spki(&self) -> [u8; 32] {
         self.untrusted_spki
+    }
+
+    /// The good cert, DER-encoded — a trust anchor a real adapter adds so its *real* chain
+    /// verification accepts the (self-signed) test endpoint. The untrusted cert is deliberately
+    /// never exposed this way: it must stay untrusted (the `Tls` positive control).
+    #[must_use]
+    pub fn good_cert_der(&self) -> &[u8] {
+        &self.good_cert_der
     }
 
     /// How many connections a given path has seen (the no-hidden-retry control, rule 8).

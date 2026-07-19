@@ -4,6 +4,7 @@ members = [
     "crates/bolted-core",
     "crates/bolted-decl",
     "crates/bolted-http",
+    "crates/bolted-http-linux",
     "crates/bolted-macros",
     "crates/bolted-check",
     "crates/bolted-conformance",
