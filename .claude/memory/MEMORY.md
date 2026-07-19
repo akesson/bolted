@@ -20,3 +20,4 @@
 - [bolted-check analyses split on runtime facts](bolted-check-analyses-split-on-runtime-facts.md) — step 16: a snapshot needing composites/schema-version can't be a pure bin (generator lives in the -ffi crate as an example); constraint bounds are invisible to the FFI drift layer, so the snapshot reads runtime constraints()
 - [Artifact SVGs must not use theme tokens](artifact-svg-must-not-use-theme-tokens.md) — the viewer's dark transform inverts HTML colors but not SVG fills; use currentColor + alpha fills, and screenshot each figure to verify
 - [PR-based workflow](pr-based-workflow.md) — branch + PR since 2026-07-16; never commit/push main directly
+- [Sub-agents stall awaiting their own background runs](subagents-stall-awaiting-own-background-runs.md) — require synchronous foreground runs in the prompt; a warning alone does not work; resume the same agent, never replace it
