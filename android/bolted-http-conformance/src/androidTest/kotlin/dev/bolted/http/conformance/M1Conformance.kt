@@ -11,33 +11,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Step 26 M1 — the base adapter, over the real `bolted-http` conformance suite behind the JNI
- * `HttpHarness`. Three assertions, mirroring the step-25 Apple M1 gate:
+ * Step 26 — the watched-red baseline + the total-deadline red-watch (retained from M1, extended in M2).
  *
- *  - [theM1RowsAreGreenExceptTheM2Syntheses] — the full C1 + C2 + extra-rows suite on the real
- *    [BoltedHttp]: every M1 row green, every M2-synthesis row red (pinning, https→http refusal, file
- *    sink / `Io`);
- *  - [theWatchedRedBaseline] — every M1-green row shown RED first under a broken adapter (each newly
- *    passing row must be watched red);
+ *  - [theWatchedRedBaseline] — every green row shown RED first under a broken adapter. Extended in M2
+ *    to cover the whole suite (C1 + extra rows + C2), so the six M2-synthesis rows (rule-04, rule-10,
+ *    key-pin-mismatch, key-insecure-redirect, key-io, row-15) are watched red alongside the M1 rows;
  *  - [theTotalDeadlineIsCallTimeoutNotPerIdle] — the sharp deadline red-watch: the `/drip` trickle row
- *    goes RED when the adapter's deadline is a per-idle `readTimeout`, and GREEN when it is the total
- *    `callTimeout` — proving `callTimeout` is the honest TOTAL deadline (no timer synthesis needed).
+ *    goes RED under a per-idle `readTimeout` and GREEN under the total `callTimeout`, proving
+ *    `callTimeout` is the honest TOTAL deadline (no timer synthesis needed).
+ *
+ * The full green-on-the-real-adapter gate (all rows, anchor installed) and the N3/PermissionDenied/C3
+ * controls live in [M2Conformance].
  */
 class M1Conformance {
-    // The M1-green rows (needles into the row ids). Everything the base adapter must honour.
-    private val m1Green =
-        listOf(
-            "rule-01", "rule-02", "rule-03", "rule-05", "rule-06", "rule-07", "rule-08",
-            "rule-09", "rule-11",
-            "key-timeout", "key-cancelled", "key-tls", "key-name-resolution", "key-connect",
-            "key-transport", "key-too-many-redirects",
-            "row-redirect-trace", "row-negotiated-version", "row-deadline-total",
-        )
-
-    // The M2-synthesis rows — RED under M1 (pinning + trust anchor, https→http refusal, file sink/Io).
-    private val m2Red =
-        listOf("rule-04", "rule-10", "key-pin-mismatch", "key-insecure-redirect", "key-io", "row-15")
-
     // The two rows that EXPECT a Transport error, so an always-Transport break cannot red them — the
     // always-200 break does (rule-08: a 200 reads as a hidden retry; key-transport: a 200 where a
     // Transport error was required).
@@ -60,49 +46,24 @@ class M1Conformance {
         return r!!
     }
 
-    /** Record a line to BOTH logcat and stdout (stdout is captured in the JUnit XML `<system-out>`). */
     private fun record(line: String) {
         Log.i(TAG, line)
         println(line)
     }
 
     @Test
-    fun theM1RowsAreGreenExceptTheM2Syntheses() {
-        val harness = harnessFor(BoltedHttp())
-        val info = harness.startServer()
-        assertFalse("the in-process test server failed to start", info.httpBase.isEmpty())
-        try {
-            val rows = harness.runC1() + harness.runC2() + harness.runExtraRows()
-            for (r in rows) {
-                record("M1 row ${r.id}: passed=${r.passed} skipped=${r.skipped} msg='${r.message}'")
-            }
-            for (needle in m1Green) {
-                val r = row(rows, needle)
-                assertTrue("M1 row '$needle' must be GREEN — ${r.id}: ${r.message}", r.passed)
-                assertFalse("M1 row '$needle' must run, not skip — ${r.id}", r.skipped)
-            }
-            for (needle in m2Red) {
-                val r = row(rows, needle)
-                assertFalse("M2-synthesis row '$needle' must be RED under M1 — ${r.id}: ${r.message}", r.passed)
-            }
-        } finally {
-            harness.stopServer()
-            harness.close()
-        }
-    }
-
-    @Test
     fun theWatchedRedBaseline() {
-        // BrokenHttp (always Transport) reds every M1-green row except the two that EXPECT Transport.
+        // BrokenHttp (always Transport) reds every row EXCEPT the two that EXPECT Transport. Sweeping
+        // the WHOLE suite (C1 + extra + C2) means the six M2-synthesis rows are watched red here too.
         val brokenHarness = harnessFor(BrokenHttp())
         brokenHarness.startServer()
         try {
             val rows = brokenHarness.runC1() + brokenHarness.runC2() + brokenHarness.runExtraRows()
-            for (needle in m1Green.filter { it !in transportExpecting }) {
-                val r = row(rows, needle)
+            for (r in rows) {
+                if (transportExpecting.any { r.id.contains(it) }) continue
                 record("watched-red (BrokenHttp) ${r.id}: passed=${r.passed} msg='${r.message}'")
-                assertFalse("watched-red: '$needle' must be RED under BrokenHttp — ${r.id}: ${r.message}", r.passed)
-                assertFalse("watched-red: red row '$needle' must carry a legible message — ${r.id}", r.message.isEmpty())
+                assertFalse("watched-red: '${r.id}' must be RED under BrokenHttp — ${r.message}", r.passed)
+                assertFalse("watched-red: red row '${r.id}' must carry a legible message", r.message.isEmpty())
             }
         } finally {
             brokenHarness.stopServer()
@@ -134,7 +95,7 @@ class M1Conformance {
         perIdle.startServer()
         try {
             val r = row(perIdle.runExtraRows(), "row-deadline-total")
-            record("M1 deadline RED-WATCH (PerIdle/readTimeout): passed=${r.passed} msg='${r.message}'")
+            record("deadline RED-WATCH (PerIdle/readTimeout): passed=${r.passed} msg='${r.message}'")
             assertFalse("PerIdle (readTimeout) must FAIL the total-deadline row — ${r.message}", r.passed)
         } finally {
             perIdle.stopServer()
@@ -146,7 +107,7 @@ class M1Conformance {
         total.startServer()
         try {
             val r = row(total.runExtraRows(), "row-deadline-total")
-            record("M1 deadline HONEST (Total/callTimeout): passed=${r.passed} msg='${r.message}'")
+            record("deadline HONEST (Total/callTimeout): passed=${r.passed} msg='${r.message}'")
             assertTrue("Total (callTimeout) must PASS the total-deadline row — ${r.message}", r.passed)
         } finally {
             total.stopServer()

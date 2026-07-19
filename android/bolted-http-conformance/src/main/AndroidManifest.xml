@@ -2,8 +2,14 @@
 <!-- The conformance tier drives OkHttp against the in-process Rust `TestServer` on 127.0.0.1 over
      plain HTTP, so the (self-instrumenting) test APK must permit cleartext traffic. This is a
      TEST-tier allowance for the loopback test server only; the shipped `android/bolted-http` library
-     carries no such policy. INTERNET is needed even for loopback sockets. -->
+     carries no such policy. INTERNET is needed even for loopback sockets.
+
+     `networkSecurityConfig` installs the N3 <pin-set> fragility control (a deliberately-wrong pin for
+     127.0.0.1) — the evidence that a custom SSLSocketFactory makes NSC pinning stop enforcing
+     (freeze §9). See res/xml/network_security_config.xml + M2Conformance.theNscPinSetDoesNotBindTheAdapter. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:usesCleartextTraffic="true" />
+    <application
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="true" />
 </manifest>
