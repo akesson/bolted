@@ -107,7 +107,9 @@ pub const ROWS: &[Row] = &[
         name: "Android SDK",
         tasks: &[
             "pack:android",
+            "pack:android:http",
             "test:android",
+            "test:android:http",
             "test:android:app",
             "test:android:gen",
             "test:android:hazard",
@@ -120,7 +122,7 @@ pub const ROWS: &[Row] = &[
     Row {
         tier: "android",
         name: "Android NDK",
-        tasks: &["pack:android"],
+        tasks: &["pack:android", "pack:android:http"],
         probe: Probe::AndroidNdk,
         remedy: "sdkmanager 'ndk;27.0.12077973'",
     },
@@ -129,6 +131,7 @@ pub const ROWS: &[Row] = &[
         name: "aosp_atd android-34 system image",
         tasks: &[
             "test:android",
+            "test:android:http",
             "test:android:app",
             "test:android:gen",
             "test:android:hazard",
