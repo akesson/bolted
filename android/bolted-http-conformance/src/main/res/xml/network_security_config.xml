@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The N3 fragility control (step 26 M2, freeze §9 evidence). This Network Security Config declares a
+  <pin-set> with a DELIBERATELY WRONG pin for 127.0.0.1 (32 zero bytes — never any real cert's SPKI).
+
+  It exists to PROVE, at runtime, that a custom SSLSocketFactory/X509TrustManager makes NSC <pin-set>
+  STOP enforcing: the adapter installs a custom trust manager, so its HTTPS connections to 127.0.0.1
+  are NOT bound by this pin-set — the good-endpoint conformance rows stay green even though this wrong
+  pin is present. (theNscPinSetDoesNotBindTheAdapter asserts the split explicitly.) The suite's pinning
+  is therefore entirely adapter-enforced and never silently depends on NSC.
+
+  cleartextTrafficPermitted stays true so the http (loopback) rows against the in-process test server
+  keep working — cleartext policy is enforced at a different layer than trust/pinning and is unaffected
+  by the custom trust manager. TEST-tier only; the shipped android/bolted-http carries no NSC.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <pin-set>
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>
