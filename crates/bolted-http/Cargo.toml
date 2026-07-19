@@ -9,3 +9,11 @@ publish = false
 [dependencies]
 
 [dev-dependencies]
+
+[features]
+# The conformance harness (the "adapter under test" seam, the mock adapter, the C1/C2/C3 row
+# frame). Feature-quarantined so the default surface stays dependency-clean (the `budget`-feature
+# precedent in bolted-check): M0 pulls no deps; M1's test server will add them behind this feature.
+# `mise run check` exercises it explicitly (`cargo test -p bolted-http --features conformance`),
+# because `cargo test --workspace` does not turn per-crate features on.
+conformance = []

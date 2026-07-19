@@ -1,16 +1,65 @@
 //! `bolted-http` — the platform-neutral HTTP capability contract.
 //!
-//! Sans-io: this crate defines the `Http` capability trait and the typed request /
+//! Sans-io: this crate defines the [`Http`] capability trait and the typed request /
 //! response / error data that cross the effect boundary. Execution always belongs to a
 //! platform adapter over the native stack (URLSession, OkHttp/Cronet, WinHTTP/WinRT
-//! BackgroundTransfer, libcurl/reqwest on Linux) — never to this crate.
+//! BackgroundTransfer, libcurl/reqwest on Linux) — never to this crate. The lib target has
+//! **no** tokio/reqwest/TLS dependency; it is data + traits.
 //!
-//! **Deliberately empty for now.** The name and the contract's home are staked out; the
-//! contract itself is designed after spike steps 02–03 produce friction evidence. Design
-//! docs live in `docs/` next to this crate: `architecture.md` (the settled shape: contract
-//! crate + Bolted-shipped shell-side adapters, and what step 02 must verify), `prior-art.md`
-//! (previous cross-platform HTTP attempts and where they fail), `platform-surfaces.md`
-//! (the native API surfaces the adapters must map), `feature-matrix.md` (the homogenized
-//! surface: every dimension classified portable-core / adapter-synthesized core /
-//! capability / adapter-config / excluded), and `spike-plan.md` (the verification plan).
+//! The surface is derived from `docs/feature-matrix.md` (§4 classification, §5 per-row
+//! evidence, §7 the eleven conformance rules); where the older `architecture.md` §2 sketch
+//! and the matrix differ, the matrix wins.
+//!
+//! ## The `Send` seam (target-conditional bounds)
+//!
+//! Every trait bound that would be `Send` on a native target is written against the
+//! [`MaybeSend`] alias instead. On non-wasm targets `MaybeSend` *is* `Send`; on `wasm32` it
+//! is empty (wasm futures are `!Send`). This is the **single point of change** a future web
+//! adapter would need — the trait signatures never mention `Send` directly, so no signature
+//! changes when wasm relaxes them. No wasm target is built in this step; the seam only has to
+//! be the one place the relaxation lives. (feature-matrix §9.1, decided 2026-07-19.)
 #![forbid(unsafe_code)]
+
+pub mod capability;
+pub mod error;
+pub mod header;
+pub mod request;
+pub mod response;
+
+#[cfg(feature = "conformance")]
+pub mod conformance;
+
+pub use capability::{
+    CancelToken, CompletionSink, Http, Metrics, MetricsTier, PriorityHint, RequestHandle,
+};
+pub use error::{HttpError, HttpErrorKey, TlsErrorKind};
+pub use header::{
+    HeaderName, HeaderValue, Headers, InvalidHeaderName, InvalidHeaderValue, RequestHeaderError,
+    RequestHeaderName, RequestHeaders,
+};
+pub use request::{
+    FileRef, HttpRequest, Method, PinSet, Priority, RequestBody, RequestBuilder, SpkiPin, Url,
+    UrlError,
+};
+pub use response::{BodyOutcome, HttpResponse, HttpVersion, ResponseBuilder, StatusCode};
+
+// --- The Send seam ---------------------------------------------------------------------
+//
+// The only target-conditional code in the crate. Traits that must be `Send`-able on native
+// targets bound their implementors on `MaybeSend`; this module decides what that costs.
+
+#[cfg(not(target_arch = "wasm32"))]
+mod send_seam {
+    /// Native alias for `Send`. See the crate-level "The `Send` seam" note.
+    pub trait MaybeSend: Send {}
+    impl<T: Send + ?Sized> MaybeSend for T {}
+}
+
+#[cfg(target_arch = "wasm32")]
+mod send_seam {
+    /// wasm alias: empty (wasm futures are `!Send`). See the crate-level "The `Send` seam" note.
+    pub trait MaybeSend {}
+    impl<T: ?Sized> MaybeSend for T {}
+}
+
+pub use send_seam::MaybeSend;
