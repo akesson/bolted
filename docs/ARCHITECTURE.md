@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.14, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, and the post-step-24 error-wording/freeze-scheduling pass).** Phase 1 validated this design against
+**Status: FROZEN (v1.15, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, the post-step-24 error-wording/freeze-scheduling pass, and the post-step-25 freeze re-scheduling).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -64,7 +64,14 @@ key+params data (`ErrorData`), never strings — so `bolted-http`'s `HttpError` 
 instance of the rule, not a divergence; its remaining freeze-agenda residue is the
 `Into<ErrorData>` bridge. The same pass re-schedules the contract freeze: the spike verdicts
 are in (step 24), and the freeze lands **after the Apple adapter** (S-AP) — one more real
-implementor before commitment. A
+implementor before commitment.
+**v1.15** is scheduling only, no design or wording change (Henrik, 2026-07-19, post step 25):
+the freeze moves once more, to **after the Android adapter** (S-AN, step 26). Rationale: with
+the C# leg parked on upstream finding 07, Android is the last *reachable* implementor, and the
+freeze agenda's headline question — the streaming seam's contract surface, including the
+subscription-lifecycle constraint Apple surfaced (F-M3-1) — is exactly where step 26's opening
+JNI stream probe contributes evidence. Apple showed the risk shape: the contract surface stayed
+strictly additive through the whole step. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -602,10 +609,12 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   along `crates/bolted-http/docs/spike-plan.md`. Re-scheduled at v1.14 (Henrik, 2026-07-19):
   the spike verdicts are in — S-FFI: response streaming is CORE via `ffi_stream` async push
   (row 16); S-LX2: Linux SPKI pinning feasible, row 19's CORE(adapter) stands (step-24
-  report) — and the freeze lands after the Apple adapter (S-AP), one more real implementor
-  before commitment.*
+  report). Re-scheduled again at v1.15 (Henrik, 2026-07-19, post step 25): the freeze lands
+  after the Android adapter (S-AN, step 26) — the last reachable implementor (C# parked on
+  finding 07), and its opening JNI stream probe feeds the streaming-seam question directly.*
   The D38 shape is decided; still genuinely open before the freeze: the streaming-body core
-  seam (step-24 report Q2 — the mechanism is decided, its contract surface is not; `BodyOutcome`
+  seam (step-24 report Q2, sharpened by step-25 F-M3-1 — the mechanism is decided, its contract
+  surface is not, and it must now specify a scope-bound subscription lifecycle; `BodyOutcome`
   carries the named seam), the `HttpError → ErrorData` bridge (v1.14 residue), the cookie
   capability's shape,
   whether Android's declarative `<pin-set>` binds OkHttp/Cronet, and `BackgroundTransfer` — a
