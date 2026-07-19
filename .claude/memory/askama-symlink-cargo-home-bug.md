@@ -1,8 +1,11 @@
 ---
 name: askama-symlink-cargo-home-bug
-description: Upstream state of the askama 0.16 symlinked-CARGO_HOME build failure that breaks `cargo install boltffi_cli` (step-02 friction item 1)
-metadata:
+description: "boltffi CLI install gotchas — askama symlinked-CARGO_HOME failure, `--locked` for old versions, and the version-string guard that can't see a git build"
+metadata: 
+  node_type: memory
   type: reference
+  originSessionId: ddcc2f3b-af09-4980-882e-723913127f3b
+  modified: 2026-07-19T14:48:53.951Z
 ---
 
 `cargo install boltffi_cli` fails on this machine because `~/.cargo` is a symlink into the
@@ -43,3 +46,11 @@ breaking change (`boltffi_bindgen::render::kmp` symbols removed) → 0.27.3's CL
 siblings) builds fine. **Consequence:** `setup:boltffi` installs without `--locked`, so rolling `want`
 back to an older version would fail to compile — any recorded "roll back to 0.27.3" fallback needs
 `--locked` (or a pre-built binary). Relevant to every future bump/rollback. See [[csharp-backend-check-driver-broken]].
+
+**Third gotcha (step 25 M0, 2026-07-19): a version-string guard cannot see a git build.**
+A git-installed `boltffi_cli` (step-23's killed pin) reports the same `v0.27.5` as the registry
+build; `cargo install --list` distinguishes them only by the `?rev=<sha>` suffix on the source
+line. `setup:boltffi`'s early-exit guard matched on version alone, so it would never correct a
+lingering git build — fixed in step 25 M1 (the guard now rejects `?rev=` and force-reinstalls
+from the registry). On any machine: after a git pin experiment, verify with `cargo install
+--list`, not `boltffi --version`.

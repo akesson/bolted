@@ -1,7 +1,7 @@
 # Memory index
 
 - [Fable plans, Opus implements](fable-plans-opus-implements.md) — Fable plans + drives execution via Opus sub-agents (since 2026-07-19); step docs/reports remain the interface
-- [askama symlinked-CARGO_HOME bug](askama-symlink-cargo-home-bug.md) — boltffi CLI install gotchas: the symlink build failure (fix at askama config.rs:403) + installing an OLD boltffi_cli needs `--locked` (siblings float)
+- [askama symlinked-CARGO_HOME bug](askama-symlink-cargo-home-bug.md) — boltffi CLI install gotchas: the symlink build failure (fix at askama config.rs:403), old versions need `--locked` (siblings float), and a git build hides behind the same version string (`cargo install --list`, look for `?rev=`)
 - [Verify the web shell in a real browser](bolted-verify-in-a-real-browser.md) — a green suite is not evidence about a UI; drive the running app
 - [ART GC probes need a control](art-gc-probes-need-a-control.md) — WeakReference.get() in a poll loop keeps the object alive; use a ReferenceQueue
 - [Echo rule: touched, not dirty](echo-rule-predicate-is-touched-not-dirty.md) — sanitization makes a field clean while the user is still typing in it
