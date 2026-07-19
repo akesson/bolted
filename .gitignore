@@ -57,6 +57,15 @@ android/profile-probe/build/
 android/profile-probe/.gradle/
 android/profile-probe/local.properties
 
+# Step 26 — Android HTTP adapter: packed bindings/.so + Gradle build artifacts
+crates/bolted-http-android-ffi/dist/
+android/bolted-http/build/
+android/bolted-http/.gradle/
+android/bolted-http/local.properties
+android/bolted-http-conformance/build/
+android/bolted-http-conformance/.gradle/
+android/bolted-http-conformance/local.properties
+
 # Step 07 — Compose spike app build artifacts
 android/profile-app/build/
 android/profile-app/.gradle/

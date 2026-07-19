@@ -540,6 +540,94 @@ echo "note: this suite exercises undefined behaviour on purpose; a crash is a fi
 gradle dev34DebugAndroidTest -Pbolted.hazard "$@"
 """
 
+# --- Step 26: the Android HTTP adapter (S-AN). The FFI harness bridge (`bolted-http-android-ffi`)
+# packs its own Kotlin/JNI dist; `android/bolted-http` (the OkHttp adapter) consumes it in place and
+# `android/bolted-http-conformance` drives the conformance suite on the same headless GMD as
+# `test:android`. Separate verbs, NOT part of `check` (host stays JDK-free). See step-26-*. ---
+
+[tasks."pack:android:http"]
+description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release, bolted-http-android-ffi)."
+depends = ["setup:boltffi"]
+# Mirror of pack:android, repointed at the http bridge crate (see that task's notes on the 0.27.4/5 fix).
+dir = "crates/bolted-http-android-ffi"
+run = """
+set -eu
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+if ! command -v boltffi >/dev/null 2>&1; then
+  echo "error: boltffi CLI not found — run 'mise run setup:boltffi'." >&2
+  exit 1
+fi
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+if [ ! -d "$ANDROID_HOME" ]; then
+  echo "error: Android SDK not found at $ANDROID_HOME — set ANDROID_HOME (VISION risk 5)." >&2
+  exit 1
+fi
+ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+if [ -z "$ndk" ]; then
+  echo "error: no Android NDK under $ANDROID_HOME/ndk — install one:" >&2
+  echo "  sdkmanager 'ndk;27.0.12077973'" >&2
+  exit 1
+fi
+export ANDROID_NDK_HOME="$ndk"
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add aarch64-linux-android >/dev/null 2>&1 || true
+fi
+boltffi pack android --release
+"""
+
+[tasks."test:android:http"]
+description = "Run the bolted-http conformance suite on a headless GMD (ART); FAILS on any JUnit-XML failure."
+depends = ["pack:android:http"]
+dir = "android/bolted-http-conformance"
+tools = { java = "temurin-21.0.11+10.0.LTS", gradle = "8.11.1" }
+run = """
+set -eu
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+if [ ! -d "$ANDROID_HOME" ]; then
+  echo "error: Android SDK not found at $ANDROID_HOME — set ANDROID_HOME (VISION risk 5)." >&2
+  exit 1
+fi
+if [ ! -d "$ANDROID_HOME/system-images/android-34/aosp_atd" ]; then
+  echo "error: missing the aosp_atd android-34 system image (the headless test device)." >&2
+  echo "  sdkmanager 'system-images;android-34;aosp_atd;arm64-v8a'" >&2
+  exit 1
+fi
+# CRITICAL (memory: "test:android exit code masks failures"): the GMD wrapper has exited 0 with
+# failing tests before. We do NOT trust gradle's exit code. Instead we clear old results, run, and
+# then GATE on the JUnit XML: any testsuite with failures>0 or errors>0 — or NO xml at all — fails
+# this task. A nonzero gradle exit (compile/boot failure) also fails. Proven fail-able in M0 by
+# breaking a test once (step-26-m0-notes, F-M0).
+results_dir="build/outputs/androidTest-results"
+rm -rf "$results_dir"
+set +e
+gradle dev34DebugAndroidTest "$@"
+gradle_rc=$?
+set -e
+xml="$(find "$results_dir" -name 'TEST-*.xml' 2>/dev/null || true)"
+if [ -z "$xml" ]; then
+  echo "error: no JUnit XML under $results_dir — the instrumented tier did not produce results" >&2
+  echo "  (gradle exit code was $gradle_rc)" >&2
+  exit 1
+fi
+# Summary from the XML (the source of truth), then the gate.
+echo "---- JUnit XML summary (dir=$PWD/$results_dir) ----"
+grep -hoE '<testsuite[^>]*' $xml | sed -E 's/.*(tests="[0-9]+").*(failures="[0-9]+").*(errors="[0-9]+").*(skipped="[0-9]+").*/  \\1 \\2 \\3 \\4/' || true
+if grep -hoE '(failures|errors)="[0-9]+"' $xml | grep -qvE '="0"'; then
+  echo "error: JUnit XML reports test failures/errors — see the per-test detail above" >&2
+  grep -hE '<testcase' $xml | grep -A2 -iE 'failure|error' >&2 || true
+  exit 1
+fi
+if [ "$gradle_rc" -ne 0 ]; then
+  echo "error: gradle exited $gradle_rc (build/boot failure) though the XML showed no test failures" >&2
+  exit 1
+fi
+echo "test:android:http — all instrumented tests green (verified against JUnit XML)."
+"""
+
 # --- Step 14: the C# port (BoltFFI's C# backend → .NET, headless `dotnet test` on macOS). Separate
 # verbs, deliberately NOT part of `check` (which stays Rust-only: no .NET SDK). The seam is
 # host-portable even though the WinUI face is not — the step-05 move, backend #3. dotnet is pinned
