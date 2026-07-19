@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use crate::capability::{CompletionSink, Http, Metrics, PriorityHint, UploadProgressSink};
 use crate::error::HttpError;
 use crate::request::HttpRequest;
-use crate::response::HttpResponse;
+use crate::response::{HttpResponse, HttpVersion};
 
 /// A source of fresh adapters-under-test, plus its optional-capability self-report. Each row gets a
 /// new adapter, so rows never share mutable state.
@@ -169,6 +169,17 @@ pub enum FailureReason {
         got: usize,
         /// The hop count the chain required.
         expected: usize,
+    },
+    /// The negotiated HTTP version observable (feature-matrix row 11) did not match what the
+    /// server actually spoke. Until the step-25 M4 version row, **no** C1/C2/C3 row referenced
+    /// `HttpResponse::version()`, so an adapter that reported the wrong negotiated protocol passed
+    /// the entire suite — the version-observable blind spot (the exact shape of the M4 redirect-trace
+    /// blind spot, for the version field).
+    WrongHttpVersion {
+        /// The version the adapter reported.
+        got: HttpVersion,
+        /// The version the server actually spoke.
+        expected: HttpVersion,
     },
 }
 

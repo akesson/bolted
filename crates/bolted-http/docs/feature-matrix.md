@@ -142,6 +142,29 @@ one native stack lacks the feature and the shipped adapter compensates in custom
 of them (7, 14, 19) were capabilities while web was in the set; with four synthesizing
 surfaces they are portable. platform-surfaces §9 gives the per-surface synthesis table.
 
+**Apple / URLSession leg proven (step 25 S-AP, 2026-07-19).** The hand-written URLSession adapter
+(`apple/bolted-http/BoltedHttp.swift`) passes the full C1/C2/C3 conformance suite, and the step-25
+M4 mutation pass confirms each synthesis is genuinely pinned on this surface (not vacuously green):
+
+- **CORE(adapter) syntheses proven on Apple** — row 4 (total-deadline `DispatchSource` timer, cancel
+  by cause; the *per-idle vs total* distinction is now pinned by the new `/drip` row —
+  `timeoutInterval`-substitution mutation caught), row 6 (`willPerformHTTPRedirection` https→http
+  refusal — follow-the-downgrade mutation caught), row 7 (hop trace — drop-a-hop and
+  misreport-`final_url` mutations caught), row 14 (OS-fed `didSendBodyData` progress — non-monotone
+  and non-terminal mutations caught), row 15 (`downloadTask` file sink with synchronous
+  temp-then-rename — skip-rename and Memory-for-File mutations caught), row 19 (SPKI pinning split in
+  the trust delegate — bypass, wrong-SPKI, and `PinMismatch`-vs-`Tls` conflation mutations caught).
+  Row 2 (bodies) exercised via the row-11 POST upload.
+- **Row 16 (response streaming)** — Apple evidence: the A1 probe (F1 `ffi_stream` async push) delivers
+  ordered/lossless/complete over a real URLSession round-trip; probe-grade, no contract surface added.
+- **Row 12 (priority hint, CAP)** — Apple acceptance proven: the hint maps to `URLSessionTask.priority`
+  (five contract levels onto URLSession's three named buckets) and the task carries it; the
+  swap-the-buckets mutation is caught by the A5 acceptance assertion. RFC 9218 wire behaviour stays
+  FLAGGED lore, not conformance-tested.
+- **Row 11 (negotiated version)** — now has a positive control on every implementor: the step-25 M4
+  pass found that *no* row read `version()` (a blind spot) and added `C1/row-negotiated-version-observable`;
+  Apple reports the real `URLSessionTaskMetrics` protocol.
+
 ## 5. Dimension notes — the evidence behind each row
 
 ### 5.1 Headers (row 1)

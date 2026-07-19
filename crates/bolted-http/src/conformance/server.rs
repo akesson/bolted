@@ -14,6 +14,10 @@
 //!   probe (step 25); paced by `delay_us` (0 = burst).
 //! - `/stall` — `200` with `Content-Length: 1000`, a few bytes, then holds the socket open
 //!   (bounded). Drives the deadline (rule 3) and cancellation (rule 9) syntheses.
+//! - `/drip?count=N&interval_ms=M` — `200` announcing an `N`-byte body, then dribbling one byte
+//!   every `M` ms so the connection is **never idle** longer than `M`. Distinguishes a *total*
+//!   deadline (which must still fire) from a *per-idle* timeout (which a trickle keeps resetting) —
+//!   the step-25 M4 deadline blind spot: `/stall`'s single burst-then-silence cannot tell them apart.
 //! - `/truncate` — `200` with `Content-Length: 1000`, 10 bytes, then closes → `Transport`.
 //! - `/flaky` — attempt 1 truncates, attempt ≥2 succeeds (the no-hidden-retry control, rule 8).
 //! - `/etag` — `304` when `If-None-Match: "v1"`, else `200` + `ETag: "v1"` (rule 5).
@@ -275,6 +279,11 @@ fn dispatch(
             chunked(stream, count, delay_us);
         }
         "/stall" => stall(stream),
+        "/drip" => {
+            let count = query_int(query, "count").unwrap_or(0);
+            let interval_ms = query_int(query, "interval_ms").unwrap_or(0);
+            drip(stream, count, interval_ms);
+        }
         "/truncate" => truncate(stream),
         "/flaky" => {
             if attempt <= 1 {
@@ -391,6 +400,26 @@ fn stall(stream: &mut impl Write) {
     let _ = stream.flush();
     // Bounded so a leaked handler thread cannot outlive the test process for long.
     thread::sleep(Duration::from_secs(30));
+}
+
+/// Announce an `count`-byte body, then dribble one byte every `interval_ms` (so the connection is
+/// never idle for more than `interval_ms`). A *total* deadline must still fire mid-drip; a *per-idle*
+/// timeout keeps getting reset by each byte and never fires — the two are indistinguishable on
+/// `/stall` (one burst then silence), which is the step-25 M4 deadline blind spot. Bounded by
+/// `count`; a client that cancels/times out closes the socket and the write loop exits.
+fn drip(stream: &mut impl Write, count: u64, interval_ms: u64) {
+    let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {count}\r\nconnection: close\r\n\r\n");
+    if stream.write_all(head.as_bytes()).is_err() {
+        return;
+    }
+    let _ = stream.flush();
+    for _ in 0..count {
+        thread::sleep(Duration::from_millis(interval_ms));
+        if stream.write_all(b"x").is_err() {
+            return; // client gone (cancelled / deadline fired) — stop dribbling.
+        }
+        let _ = stream.flush();
+    }
 }
 
 /// Announce a 1000-byte body, send 10, then close early → the mock sees `UnexpectedEof` → Transport.
