@@ -1,0 +1,47 @@
+[package]
+name = "bolted-http-linux"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# The reqwest reference adapter for the `bolted-http` capability contract (feature-matrix S-LX /
+# step-24 M3). Unlike `bolted-http` (sans-io, dependency-clean), an adapter OWNS its executor: a
+# contained tokio runtime lives here, never in the contract crate.
+[dependencies]
+# The frozen contract. Default (non-conformance) surface only — the lib needs the types + traits,
+# not the harness. `default-features = false` keeps the harness deps out of the adapter's own graph.
+bolted-http = { path = "../bolted-http", default-features = false }
+
+# reqwest, rustls backend, no aws-lc-rs (the `ring` provider is installed at runtime — same reason
+# `bolted-http` picks ring: no cmake / C toolchain is dragged into `mise run check`).
+# - `rustls-no-provider`: rustls TLS, provider installed by us (ring), so `use_preconfigured_tls`
+#   accepts our hand-built `rustls::ClientConfig` (the pinning verifier lives inside it, L2).
+# - `stream`: `Body::wrap_stream` (upload-progress synthesis, rule 11) + `bytes_stream` (file sink).
+# - `gzip`: transparent decode; reqwest strips `Content-Length` under it, so `content_length()`
+#   stays honest (rule 7 / §5.12) for free.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
+    "stream",
+    "gzip",
+] }
+# The contained executor. Multi-thread runtime + timers + `select!` + async file I/O for the sink.
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "time",
+    "macros",
+    "fs",
+    "io-util",
+] }
+# The TLS stack the pinning verifier is built on (row 19 / L2). Same pin/features as bolted-http's
+# conformance TLS so the workspace resolves one rustls: ring provider, no aws-lc.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# SPKI extraction from the wire cert + its SHA-256 — the honest SPKI pin comparison (rule 10).
+x509-parser = "0.18"
+sha2 = "0.10"
+# Stream combinators for the upload-progress body wrapper and the response-body-to-file copy.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# The conformance harness (test server, Endpoints, AdapterFactory seam, C1/C2/C3 rows). Enabled
+# only for this crate's tests — the adapter lib never depends on the harness.
+bolted-http = { path = "../bolted-http", features = ["conformance"] }

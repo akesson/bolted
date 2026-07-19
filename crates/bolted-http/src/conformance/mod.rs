@@ -178,6 +178,7 @@ pub struct Endpoints {
     https_untrusted_base: String,
     good_spki: [u8; 32],
     untrusted_spki: [u8; 32],
+    good_cert_der: Vec<u8>,
     unresolvable: String,
     closed_port: String,
 }
@@ -199,6 +200,7 @@ impl Endpoints {
             https_untrusted_base: server.https_untrusted_base(),
             good_spki: server.good_spki(),
             untrusted_spki: server.untrusted_spki(),
+            good_cert_der: server.good_cert_der().to_vec(),
             // `.invalid` is reserved to never resolve (RFC 2606).
             unresolvable: "https://nonexistent.invalid/ok".to_string(),
             closed_port,
@@ -239,6 +241,14 @@ impl Endpoints {
     #[must_use]
     pub fn untrusted_spki(&self) -> [u8; 32] {
         self.untrusted_spki
+    }
+
+    /// The good cert, DER-encoded — the trust anchor a real adapter (`bolted-http-linux`) adds so
+    /// its real rustls chain verification accepts the self-signed test endpoint. The socket mock
+    /// ignores this (it trusts by [`Endpoints::good_spki`] allowlist instead).
+    #[must_use]
+    pub fn good_cert_der(&self) -> &[u8] {
+        &self.good_cert_der
     }
 
     /// A pin that does not match [`Endpoints::https`] (the rule-10 mismatch).
