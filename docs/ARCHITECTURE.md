@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.12, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, and the facet vocabulary pass).** Phase 1 validated this design against
+**Status: FROZEN (v1.13, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, and the bolted-http go pass).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -52,7 +52,12 @@ item (T6): the unit a core exports to its shells is named **facet**
 ([GLOSSARY.md](GLOSSARY.md)), ending the collision where "feature" meant both that unit and
 `bolted_decl::Feature`, the declaration model; the generated per-platform glue is a **facet
 binding**, and Bolted ships no ViewModels. Historical text (§8's rows, step docs and reports)
-keeps its words. A
+keeps its words. **v1.13** carries the bolted-http go pass's two amendments to **D38**, both
+in place, no new decision row: web leaves the adapter list — it was never part of the asked
+win/lin/mac/android/ios surface (Henrik, 2026-07-18; feature-matrix §9 maps how it would fit if
+it ever joins) — and scheduling is resolved (Henrik, 2026-07-19): the implementation goes ahead,
+with `crates/bolted-http/docs/spike-plan.md` as the step sequence's raw material. The contract
+*freeze* stays a §9 item, gated on the spike verdicts (S-FFI streaming, S-LX2 Linux pinning). A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
 
@@ -558,7 +563,7 @@ what, and why it was worth it.
 | **D35** — no ambient nondeterminism in core crates: time and identities arrive as inputs; enforcement is the workspace clippy deny-list riding `-D warnings` | A `Ctx` argument stamped by the driver at dispatch (the branch snapshot's shape); or allow ambient calls and mock the clock in tests | Core-evolution design session (triage T3c). The rule was already true of the shipped code (`CheckToken` takes completions as inputs; D16's ids are monotonic, not random) and already enforced by the committed deny-list — the architecture just never stated it, so the deny-list justified itself against a §5 paragraph that existed only on the branch snapshot. `Ctx` died with the `update` loop (D29); a mocked clock makes determinism a test-harness property rather than a structural one. The OS-integration campaign validated the enforcement shape in passing: the spikes' three genuine wall-clock timing sites took local `#[allow]`s rather than weakening the rule. No C-ID is minted: the property as stated is static and the deny-list is its rung (build-time); the runtime-testable face — same input sequence ⇒ identical snapshot sequence — is replay's first artifact when §9 ever schedules it |
 | **D36** — the frame loop never crosses the FFI: the core hears event boundaries, not frames (§6) | Per-frame gesture/scroll round-trips through the core | Core-evolution design session (triage T3b). The generalization of D9's echo rule, justified by the same measurement read at the right grain: 12–13 µs per crossing (step 05) makes per-event crossings free and per-frame ones a bet of the 8.3 ms ProMotion budget on FFI + encode + diff — TCA's best-documented pitfall (per-frame reducer round-trips), designed out rather than mitigated |
 | **D37** — `observe` is watch-shaped: the contract guarantees the newest state, never every intermediate; coalescing is legal on every target | Queue-shaped delivery (every snapshot reaches every subscriber); or a split contract — coalesced state plus a guaranteed-delivery sub-channel for check-state transitions | Core-evolution design session (triage T1). This is the industry-standard state semantics — `StateFlow` conflates by specification, SwiftUI renders latest-per-frame, `INotifyPropertyChanged` has no value queue, `tokio::watch` is the name — and three of four binding targets structurally cannot deliver more: the Android shell already pipes the stream into a `MutableStateFlow`, so the old `[Pending, Passed]` delivery never survived to a UI anyway. Queue-shape also forces a backpressure choice (unbounded buffer, or a core blocked on its slowest subscriber) that the watch shape dissolves — for the wire's push client (D31) exactly as for the in-process stream. The split alternative misreads the standard two-channel pattern: the industry splits state from *events*, and check sub-state is state by the litmus test — a consumer that missed the emission is still correct by reading current state; genuinely event-like needs (announce a verdict, focus a field) belong to §9's one-shot-effects item. Wins: D7/C15's stamped reconcile simplifies to "read the latest"; both step-02 probes prove BoltFFI implements the shape at 0.27.5. Replay (§9) is unaffected: D35's determinism governs the core's *emitted* sequence — delivery was never part of its claim |
-| **D38** — `bolted-http`: a sans-io contract crate plus Bolted-shipped shell-side adapters (URLSession in Swift, OkHttp in Kotlin, WinRT in C#; Rust adapters only for Linux/web) | One Rust client binding the native stacks directly (objc2/windows-rs/JNI, nyquest-style) | Core-evolution design session (triage T7); full design in `crates/bolted-http/docs/`. Android has no credible Rust path to OkHttp/Cronet, so shell-side is the uniform default; adapters are rung-2 shipped components (the effect-side counterpart of a `BoltedTextField`), living in the framework's maintenance envelope with a per-adapter conformance suite; the contract is placement-blind, so Rust-side Darwin/Windows bindings stay possible without a breaking change. The snapshot's recorded retreat — reconsider if step-02's callback measurements came back ugly — closed the good way: callbacks measured cheap and reentrancy-safe (no deadlock, no lock held across an outcall), and both step-02 probes' stream findings at 0.27.5 clear the response-streaming half of the old freeze gate. Scheduling stays a §9 matter: the crate ships no feature until one needs HTTP |
+| **D38** — `bolted-http`: a sans-io contract crate plus Bolted-shipped shell-side adapters (URLSession in Swift, OkHttp in Kotlin, WinRT in C#; a Rust adapter only for Linux — web left the platform set 2026-07-18, v1.13) | One Rust client binding the native stacks directly (objc2/windows-rs/JNI, nyquest-style) | Core-evolution design session (triage T7); full design in `crates/bolted-http/docs/`. Android has no credible Rust path to OkHttp/Cronet, so shell-side is the uniform default; adapters are rung-2 shipped components (the effect-side counterpart of a `BoltedTextField`), living in the framework's maintenance envelope with a per-adapter conformance suite; the contract is placement-blind, so Rust-side Darwin/Windows bindings stay possible without a breaking change. The snapshot's recorded retreat — reconsider if step-02's callback measurements came back ugly — closed the good way: callbacks measured cheap and reentrancy-safe (no deadlock, no lock held across an outcall), and both step-02 probes' stream findings at 0.27.5 clear the response-streaming half of the old freeze gate. Scheduling resolved at v1.13 (Henrik, 2026-07-19): implementation proceeds along the spike plan; the contract freeze itself stays §9-gated on the spike verdicts |
 
 ## 9. OPEN questions (do not resolve ad hoc — bring to a design session)
 
@@ -584,8 +589,12 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   projection is, where `RowId` comes from (entity key?), whether `open_window` takes sort/filter
   parameters, and the windowing etiquette (overscan, threshold refetch — §6's frame-loop rule,
   D36, already governs the scroll side).
-- **`bolted-http` contract freeze** — *reopens when a feature needs HTTP; nothing schedules it.*
-  The D38 shape is decided; still genuinely open before a freeze: the cookie capability's shape,
+- **`bolted-http` contract freeze** — *scheduled at v1.13 (2026-07-19): implementation proceeds
+  along `crates/bolted-http/docs/spike-plan.md`; the freeze lands when the spike verdicts are in.*
+  The D38 shape is decided; still genuinely open before a freeze: the FFI streaming mechanism
+  (S-FFI — decides whether response streaming makes the portable core or falls back to
+  `Memory | File` sinks), SPKI pinning feasibility on Linux (S-LX2 — decides matrix row 19's
+  CORE(adapter) status), the cookie capability's shape,
   whether Android's declarative `<pin-set>` binds OkHttp/Cronet, and `BackgroundTransfer` — a
   separate optional effect family whose precondition (effects as durable, serializable data with
   stable identities) is shared with interaction replay (below) and the draft stash; nothing may

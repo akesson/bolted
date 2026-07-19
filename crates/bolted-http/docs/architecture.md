@@ -18,8 +18,9 @@ verification plan ([spike-plan.md](spike-plan.md)). Where they conflict with
 this doc or the studies, the matrix wins. **Later the same day:** web removed from the
 platform set (Henrik — it was never part of the asked win/lin/mac/android/ios surface); the
 web adapter row is gone from the diagram below, and feature-matrix §9 records how web would
-fit if it ever joins. Note: D38's row in the repo-level ARCHITECTURE.md still lists the
-fetch/web adapter — updating a frozen decision is a design-session act, flagged for Henrik.
+fit if it ever joins. **2026-07-19:** the flagged D38 cleanup landed (ARCHITECTURE **v1.13**):
+web is out of the frozen row, and Henrik green-lit the implementation — the spike plan is now
+the step sequence's raw material; the contract freeze waits on the S-FFI/S-LX2 verdicts.
 
 ## 1. The shape
 

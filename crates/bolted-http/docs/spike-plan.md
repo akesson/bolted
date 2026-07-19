@@ -109,10 +109,13 @@ Kill criteria: N1 packaging inexpressible in BoltFFI's model → design session 
 Kotlin adapter work (same criterion the Apple spike had). N2 stream stall on JNI → same
 fallback as S-FFI, recorded per-platform.
 
-## 5. S-WIN — Windows (blocked; scope accordingly)
+## 5. S-WIN — Windows (unblocking: fix on upstream main, pin bump pending)
 
-The C# check driver is still broken upstream (MarshalAs(I1) on FfiBuf returns — killed
-step 14, unresolved at 0.27.5). Until that clears, S-WIN is **paper-scoped**:
+The C# check driver bug (MarshalAs(I1) on FfiBuf returns — killed step 14, unresolved at
+0.27.5) is **fixed on boltffi main** as of 2026-07-16 (#654 merged; verified against main's
+source 2026-07-19 — see `upstream/boltffi/README.md` row 06). No release carries it yet;
+Henrik decided (2026-07-19) to **git-pin main** rather than wait, so W2 unblocks with the
+pin bump (the `test:csharp` tripwire going red→driver-works is the confirmation):
 
 - W1 (now, no FFI needed): a standalone .NET console probe of the adapter's hard parts against
   the S-CONF test server — this cluster grew, because .NET carries the most syntheses:

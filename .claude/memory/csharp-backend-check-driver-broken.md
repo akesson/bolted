@@ -1,8 +1,11 @@
 ---
 name: csharp-backend-check-driver-broken
-description: BoltFFI C# backend — run_*_check throws MarshalDirectiveException (MarshalAs(I1) on an FfiBuf return); killed step 14; STILL BROKEN at 0.27.5 (step 15, branch B); §6/D26 amended (v1.7); upstream kit filed by owner only
-metadata:
+description: "BoltFFI C# backend — run_*_check threw MarshalDirectiveException (MarshalAs(I1) on an FfiBuf return); killed step 14; FIXED ON boltffi MAIN 2026-07-16 (#654, verified), NOT YET RELEASED (0.27.5 predates it) — C# resume rides the next pin bump; §6/D26 amended (v1.7)"
+metadata: 
+  node_type: memory
   type: project
+  originSessionId: ddcc2f3b-af09-4980-882e-723913127f3b
+  modified: 2026-07-19T06:59:52.768Z
 ---
 
 Step 14 (the C# port) **stopped on kill criterion 1**: on BoltFFI 0.27.3's C# backend, three of the
@@ -38,6 +41,17 @@ diagnostics. **Gotcha:** `cargo install boltffi_cli --version 0.27.3` no longer 
 `boltffi_bindgen` floats to 0.27.5, drops `render::kmp`) — needs `--locked`; `setup:boltffi` uses no
 `--locked`, so a plain 0.27.3 rollback would fail. The §6/D26 findings below are **law** (ARCHITECTURE
 v1.7). Note: crates.io API needs a User-Agent header or returns a policy error.
+
+**Update (2026-07-19, design session):** the fix is **on boltffi main** — PR #654 ("Migrate C# to
+the new IR backend") merged 2026-07-16 (`53aecd1`). Verified against main's source, not just the
+label: `return_marshal_i1` is derived per `ReturnPlan` in
+`boltffi_backend/src/target/csharp/render/mod.rs` — `true` only for a direct `Primitive(Bool)`
+return, explicitly `false` in the encoded-`FfiBuf` arm; the exact bug shape exists as an upstream
+fixture (`check_enabled: Result<bool, LoadError>`) and the C# DemoTest runs throwing async
+callbacks e2e. **No release carries it yet** (latest is 0.27.5, cut 2026-07-10). The definitive
+local confirmation is the existing tripwire going red→driver-works: bump the pins (or git-pin) and
+run `mise run test:csharp`. #657 (Kotlin fun-interface) also merged, so the next release picks up
+#663 + #654 + #657 together.
 
 **Lifecycle findings that drove the v1.7 amendment (banked in step 14, amended in step 15's planning
 pass):**
