@@ -6,14 +6,43 @@ publish = false
 
 # Sans-io contract crate: capability traits + typed request/response/error data only.
 # No reqwest, no tokio, no TLS stack — executors live in the platform adapters.
+#
+# Every dependency below is `optional` and pulled ONLY by the `conformance` feature (the
+# `budget`-feature precedent in bolted-check). The default lib target gains ZERO dependencies —
+# `cargo tree -p bolted-http` is empty without `--features conformance`. The conformance harness
+# owns a real (blocking, std-thread) TLS test server + a real-socket mock adapter, so it needs a
+# TLS stack, cert generation, gzip, and HTTP/1.1 parsing — none of which the contract itself has.
 [dependencies]
+# TLS for both the test server and the socket mock's client. `ring` crypto provider (not the
+# default aws-lc-rs) so no C toolchain / cmake is dragged into `mise run check`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+# Self-signed cert generation for the server's TLS endpoints (good / untrusted / pin-mismatch).
+# `ring` backend, DER output only (no `pem` feature — the certs feed rustls as DER directly).
+rcgen = { version = "0.14", default-features = false, features = ["ring"], optional = true }
+# SubjectPublicKeyInfo extraction from the wire cert, for honest SHA-256 SPKI pinning (rule 10).
+x509-parser = { version = "0.18", optional = true }
+# SHA-256 of the SPKI (SpkiPin's documented hash), server-side (build the pin) and client-side
+# (the mock's pin verifier).
+sha2 = { version = "0.10", optional = true }
+# gzip encode (server /gzip endpoint) + decode (mock body normalization, rule 7). Pure-Rust
+# miniz_oxide backend (flate2 default) — no zlib C dependency.
+flate2 = { version = "1", optional = true }
+# HTTP/1.1 head parsing on both sides of the hand-rolled wire (request head server-side, response
+# head client-side).
+httparse = { version = "1", optional = true }
 
 [dev-dependencies]
 
 [features]
-# The conformance harness (the "adapter under test" seam, the mock adapter, the C1/C2/C3 row
-# frame). Feature-quarantined so the default surface stays dependency-clean (the `budget`-feature
-# precedent in bolted-check): M0 pulls no deps; M1's test server will add them behind this feature.
+# The conformance harness (the "adapter under test" seam, the mock adapter, the test server, the
+# C1/C2/C3 clusters). Feature-quarantined so the default surface stays dependency-clean.
 # `mise run check` exercises it explicitly (`cargo test -p bolted-http --features conformance`),
 # because `cargo test --workspace` does not turn per-crate features on.
-conformance = []
+conformance = [
+    "dep:rustls",
+    "dep:rcgen",
+    "dep:x509-parser",
+    "dep:sha2",
+    "dep:flate2",
+    "dep:httparse",
+]
