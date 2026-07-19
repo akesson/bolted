@@ -1,31 +1,37 @@
+import CryptoKit
 import Foundation
 import Security
 
 /// `BoltedHttp` — the hand-written Apple HTTP adapter (architecture.md §1, layer 3).
 ///
-/// **M1 status: the real adapter.** It implements the `HttpAdapter` callback trait over a
-/// delegate-driven `URLSession`, carrying the C1/C2 behaviour the host tier can reach: total-deadline
-/// synthesis, caller cancellation, the C2 error-key mapping, upload progress, anchor-based server
-/// trust, and the real negotiated HTTP version. The A2/A4 syntheses (file sink, SPKI pinning, hop
-/// trace, https→http refusal, 304, `PermissionDenied`) are milestone M2.
+/// **M2 status: the syntheses landed.** On top of M1 (dispatch, total-deadline synthesis, caller
+/// cancellation, the C2 error-key mapping, upload progress, anchor-based server trust, the real
+/// negotiated HTTP version) M2 adds the four adapter-side syntheses:
+///
+/// - **SPKI pinning** (rule 10): the trust-evaluation delegate does a real chain + hostname check
+///   against the installed anchor AND, when the request carries pins, compares SHA-256 over the
+///   presented leaf's SubjectPublicKeyInfo. A pin mismatch is `PinMismatch`; a trust/hostname
+///   failure is `Tls` — the Linux verifier's split, mirrored exactly, never conflated.
+/// - **https→http refusal + the hop trace** (rules 4/7): `willPerformHTTPRedirection` refuses a
+///   downgrade with the typed `InsecureRedirect` key and records every intermediate URL so the
+///   response carries the redirect trace; the synthesized total deadline already spans the chain.
+/// - **The file sink** (row 15 / the `Io` positive control): a `File` response sink uses a
+///   `downloadTask` and persists the temp file **synchronously inside** `didFinishDownloadingTo`
+///   (the temp-file-lifetime rule) with an atomic temp-then-rename finalize; a write failure is `Io`.
+///
+/// `PermissionDenied` has a genuine-`EPERM` mapping (see `permissionKeyForPOSIX`); a live host
+/// control is platform-gated on the macOS SwiftPM test tier (M2 notes).
 ///
 /// It lives in the SAME SwiftPM target as the generated bindings (the `bundled` packaging layout),
 /// so the generated `FfiRequest` / `FfiResponse` / `HttpHarness` types need no `import`.
-///
-/// Composition-root wiring (the dance the XCTest performs): the adapter is built first, the harness
-/// second (it takes the adapter), then the harness is set back on the adapter so the completion can
-/// re-enter, and finally — once `startServer()` has handed over `ServerInfo.goodCertDer` — the trust
-/// anchor is installed. The `harness` back-reference is `weak`: the Rust side owns the adapter across
-/// the FFI, so a strong reference here would cycle.
-public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
+public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, URLSessionDownloadDelegate {
     /// Weak by design: the harness owns this adapter through the FFI bridge.
     public weak var harness: HttpHarness?
 
     /// The good endpoint's DER-encoded certificate, installed as the sole trust anchor for
-    /// server-trust evaluation (anchor-only for M1 — the pinning SPLIT is M2). Set by the
-    /// composition root from `ServerInfo.goodCertDer` after `startServer()`. `nil` ⇒ default system
-    /// trust evaluation, which rejects the self-signed test certificates (so the untrusted endpoint
-    /// stays a `Tls` positive control).
+    /// server-trust evaluation. Set by the composition root from `ServerInfo.goodCertDer` after
+    /// `startServer()`. `nil` ⇒ default system trust evaluation, which rejects the self-signed test
+    /// certificates (so the untrusted endpoint stays a `Tls` positive control).
     public var trustAnchorDER: Data?
 
     /// A total-deadline timer runs off this queue (concurrent — one short-lived source per request).
@@ -81,12 +87,26 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
             uploadTotal = nil
         }
 
-        let task = session.dataTask(with: urlRequest)
+        // Row 15: a `File` sink downloads to a temp file (so the body is never buffered) and is
+        // persisted inside `didFinishDownloadingTo`; a `Memory` sink buffers via `didReceive data`.
+        let sinkPath: String?
+        let task: URLSessionTask
+        switch request.sink {
+        case .file(let path):
+            sinkPath = path
+            task = session.downloadTask(with: urlRequest)
+        case .memory:
+            sinkPath = nil
+            task = session.dataTask(with: urlRequest)
+        }
         task.taskDescription = String(request.token)
 
         let ctx = RequestContext(token: request.token, requestURL: request.url)
         ctx.task = task
         ctx.uploadTotal = uploadTotal
+        ctx.sinkPath = sinkPath
+        // Rule 10: the request's SPKI pins, enforced in the trust delegate (empty ⇒ no pinning).
+        ctx.pins = request.pins.map { Data($0.hash) }
 
         lock.lock()
         contexts[request.token] = ctx
@@ -114,7 +134,7 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
             lock.unlock()
             return
         }
-        if ctx.termination == .none { ctx.termination = .callerCancel }
+        if case .none = ctx.termination { ctx.termination = .callerCancel }
         let task = ctx.task
         lock.unlock()
         task?.cancel()
@@ -124,7 +144,7 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
 
     private func deadlineFired(token: UInt64) {
         lock.lock()
-        guard let ctx = contexts[token], !ctx.finished, ctx.termination == .none else {
+        guard let ctx = contexts[token], !ctx.finished, case .none = ctx.termination else {
             lock.unlock()
             return
         }
@@ -134,10 +154,16 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
         task?.cancel()
     }
 
-    // MARK: - URLSessionDelegate (server trust)
+    // MARK: - URLSessionTaskDelegate (server trust — real chain + hostname AND SPKI pinning)
 
+    /// The trust-evaluation delegate at the TASK level so it can read the request's pins. Mirrors the
+    /// Linux `PinningVerifier` split exactly: (1) a real chain + hostname evaluation against the
+    /// installed anchor; then (2) — only when pins are present and the chain PASSED — the declarative
+    /// SPKI pin check on the leaf. A chain/hostname failure falls through to default handling and
+    /// surfaces as `Tls`; a pin mismatch cancels the challenge and surfaces as `PinMismatch`.
     public func urlSession(
         _ session: URLSession,
+        task: URLSessionTask,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
@@ -151,19 +177,77 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        // Anchor-only evaluation against the good cert: a real chain + hostname check, but trusting
-        // exactly our anchor. The good endpoint chains to it (self-signed leaf == anchor); the
-        // untrusted endpoint does not, so it falls through to default handling → a real TLS rejection.
+        // 1. The REAL trust decision: chain building + hostname matching, trusting exactly our anchor.
         SecTrustSetAnchorCertificates(serverTrust, [anchor] as CFArray)
         SecTrustSetAnchorCertificatesOnly(serverTrust, true)
-        if SecTrustEvaluateWithError(serverTrust, nil) {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
+        guard SecTrustEvaluateWithError(serverTrust, nil) else {
+            // Trust/hostname failure ⇒ default handling ⇒ the system rejects ⇒ `Tls` (the split's
+            // trust arm). The untrusted endpoint lands here.
             completionHandler(.performDefaultHandling, nil)
+            return
         }
+
+        // 2. The declarative SPKI pins, ANDed on top of a PASSING chain (rule 10). Absent ⇒ accept.
+        lock.lock()
+        let pins = context(for: task)?.pins ?? []
+        lock.unlock()
+        if !pins.isEmpty {
+            guard let leafPin = Self.leafSpkiSha256(serverTrust), pins.contains(leafPin) else {
+                // Chain passed, pin did not ⇒ `PinMismatch`, never `Tls`. Fail closed if we cannot
+                // compute the leaf SPKI (a pin was requested and could not be satisfied).
+                markPinMismatch(task)
+                completionHandler(.cancelAuthenticationChallenge, nil)
+                return
+            }
+        }
+        completionHandler(.useCredential, URLCredential(trust: serverTrust))
     }
 
-    // MARK: - URLSessionDataDelegate
+    /// Record the pin-mismatch cause so `didCompleteWithError` maps the resulting failure to
+    /// `PinMismatch` regardless of the opaque URLError the cancelled challenge produces.
+    private func markPinMismatch(_ task: URLSessionTask) {
+        lock.lock()
+        if let ctx = context(for: task), case .none = ctx.termination {
+            ctx.termination = .pinMismatch
+        }
+        lock.unlock()
+    }
+
+    // MARK: - URLSessionTaskDelegate (redirects — refusal + hop trace)
+
+    /// Rule 4 + row 7: refuse an `https → http` downgrade with `InsecureRedirect`, and record every
+    /// intermediate URL as a hop for the redirect trace. A permitted redirect is followed (URLSession
+    /// still enforces its own chain cap → `httpTooManyRedirects` → `TooManyRedirects`).
+    public func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        let fromScheme = response.url?.scheme?.lowercased()
+        let toScheme = request.url?.scheme?.lowercased()
+        if fromScheme == "https", toScheme == "http" {
+            // Refuse the downgrade. Setting the cause + not following makes the completion terminal;
+            // `didCompleteWithError` reads the cause first, so the ignored 302 never leaks as success.
+            lock.lock()
+            if let ctx = context(for: task), case .none = ctx.termination {
+                ctx.termination = .insecureRedirect(to: request.url?.absoluteString ?? "")
+            }
+            lock.unlock()
+            completionHandler(nil)
+            return
+        }
+        // A permitted redirect: record the URL that issued it (the hop), then follow.
+        lock.lock()
+        if let ctx = context(for: task), let hop = response.url?.absoluteString {
+            ctx.hops.append(hop)
+        }
+        lock.unlock()
+        completionHandler(request)
+    }
+
+    // MARK: - URLSessionDataDelegate (memory sink)
 
     public func urlSession(
         _ session: URLSession,
@@ -183,6 +267,46 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
         lock.lock()
         context(for: dataTask)?.buffer.append(data)
         lock.unlock()
+    }
+
+    // MARK: - URLSessionDownloadDelegate (file sink)
+
+    /// Row 15 / the `Io` positive control: persist the downloaded body to the requested destination
+    /// **synchronously** — URLSession deletes `location` the moment this returns (the temp-file
+    /// lifetime rule). Atomic finalize: move the download into the destination directory (so the
+    /// rename is same-filesystem), then rename it into place. Any failure (e.g. the destination's
+    /// parent directory does not exist — the `Io` control) records `.ioFailure`, mapped to `Io`.
+    public func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        lock.lock()
+        let dest = context(for: downloadTask)?.sinkPath
+        if let http = downloadTask.response as? HTTPURLResponse {
+            context(for: downloadTask)?.response = http
+        }
+        lock.unlock()
+        guard let dest else { return }
+
+        let destURL = URL(fileURLWithPath: dest)
+        let dir = destURL.deletingLastPathComponent()
+        let tmp = dir.appendingPathComponent(".\(destURL.lastPathComponent).tmp.\(UUID().uuidString)")
+        let fm = FileManager.default
+        do {
+            // Cross-filesystem move into the destination directory (fails if the dir is missing/
+            // unwritable — the `Io` control), then an atomic same-directory rename into place.
+            try fm.moveItem(at: location, to: tmp)
+            if fm.fileExists(atPath: destURL.path) { try fm.removeItem(at: destURL) }
+            try fm.moveItem(at: tmp, to: destURL)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            lock.lock()
+            if let ctx = context(for: downloadTask), case .none = ctx.termination {
+                ctx.termination = .ioFailure
+            }
+            lock.unlock()
+        }
     }
 
     // MARK: - URLSessionTaskDelegate
@@ -230,13 +354,31 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
         contexts[token] = nil
         ctx.deadlineTimer?.cancel()
         let termination = ctx.termination
-        let response = ctx.response
+        let response = ctx.response ?? (task.response as? HTTPURLResponse)
         let buffer = ctx.buffer
         let protocolName = ctx.protocolName
         let uploadTotal = ctx.uploadTotal
         let sentSoFar = ctx.sentSoFar
         let requestURL = ctx.requestURL
+        let hops = ctx.hops
+        let sinkPath = ctx.sinkPath
         lock.unlock()
+
+        // Synthesized terminal causes take precedence over the raw URLError shape (and even over an
+        // OS-reported success, for the file-sink write failure): the adapter classifies by CAUSE.
+        switch termination {
+        case .pinMismatch:
+            harness?.completeErr(token: token, error: .pinMismatch)
+            return
+        case .insecureRedirect(let to):
+            harness?.completeErr(token: token, error: .insecureRedirect(to: to))
+            return
+        case .ioFailure:
+            harness?.completeErr(token: token, error: .io)
+            return
+        case .deadline, .callerCancel, .none:
+            break
+        }
 
         if let error {
             harness?.completeErr(token: token, error: Self.mapError(error, termination: termination))
@@ -259,14 +401,19 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
         for (name, value) in http.allHeaderFields {
             headers.append(FfiHeader(name: String(describing: name), value: String(describing: value)))
         }
+        // A file sink reports the destination path (an empty body) so the core builds a `File`
+        // outcome; a memory sink reports the buffered body with an empty `sinkPath`.
+        let outcomePath = sinkPath ?? ""
         harness?.completeOk(
             response: FfiResponse(
                 token: token,
                 status: UInt16(http.statusCode),
                 headers: headers,
-                body: buffer,
+                body: outcomePath.isEmpty ? buffer : Data(),
                 finalUrl: http.url?.absoluteString ?? requestURL,
-                httpVersion: Self.mapVersion(protocolName)
+                httpVersion: Self.mapVersion(protocolName),
+                hops: hops,
+                sinkPath: outcomePath
             )
         )
     }
@@ -274,11 +421,17 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
     // MARK: - Mapping
 
     /// Native failure → typed error key (rule 2 — by CAUSE, not exception shape). Covers the full C2
-    /// taxonomy the URLSession host tier can reach; the pin / insecure-redirect / permission / io keys
-    /// are the M2 syntheses.
+    /// taxonomy the URLSession host tier can reach. The pin / insecure-redirect / io causes are
+    /// synthesized and handled before this in `didCompleteWithError`; `PermissionDenied` is mapped
+    /// here from a genuine POSIX `EPERM` (a sandbox / local-network denial), never invented.
     static func mapError(_ error: Error, termination: RequestContext.Termination) -> FfiHttpError {
         guard let urlError = error as? URLError else {
             return .transport(message: (error as NSError).localizedDescription)
+        }
+        // A genuine OS permission denial (EPERM) surfaces as PermissionDenied regardless of the
+        // URLError code URLSession chose to wrap it in.
+        if let permission = permissionKeyForURLError(urlError) {
+            return permission
         }
         switch urlError.code {
         case .timedOut:
@@ -289,14 +442,18 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
                 return .timeout
             case .callerCancel, .none:
                 return .cancelled
+            // The synthesized causes below are handled before `mapError` is reached; fall back to
+            // `cancelled` (their URLError is a cancellation) rather than leaking a network key.
+            case .pinMismatch, .insecureRedirect, .ioFailure:
+                return .cancelled
             }
         case .cannotFindHost, .dnsLookupFailed:
             return .nameResolution
         case .cannotConnectToHost, .notConnectedToInternet:
             return .connect
         case .httpTooManyRedirects:
-            // The request carries no redirect limit and the delegate-driven policy is M2, so
-            // URLSession's own internal cap fired: `0` is the "adapter-internal" sentinel (§ FFI).
+            // The request carries no redirect limit and URLSession's own internal cap fired: `0` is
+            // the "adapter-internal cap" sentinel (§ FFI). No row inspects it, only the key.
             return .tooManyRedirects(limit: 0)
         case .secureConnectionFailed,
              .serverCertificateUntrusted,
@@ -311,6 +468,27 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
             // the rule-8 / key-transport target.
             return .transport(message: urlError.localizedDescription)
         }
+    }
+
+    /// Map a genuine POSIX errno to a permission key. Only `EPERM` — the sandbox / local-network
+    /// denial signal — maps to `PermissionDenied`; everything else is `nil` (not permission-shaped).
+    /// This is the load-bearing, unit-testable core of the mapping; see the M2 notes on why a live
+    /// host control is platform-gated on the macOS SwiftPM test tier.
+    public static func permissionKeyForPOSIX(_ code: Int32) -> FfiHttpError? {
+        code == EPERM ? .permissionDenied : nil
+    }
+
+    /// Inspect a `URLError`'s underlying error chain for a POSIX `EPERM`, mapping it to
+    /// `PermissionDenied`. Returns `nil` when no permission-shaped cause is present.
+    static func permissionKeyForURLError(_ urlError: URLError) -> FfiHttpError? {
+        var current: NSError? = urlError as NSError
+        while let err = current {
+            if err.domain == NSPOSIXErrorDomain, let key = permissionKeyForPOSIX(Int32(err.code)) {
+                return key
+            }
+            current = err.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return nil
     }
 
     /// `URLSessionTaskMetrics.networkProtocolName` → the contract version (row 11). Absent metrics
@@ -331,6 +509,87 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
         }
     }
 
+    // MARK: - SPKI pinning (leaf SubjectPublicKeyInfo SHA-256)
+
+    /// SHA-256 over the presented leaf certificate's SubjectPublicKeyInfo — the same computation the
+    /// harness server and Linux verifier use (`x509_parser`'s `public_key().raw`). Extracted by a
+    /// minimal structural DER walk of the certificate rather than reconstructed from a `SecKey` (which
+    /// omits the SPKI's `AlgorithmIdentifier` wrapper and is key-type specific).
+    static func leafSpkiSha256(_ trust: SecTrust) -> Data? {
+        let leaf: SecCertificate?
+        if #available(macOS 12.0, iOS 15.0, *) {
+            leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
+        } else {
+            leaf = SecTrustGetCertificateAtIndex(trust, 0)
+        }
+        guard let cert = leaf else { return nil }
+        let certDER = SecCertificateCopyData(cert) as Data
+        guard let spki = subjectPublicKeyInfoDER(fromCertificate: certDER) else { return nil }
+        return Data(SHA256.hash(data: Data(spki)))
+    }
+
+    /// Extract the full SubjectPublicKeyInfo TLV from a DER X.509 certificate. Structural, not
+    /// algorithm-specific: `Certificate → tbsCertificate → [optional [0] version] serialNumber,
+    /// signature, issuer, validity, subject, subjectPublicKeyInfo` (the 6th field after any version).
+    static func subjectPublicKeyInfoDER(fromCertificate certDER: Data) -> [UInt8]? {
+        let bytes = [UInt8](certDER)
+        // Certificate ::= SEQUENCE { tbsCertificate SEQUENCE { ... }, ... }
+        guard let cert = derRead(bytes, 0), cert.element.tag == 0x30,
+              let tbs = derRead(cert.element.value, 0), tbs.element.tag == 0x30 else {
+            return nil
+        }
+        var children = derChildren(tbs.element.value)
+        // Drop an optional EXPLICIT [0] version (context tag 0xA0).
+        if let first = children.first, first.tag == 0xA0 { children.removeFirst() }
+        // serialNumber, signature, issuer, validity, subject, subjectPublicKeyInfo → index 5.
+        guard children.count >= 6 else { return nil }
+        return children[5].full
+    }
+
+    /// One DER TLV: its tag, the full TLV bytes (header + value), and the value bytes.
+    struct DERElement {
+        let tag: UInt8
+        let full: [UInt8]
+        let value: [UInt8]
+    }
+
+    /// Read one TLV from `bytes` at `offset`, returning it and the next offset. `nil` on malformed
+    /// or truncated input (definite-length DER only, which X.509 certificates always use).
+    static func derRead(_ bytes: [UInt8], _ offset: Int) -> (element: DERElement, next: Int)? {
+        guard offset < bytes.count else { return nil }
+        let tag = bytes[offset]
+        var idx = offset + 1
+        guard idx < bytes.count else { return nil }
+        let lenByte = bytes[idx]
+        idx += 1
+        var length = 0
+        if lenByte & 0x80 == 0 {
+            length = Int(lenByte)
+        } else {
+            let count = Int(lenByte & 0x7F)
+            guard count > 0, count <= 4, idx + count <= bytes.count else { return nil }
+            for _ in 0..<count {
+                length = (length << 8) | Int(bytes[idx])
+                idx += 1
+            }
+        }
+        guard length >= 0, idx + length <= bytes.count else { return nil }
+        let full = Array(bytes[offset..<(idx + length)])
+        let value = Array(bytes[idx..<(idx + length)])
+        return (DERElement(tag: tag, full: full, value: value), idx + length)
+    }
+
+    /// Read every TLV within a value blob, in order.
+    static func derChildren(_ value: [UInt8]) -> [DERElement] {
+        var out: [DERElement] = []
+        var offset = 0
+        while offset < value.count, let (element, next) = derRead(value, offset) {
+            out.append(element)
+            offset = next
+        }
+        return out
+    }
+
     // MARK: - Internals
 
     /// Look up the in-flight context for `task` via its `taskDescription`-carried token. The caller
@@ -344,11 +603,18 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate {
 /// The mutable per-request state the delegate callbacks accumulate. All access is guarded by
 /// `BoltedHttp.lock`.
 final class RequestContext {
-    /// How an in-flight request was terminated early — the cause that classifies a `URLError.cancelled`.
-    enum Termination {
+    /// How an in-flight request was terminated early — the cause that classifies the outcome
+    /// (independently of the opaque URLError shape).
+    enum Termination: Equatable {
         case none
         case deadline
         case callerCancel
+        /// A declarative SPKI pin did not match (rule 10).
+        case pinMismatch
+        /// An `https → http` redirect was refused (rule 4); carries the refused cleartext target.
+        case insecureRedirect(to: String)
+        /// A file-sink write failed (row 15 / the `Io` control).
+        case ioFailure
     }
 
     let token: UInt64
@@ -363,6 +629,12 @@ final class RequestContext {
     var protocolName: String?
     var uploadTotal: UInt64?
     var sentSoFar: UInt64 = 0
+    /// The request's SPKI pins (empty ⇒ no pinning); enforced in the trust delegate (rule 10).
+    var pins: [Data] = []
+    /// The file-sink destination, or `nil` for a memory sink (row 15).
+    var sinkPath: String?
+    /// The redirect hop trace — every intermediate URL, in order (row 7).
+    var hops: [String] = []
 
     init(token: UInt64, requestURL: String) {
         self.token = token
