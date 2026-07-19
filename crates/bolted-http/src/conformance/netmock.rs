@@ -73,6 +73,16 @@ pub struct MockBehavior {
     /// Report monotone, terminally-consistent upload progress (rule 11). Off ⇒ a non-monotone
     /// 100%-jump-then-drop sequence (the naïve-wrapper break).
     pub honest_upload_progress: bool,
+    /// Report upload progress that reaches the body length (terminal consistency, rule 11). Off ⇒
+    /// a *monotone* sequence that stops one chunk short of the body length — the forgot-the-last-
+    /// chunk break, which `honest_upload_progress`'s monotonicity twin never exercises. Only takes
+    /// effect on the honest (monotone) path.
+    pub terminal_upload_progress: bool,
+    /// Report an honest redirect trace: the terminal `final_url` is the chain's tail and every
+    /// intermediate hop is recorded (response observables). Off ⇒ report the original request URL as
+    /// `final_url` and drop the hop trace — the trace-drop break, invisible to every rule until the
+    /// M4 redirect-trace row.
+    pub honest_redirect_trace: bool,
 }
 
 impl MockBehavior {
@@ -93,6 +103,8 @@ impl MockBehavior {
             honor_file_sink: true,
             honest_content_length: true,
             honest_upload_progress: true,
+            terminal_upload_progress: true,
+            honest_redirect_trace: true,
         }
     }
 }
@@ -265,9 +277,15 @@ impl SocketMock {
                 _ => BodyOutcome::Memory(body),
             };
 
+            // The trace-drop break: report the original request URL as final and drop the hops.
+            let (final_url, hops) = if self.behavior.honest_redirect_trace {
+                (current.clone(), hops)
+            } else {
+                (request.url().clone(), Vec::new())
+            };
             let mut resp = HttpResponse::builder(
                 StatusCode::new(head.status),
-                current.clone(),
+                final_url,
                 HttpVersion::Http1_1,
                 outcome,
             )
@@ -450,13 +468,19 @@ impl SocketMock {
         // A handful of chunks so honest progress is a real monotone sequence, not one point.
         let chunk = (body.len() / 4).max(1);
         let mut sent = 0u64;
-        for piece in body.chunks(chunk) {
+        let pieces: Vec<&[u8]> = body.chunks(chunk).collect();
+        let last_idx = pieces.len().saturating_sub(1);
+        for (i, piece) in pieces.iter().enumerate() {
             t.write_all(piece)?;
             sent += piece.len() as u64;
             if let Some(p) = progress
                 && self.behavior.honest_upload_progress
             {
-                p.progress(sent, Some(total));
+                // The forgot-the-last-chunk break: stop reporting one chunk short of the body length
+                // — still monotone, but terminally inconsistent (final `sent` < body length).
+                if self.behavior.terminal_upload_progress || i != last_idx {
+                    p.progress(sent, Some(total));
+                }
             }
         }
         if let Some(p) = progress
