@@ -3,9 +3,9 @@
 Bolted is a compile-time-verified application framework around BoltFFI (boltffi.dev): one Rust
 core, native shells (SwiftUI / Compose / WinUI / Linux), plus a Rust-web target (Leptos/Dioxus,
 browser only, zero FFI). Phases 1–3 are **done** (validation spike → design freeze → framework
-extraction; ARCHITECTURE frozen, currently v1.12); Phase 4 — the verification harness — is in
-progress. The C# leg waits on an upstream boltffi fix; status lives in
-`upstream/boltffi/README.md`.
+extraction; ARCHITECTURE frozen, currently v1.13); Phase 4 — the verification harness — is in
+progress. The C# leg's upstream boltffi fix is merged on main (unreleased; git-pin decided);
+status lives in `upstream/boltffi/README.md`.
 
 ## Read order (do this before any work)
 
@@ -30,15 +30,19 @@ there; project *instructions* stay in this file.
 
 ## How work is organized
 
-- **Planning sessions (Fable)**: architecture, step authoring, design freeze, resolving OPEN
-  questions, updating VISION/ARCHITECTURE/ROADMAP.
-- **Implementation sessions (Opus)**: implement exactly one step, as specified by its step
-  doc. Scope is the step doc — nothing more.
-- **The interface between them is files**: every step ends with
+- **Fable plans AND drives execution** (since 2026-07-19; before that, implementation ran in
+  separate fresh Opus sessions): architecture, step authoring, design freeze, resolving OPEN
+  questions, updating VISION/ARCHITECTURE/ROADMAP — and then executing each step by
+  delegating implementation to **Opus sub-agents** (Agent tool, `model: "opus"`) while Fable
+  orchestrates, reviews their output, and writes the report.
+- **Sub-agents implement exactly one step (or one coherent slice of it)**, as specified by
+  its step doc. Scope is the step doc — nothing more. The step doc is still written to be
+  self-sufficient: a sub-agent has no access to the planning conversation.
+- **The interface is still files**: every step ends with
   `docs/steps/step-XX-report.md` (built / deviations / friction log / open questions) and a
   ROADMAP status update. Reports are how findings flow back to planning — write them well.
 
-## Rules for implementation sessions
+## Rules for implementation work (sub-agents inherit these; Fable enforces them)
 
 - If the step doc omits a decision: smallest reversible choice, record it in the report. If
   the decision is structural (traits, invariants, ARCHITECTURE.md): stop, record the question

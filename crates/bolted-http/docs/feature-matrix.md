@@ -117,7 +117,7 @@ contract, the rest in types):
 | 9 | Conditional requests (ETag/304 app-owned) | CORE | Portable everywhere; on Apple the adapter must run cache-disabled (§5.6) |
 | 10 | HTTPS-only; cleartext dev-gated | CORE | ATS / API 28 enforce natively; core-checkable before dispatch on Windows/Linux (§5.15) |
 | 11 | Negotiated version observable | CORE | Upgraded: all four surfaces always report it — the `Option` was web's (§5.7) |
-| 12 | Priority hint | CORE (hint) — weakened | Honored by Apple + Cronet/HttpEngine only; legally ignored by OkHttp/.NET; Henrik's call (§5.8, §8) |
+| 12 | Priority hint | CAP — decided | Demoted from CORE (hint) by Henrik, 2026-07-19: honored by Apple + Cronet/HttpEngine only, legally ignored by OkHttp/.NET — a typed capability shows the divergence honestly (§5.8, §8) |
 | 13 | Download progress (total = `Option`) | CORE | Portable, but totals lie under compression — total is always optional (§5.9) |
 | 14 | Upload progress | CORE(adapter) | Upgraded from CAP: OS-fed on Apple; sink/stream wrapping on OkHttp/.NET/reqwest (§5.9) |
 | 15 | Response body sink: `Memory` \| `File` | CORE(adapter) | Native `downloadTask` on Apple; stream-copy synthesis on the other three (§5.10) |
@@ -444,10 +444,11 @@ cost, and the suite is where it is paid:
 - **`FileRef`** (§5.10) — kept as a newtype over a path; its home (bolted-core? bolted-http?)
   is a structural question for a design session, not this doc.
 - **Background family full contract** (§6) — unchanged §9 status, better-informed.
-- Whether the priority hint (§5.8) survives Henrik's review as CORE — the recommendation now
-  leans CAP with only two honoring surfaces.
-- Whether web ever joins the platform set — and if that is *plausible*, the one decision that
-  must be taken early is trait `Send` bounds (§9).
+- ~~Whether the priority hint (§5.8) survives Henrik's review as CORE~~ — **decided 2026-07-19
+  (Henrik): CAP**, with only Apple + Cronet/HttpEngine honoring (row 12 updated).
+- Whether web ever joins the platform set — still open, but the early decision it forced is
+  **taken 2026-07-19 (Henrik): the contract traits adopt the conditional `Send`-bound pattern
+  from day one** (§9), so a later web adapter is never locked out at the type level.
 
 ## 9. Web — out of the platform set: how it would fit
 
@@ -480,7 +481,8 @@ Two things worth taking from the sweep *now*:
 1. **Trait bounds**: wasm futures are `!Send`. If the contract traits hard-require `Send`
    when they are written, a later web adapter is locked out at the type level — adopt the
    conditional-bound pattern from day one if web joining is at all plausible. This is the
-   only web-related decision that is cheap now and expensive later.
+   only web-related decision that is cheap now and expensive later. **Decided 2026-07-19
+   (Henrik): adopted — conditional bounds from the first trait written.**
 2. The alternative shape is also legitimate: the web shell keeps calling `fetch` directly
    (gloo/web-sys) outside bolted-http, and the contract never grows a fifth adapter. Nothing
    in D38 forces either answer.
