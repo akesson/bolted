@@ -145,7 +145,7 @@ run = "cargo run -q -p bolted-check --bin doctor"
 description = "Install the pinned boltffi CLI (idempotent; works around the askama symlink bug)."
 run = """
 set -eu
-want="0.27.5"
+want="0.28.0"
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 home="$(cd -P "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null && pwd || echo "${CARGO_HOME:-$HOME/.cargo}")"
 # The early-exit guard must reject a GIT-installed CLI, not only a wrong version string: the killed
