@@ -47,7 +47,7 @@ Neither is obviously right; this is the design session's first question.
 agree the contract is achievable either way: main's probe confirmed the two-layer shape
 (bounded drop-newest ring drained eagerly into an unbounded Swift `AsyncStream` — effectively
 a lossless queue under normal load) plus the D7/C15 version-stamped reconcile for the
-subscribe race; the branch probe (re-run at 0.27.5, `crates/spike-profile-ffi-stall-probe/`)
+subscribe race; the branch probe (re-run at 0.27.5, `spikes/profile-ffi-stall-probe/`)
 confirmed both a default-capacity stream and a capacity-1 wake-and-read encoding converge on
 the final value. So BoltFFI constrains nothing here — the question is purely **what shells
 may rely on**, which is exactly what a contract is for. Note the secondary win if adopted:
