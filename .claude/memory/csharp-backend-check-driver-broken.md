@@ -1,11 +1,11 @@
 ---
 name: csharp-backend-check-driver-broken
-description: "BoltFFI C# backend saga — the MarshalAs(I1) bug (killed step 14) is FIXED at git rev 23cf2ec (tripwire-verified, step 23 M1), but the same PR #654 REGRESSED C# streams (same-named ffi_stream collapse, upstream finding 07) → step 23 killed on KC3; C# resume waits on an upstream 07 fix; §6/D26 amended (v1.7)"
+description: "BoltFFI C# backend saga — RESOLVED at released 0.28.0 (verified 2026-07-21): MarshalAs bug fixed (out-param) AND finding 07 fixed (#697, distinct per-class stream runtimes); step-23 resume schedulable (~9-site namespace rename + tripwire flip); git-pin machinery obsolete; §6/D26 amendments (v1.7) still law"
 metadata: 
   node_type: memory
   type: project
   originSessionId: ddcc2f3b-af09-4980-882e-723913127f3b
-  modified: 2026-07-19T08:12:00.424Z
+  modified: 2026-07-21T13:26:57.686Z
 ---
 
 Step 14 (the C# port) **stopped on kill criterion 1**: on BoltFFI 0.27.3's C# backend, three of the
@@ -66,6 +66,22 @@ callbacks e2e. **No release carries it yet** (latest is 0.27.5, cut 2026-07-10).
 local confirmation is the existing tripwire going red→driver-works: bump the pins (or git-pin) and
 run `mise run test:csharp`. #657 (Kotlin fun-interface) also merged, so the next release picks up
 #663 + #654 + #657 together.
+
+**Update (2026-07-21 — RESOLVED at released 0.28.0, verified against the finding's own
+description, not the PR label):** `pack:csharp` at registry 0.28.0 → (1) **finding 07
+FIXED** (#697): three distinct stream-runtime classes, two distinct `Snapshots()` overloads,
+distinct native `EntryPoint` symbols for store and draft — the collapse is gone;
+(2) **MarshalAs FIXED**: `run_username_check` P/Invoke has no return-MarshalAs, bool is an
+`out` param (I1 on the param, valid). The probe suite fails to compile on exactly the known
+churn (namespace `GenProfileFfi` → `Gen_profile_ffi`, ~9 using/qualified sites across 7
+files) — nothing new. Once renamed, `TheCheckDriverIsBrokenOnThisBackend` **will go red by
+design** (its doc-comment's revisit condition): delete it, emit real C13/C16 callback tests.
+So the step-23 resume = rename + tripwire flip + build M2/M3 (the emitted C# suite); the
+rev-parameterized pin machinery on `step/23-boltffi-git-pin` is obsolete (registry release
+suffices). Finding-07 upstream filing is moot; the *streaming* issue (Defect-2-led
+issue.md in the boltffi checkout) still stands for Henrik to file. Inspection gotcha: use
+`target/aarch64-apple-darwin/debug/` (the target-triple path) — plain `target/debug/`
+lacks the FFI symbols.
 
 **Lifecycle findings that drove the v1.7 amendment (banked in step 14, amended in step 15's planning
 pass):**
