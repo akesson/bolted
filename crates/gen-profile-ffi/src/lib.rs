@@ -1,10 +1,10 @@
-//! `gen-profile-ffi` — `spike-profile-ffi`, generated.
+//! `gen-profile-ffi` — `fixture-profile-ffi`, generated.
 //!
-//! `spike-profile-ffi` is 1 407 hand-written lines whose comments say, over and over, that this is
+//! `fixture-profile-ffi` is 1 407 hand-written lines whose comments say, over and over, that this is
 //! what a generator would emit. This crate is the cash-out: `src/generated.rs` is written from
 //! `gen-profile/src/lib.rs` by `mise run gen:ffi` and byte-checked on every `mise run check` (D22).
 //!
-//! **`spike-profile-ffi` is not deleted, and must not be.** It is the reference. A step that edits its
+//! **`fixture-profile-ffi` is not deleted, and must not be.** It is the reference. A step that edits its
 //! own reference proves nothing.
 //!
 //! What is hand-written here, and only this:

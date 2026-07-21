@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
-# `spike-profile-ffi`, generated. `src/generated.rs` is written by `mise run gen:ffi` from
+# `fixture-profile-ffi`, generated. `src/generated.rs` is written by `mise run gen:ffi` from
 # `gen-profile/src/lib.rs` and byte-checked on every `mise run check` (D22). `src/custom.rs` is the
 # escape hatch: `DateRange` is a composite value object (D20), hand-written, so the generator refuses
 # to guess its `#[data]` shape and demands one — a missing item is a compile error, not a wrong binding.

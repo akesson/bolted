@@ -10,7 +10,7 @@ use bolted_core::{CheckState, Draft, DraftStatus, ErrorData, SyncState, Validity
 use profile_web::controller::{
     ProfileController, SubmitOutcome, is_required, max_len, simulated_lookup,
 };
-// Step 17: repointed spike-profile -> gen-profile with the crate migration. These two `use` lines
+// Step 17: repointed fixture-profile -> gen-profile with the crate migration. These two `use` lines
 // are the whole test-side change — every assertion and drive call below is byte-for-byte unchanged
 // (the planning pass named only src/controller.rs + src/app.rs as importers; this test also imports
 // the concrete types directly, so it moves too — a crate-name repoint, not a behavioral edit).

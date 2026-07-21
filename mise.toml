@@ -65,7 +65,7 @@ echo 'Now read the diff. `mise run check` refuses a committed file no declaratio
 """
 
 # --- Step 10 built the generator; step 11 repointed every shell (and `pack:apple`/`pack:android`
-# below) at the GENERATED `gen-profile-ffi`. The hand-written `spike-profile-ffi` stays in the
+# below) at the GENERATED `gen-profile-ffi`. The hand-written `fixture-profile-ffi` stays in the
 # workspace as the reference — built and tested by `check`, packed by nothing. The two smoke suites
 # stay as the lowest tier against the same dist. ---
 
@@ -172,7 +172,7 @@ CARGO_HOME="$home" cargo install boltffi_cli --version "$want" --force
 [tasks."pack:apple"]
 description = "Build + package the Apple XCFramework + SwiftPM bindings (release, gen-profile-ffi)."
 depends = ["setup:boltffi"]
-# Step 11: repointed from the hand-written `spike-profile-ffi` (which stays in the workspace as the
+# Step 11: repointed from the hand-written `fixture-profile-ffi` (which stays in the workspace as the
 # reference, packed by nothing) to the generated crate. Every Swift consumer links this dist.
 dir = "crates/gen-profile-ffi"
 run = """
@@ -371,7 +371,7 @@ cargo run --release --quiet --manifest-path ../bolted-check/Cargo.toml --feature
 [tasks."pack:android"]
 description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release, gen-profile-ffi)."
 depends = ["setup:boltffi"]
-# Step 11: repointed from `spike-profile-ffi` to the generated crate (see pack:apple's note).
+# Step 11: repointed from `fixture-profile-ffi` to the generated crate (see pack:apple's note).
 dir = "crates/gen-profile-ffi"
 run = """
 set -eu

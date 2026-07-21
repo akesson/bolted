@@ -1,6 +1,6 @@
 //! `gen-note` proves that a **generated** feature is a Bolted feature.
 //!
-//! This file is `spike-note/tests/conformance.rs` with `spike_note` swapped for `gen_note`. Nothing
+//! This file is `fixture-note/tests/conformance.rs` with `fixture_note` swapped for `gen_note`. Nothing
 //! else changed — not a constant, not an assertion, not a suite line. That is the claim step 09
 //! exists to make, and the diff between the two files is its whole evidence.
 //!
@@ -148,7 +148,7 @@ fn the_fixture_constants_describe_the_entity_it_returns() {
 /// The generated feature agrees with the hand-written one on every constraint it declares — the
 /// numbers came out of the DSL, not out of a shell (`CLAUDE.md`: no constraint literals in shells).
 ///
-/// This is the only assertion in the file that `spike-note` does not also make, and it is here
+/// This is the only assertion in the file that `fixture-note` does not also make, and it is here
 /// because `constraints()` is the one thing `#[bolted::value]` emits that no conformance invariant
 /// covers: it is shell-affordance metadata, exported and never re-checked.
 #[test]

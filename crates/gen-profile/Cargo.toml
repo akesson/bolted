@@ -13,5 +13,5 @@ bolted-conformance = { path = "../bolted-conformance" }
 # The golden reference. `tests/differential.rs` drives both features through the same script and
 # compares what they say — which is the only way "the generated code reproduces the spike" is a
 # claim about behaviour rather than about a diff a human once read.
-spike-profile = { path = "../spike-profile" }
+fixture-profile = { path = "../fixture-profile" }
 proptest = "1"

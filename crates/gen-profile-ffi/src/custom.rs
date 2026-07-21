@@ -12,7 +12,7 @@
 //! That is why `PlainDateRange` is spelled `AvailabilityRaw` here: a second composite field of the same
 //! type would need its own projection anyway, since only the field knows what it means.
 //!
-//! Contrast this file with `spike-profile-ffi/src/dto.rs`, where **all four** fields cost this much.
+//! Contrast this file with `fixture-profile-ffi/src/dto.rs`, where **all four** fields cost this much.
 
 use bolted_core::{Field, FieldStash, SyncState, Validity};
 use bolted_ffi::ErrorData;

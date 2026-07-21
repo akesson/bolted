@@ -2,7 +2,7 @@
 //! object, constraint-metadata export, and a full checkout→edit→conflict→resolve→submit lifecycle.
 
 use bolted_core::*;
-use spike_profile::*;
+use fixture_profile::*;
 
 fn base_profile() -> Profile {
     Profile {

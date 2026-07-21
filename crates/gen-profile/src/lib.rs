@@ -1,12 +1,12 @@
-//! `gen-profile` — `spike-profile`, declared instead of written.
+//! `gen-profile` — `fixture-profile`, declared instead of written.
 //!
-//! `spike-profile` is 724 lines of Rust whose doc comments say, over and over, *"exactly what
+//! `fixture-profile` is 724 lines of Rust whose doc comments say, over and over, *"exactly what
 //! `#[bolted::value]` would generate"*, *"the shape `#[bolted::entity]` emits"*, *"a macro emits this
 //! per field, mechanically"*. This crate is the cash-out. It declares the same feature — the same
 //! composite value object, the same tier-2 rule, the same async uniqueness check — and passes the
 //! same conformance suite, unmodified.
 //!
-//! **`spike-profile` is not deleted, and must not be.** It is the golden reference the generated code
+//! **`fixture-profile` is not deleted, and must not be.** It is the golden reference the generated code
 //! is read against, and a step that edits its own reference proves nothing. The two coexist; the
 //! step-09 report says which differences are intended.
 //!
@@ -17,7 +17,7 @@
 //!   pass separately.
 //! - There are no `begin_username_check` / `complete_username_check` / `username_check_state`
 //!   conveniences. The surface is [`bolted_core::Checked`], keyed by [`ProfileCheck`] (D18) — which is
-//!   what `spike-profile`'s three inherent methods now delegate to anyway.
+//!   what `fixture-profile`'s three inherent methods now delegate to anyway.
 //!
 //! Everything else — every error key, every constraint, every field id — is reproduced exactly. That
 //! is what the `key = "…"` overrides on `custom(..)` are for: without them `Email`'s `invalid_email`
@@ -126,7 +126,7 @@ const _: fn() = || {
 };
 
 /// `dirty_fields()` is declaration order, and that is observable: a shell focusing the first invalid
-/// field walks this list. `spike-profile` has always emitted it this way; nothing but review said so.
+/// field walks this list. `fixture-profile` has always emitted it this way; nothing but review said so.
 const _: fn() = || {
     fn assert_draft<D: Draft>() {}
     assert_draft::<ProfileDraft>();

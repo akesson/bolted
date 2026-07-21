@@ -1,4 +1,4 @@
-//! `spike-profile` — the hand-written, "as-if-generated" feature exercising `bolted-core`.
+//! `fixture-profile` — the hand-written, "as-if-generated" feature exercising `bolted-core`.
 //!
 //! A deliberately gnarly profile editor: a composite value object (`DateRange`), a relational
 //! tier-2 rule (`corporate_email`), an async uniqueness check, and live rebase with field-level

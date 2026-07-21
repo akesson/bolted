@@ -1,9 +1,9 @@
 //! `gen-profile` proves that a **generated** feature is a Bolted feature — rule, async check,
 //! composite value and all.
 //!
-//! This file is `spike-profile/tests/conformance.rs` with three changes, and no others:
+//! This file is `fixture-profile/tests/conformance.rs` with three changes, and no others:
 //!
-//! 1. `spike_profile` → `gen_profile`.
+//! 1. `fixture_profile` → `gen_profile`.
 //! 2. `try_set_availability(start, end)` → `try_set_availability((start, end))`.
 //! 3. `fill_valid` drives the check through `bolted_core::Checked` instead of the inherent
 //!    `begin_username_check` conveniences, which the macro does not emit.

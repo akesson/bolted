@@ -1,7 +1,7 @@
 //! `bolted-ffi` — the DTOs and projections every generated FFI layer shares.
 //!
 //! `bolted_core::Field<V>` is generic and BoltFFI's `#[data]` forbids generics, so every generic thing
-//! in the core has to be stamped into a concrete, owned shape before it can cross. `spike-profile-ffi`
+//! in the core has to be stamped into a concrete, owned shape before it can cross. `fixture-profile-ffi`
 //! stamped **one family per value type**, and three of its four families — `Username`, `PersonName`,
 //! `Email` — came out structurally identical, because all three have `Raw = String`.
 //!
@@ -298,7 +298,7 @@ pub fn text_of<V: Value<Raw = String>>(f: &Field<V>) -> String {
 /// `bolted_core::FieldStash<String>`. `Option` because a create-flow field has neither raw nor base.
 ///
 /// Note the shape against the field-state family above. Those needed `Validity<V>`, which mentions
-/// `V`; the stash mentions only `V::Raw`. `spike-profile-ffi` already collapsed its three text stashes
+/// `V`; the stash mentions only `V::Raw`. `fixture-profile-ffi` already collapsed its three text stashes
 /// onto one struct and its comment called that "the cleanest evidence yet" for dedup by raw type.
 /// D24 says the same is true one level up.
 #[data]

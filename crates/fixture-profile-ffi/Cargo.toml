@@ -1,8 +1,8 @@
 # Package name uses underscores: BoltFFI derives native symbol names from the crate name and
-# rejects hyphens (`invalid native symbol name boltffi_function_spike-profile-ffi_ping`). The
-# directory stays `spike-profile-ffi` (step doc's path). Recorded as a finding in the report.
+# rejects hyphens (`invalid native symbol name boltffi_function_fixture-profile-ffi_ping`). The
+# directory stays `fixture-profile-ffi` (step doc's path). Recorded as a finding in the report.
 [package]
-name = "spike_profile_ffi"
+name = "fixture_profile_ffi"
 version.workspace = true
 edition.workspace = true
 publish = false
@@ -15,5 +15,5 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 bolted-core = { path = "../bolted-core" }
-spike-profile = { path = "../spike-profile" }
+fixture-profile = { path = "../fixture-profile" }
 boltffi = "0.28.0"

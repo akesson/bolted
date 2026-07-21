@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 bolted-core = { path = "../bolted-core" }
-# Step 17: repointed from the hand-written `spike-profile` to the macro-generated `gen-profile` —
+# Step 17: repointed from the hand-written `fixture-profile` to the macro-generated `gen-profile` —
 # the last shell to move off the spike (step 11 migrated only the FFI shells). This is what proves
 # §1's "Rust shells consume the contract directly" against *generated* code, and it is what makes
 # the wasm size budget guard the framework/macro path rather than the frozen spike crate.

@@ -1,4 +1,4 @@
-//! `spike-note` proves it is a Bolted feature — with no tier-2 rule and no async check.
+//! `fixture-note` proves it is a Bolted feature — with no tier-2 rule and no async check.
 //!
 //! There is no `rule_suite!` and no `async_check_suite!` line below, and that absence is the test.
 //! C08, C10, C13, C16 and C20's verdict clause are not this feature's invariants, because it has
@@ -6,9 +6,9 @@
 
 use bolted_conformance::{ConformanceFeature, ValueFixture};
 use bolted_core::{Field, Value};
+use fixture_note::{Body, Note, NoteDraft, NoteField, NoteStash, Title};
 use proptest::prelude::*;
 use proptest::strategy::BoxedStrategy;
-use spike_note::{Body, Note, NoteDraft, NoteField, NoteStash, Title};
 
 pub struct TitleFixture;
 impl ValueFixture for TitleFixture {
@@ -107,7 +107,7 @@ impl ConformanceFeature for NoteFixture {
         draft.try_set_body(raw.to_string())
     }
 
-    /// No check to satisfy: filling the fields is all "committable" means here. `spike-profile` has
+    /// No check to satisfy: filling the fields is all "committable" means here. `fixture-profile` has
     /// to run a uniqueness check in this same function, and neither feature can tell the difference
     /// from inside the suite.
     fn fill_valid(draft: &mut NoteDraft) {
