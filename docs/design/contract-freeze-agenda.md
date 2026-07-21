@@ -24,7 +24,8 @@ BoltFFI is at 0.28.0. Pointers only — the cited docs carry the evidence.
 6. **`HttpError → Into<ErrorData>` bridge** (v1.14 residue). (24 #1 / 25 #6 / 26 #6.)
 7. **Adapter packaging conventions → `bolted new` scaffolding rules** — SwiftPM and
    Gradle shapes both proven; plus the FFI-bridge-crate drift check (F-M0-1: bindgen
-   reads source text, so bridge crates are per-target copies). (25 #7 / 26 #7.)
+   reads source text, so bridge crates are per-target copies — but see Q10: if the
+   surface goes uniform, the copies collapse). (25 #7 / 26 #7.)
 8. **Conformance-scope boundary** — which invariants are shared-suite obligations vs
    per-adapter unit obligations (F-M4-2 pin ordering); should row 11 assert upload
    `total` (F-M4-3, unasserted on every implementor)? (26 #8.)
@@ -32,6 +33,14 @@ BoltFFI is at 0.28.0. Pointers only — the cited docs carry the evidence.
    not): the per-hop consultation is the same mid-flight adapter→core re-entry as the
    streaming seam — define the shape once (streaming-seam §4, feature-matrix §5.20),
    even if the capability itself stays deferred.
+10. **Surface uniformity across platforms** — `PriorityHint` (apple-only) is the sole
+    per-platform surface divergence, and it alone forces the two bridge crates: bindgen
+    evaluates no `#[cfg]` at 0.28.0, so the union of items lands in every target's
+    bindings (upstream note 08 — source-verified, probe pending), while one crate
+    packing multiple targets is proven (`gen-profile-ffi`). Declare the hint uniform —
+    a no-op where the engine can't honor it, which OkHttp already can't — and
+    apple/android merge into one multi-target bridge crate. (Raised 2026-07-21,
+    crate-consolidation review.)
 
 ## Smaller decisions (fold in if time permits)
 

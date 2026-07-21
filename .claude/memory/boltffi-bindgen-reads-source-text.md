@@ -1,9 +1,11 @@
 ---
 name: boltffi-bindgen-reads-source-text
 description: "BoltFFI discovers its FFI surface by parsing source files with syn, never expanded Rust — so a proc macro cannot emit #[data]/#[export], and the omission is silent"
-metadata:
+metadata: 
   node_type: memory
   type: reference
+  originSessionId: 16334ffd-4b13-402f-b738-7e8576f22d8f
+  modified: 2026-07-21T16:55:27.152Z
 ---
 
 BoltFFI (0.27.3) finds its FFI surface with `boltffi_scan::SourceTree::load`: `std::fs::read_to_string`
@@ -32,6 +34,16 @@ Consequences, each verified from scratch by
    ProfileStoreFfi in this scope`, pointed at an unrelated `#[data]` twenty lines away. The fix is
    `pub use generated::*;` in `lib.rs`. **`mise run check` structurally cannot see this** — the blob
    only exists under `pack`'s environment.
+
+**It also evaluates no `#[cfg]`** (source-verified at 0.28.0, 2026-07-21; runtime probe still
+TODO): the `generate`/`pack` scan path is `boltffi_cli` → `boltffi_bindgen`, which contains zero
+cfg handling — so cfg-gated `#[data]`/`#[export]` items join the scanned surface for **every**
+target, while rustc compiles them out per-target → bindings referencing absent symbols, silent at
+generate time. The twist: `boltffi_scan::ActiveCfg` (cfg.rs) is a complete, tested cfg evaluator —
+shipped but unwired (dev-dep of the backend only). This is the load-bearing reason divergent
+per-platform FFI surfaces force separate bridge crates (the http apple/android split); one crate
+packing multiple *identical* surfaces is fine (`gen-profile-ffi`). See
+`upstream/boltffi/08-bindgen-ignores-cfg-attributes.md`.
 
 Two smaller traps: `#[boltffi::ffi_stream(item = T)]` in **path form is silently not recognised** by
 `#[export]` (write `use boltffi::*;` and a bare `#[ffi_stream]`), and BoltFFI derives native symbol
