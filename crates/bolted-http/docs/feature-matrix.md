@@ -131,7 +131,7 @@ contract, the rest in types):
 | 23 | Auth: 401/407 as data; ambient OS auth | CORE / CFG | Challenge callbacks unportable; NTLM/Negotiate impossible on Android (§5.18) |
 | 24 | Client certificates | CFG | Composition-root concern on all four surfaces |
 | 25 | Proxy, trust roots | CFG | Unchanged; Linux = env-vars-only asterisk (§5.19) |
-| 26 | Cookies as values (capability) | §9-open | Evidence gathered, shape still a design session away — simpler now (§5.20) |
+| 26 | Cookies as values (capability) | §9-open | Direction recorded 2026-07-21: opt-in, core-owned jar; per-hop re-entry designed with the streaming seam (§5.20) |
 | 27 | Trailers, 1xx/103, server push | OUT | Apple/reqwest expose no trailer API; 103 unexposed; push is dead everywhere (§5.15 n/a) |
 | 28 | WebSocket | parked family | §2 — honest contract needs its own design pass |
 | 29 | Enterprise auth (NTLM/Kerberos), WPAD | OUT | Windows/Apple-only; Android has no built-in NTLM |
@@ -415,12 +415,38 @@ but only GLib consumes it). A GNOME/KDE user's GUI proxy settings are invisible 
 adapter unless exported as env vars; `Proxy::custom` is the seam if this ever matters.
 Document as adapter behavior; do not promise "system proxy" on Linux.
 
-### 5.20 Cookies as values (row 26 — still §9)
+### 5.20 Cookies as values (row 26 — still §9; direction recorded 2026-07-21)
 Evidence gathered for the eventual design session, and the shape got simpler without web:
 per-request participation is expressible on every surface (Apple
 `httpShouldHandleCookies`, OkHttp jar choice, .NET `CookieContainer` per handler), and cookie
 *values* are readable on every surface — the "participate but never read" split that web's
-browser-owned jar forced is gone. Shape stays open until a feature needs it.
+browser-owned jar forced is gone.
+
+**Direction (Henrik, 2026-07-21) — opt-in, core-owned jar; evaluate in a future design
+session** (implement when a feature needs it; additive as a capability, so not freeze-gated):
+
+- **Opt-in at the composition root, never default-on** — an ambient jar breaks same-request-
+  same-outcome and re-opens the row-8 divergence. Platform jars stay disabled *forever*; the
+  capability is a core-owned `CookieJar` value (serializable, replayable, mock-testable) with
+  the adapter as transport. `"cookie"` stays user-reserved — only the jar path attaches it.
+- **Typed `Cookie` values at the seam, not raw header lines** — forced by Apple:
+  `allHeaderFields` comma-coalesces repeated `Set-Cookie`, so the Apple adapter must go
+  through `HTTPCookie.cookies(withResponseHeaderFields:)`; a gnarly-fixture conformance row
+  (quoted commas, odd dates) must pin parser agreement.
+- **The open design problem: per-hop consultation.** A cookie set on a redirect hop
+  (`POST /login → 302 + Set-Cookie → GET /home`) must be ingested and re-attached *mid-flight*,
+  inside one `send()` — a new adapter→core re-entry at each hop boundary. Hooks exist
+  everywhere (Apple `willPerformHTTPRedirection`, OkHttp network interceptor; .NET/Linux
+  follow manually anyway). This is the same mid-flight re-entry shape as the streaming seam —
+  design the two together so one pattern serves both. A minimal v1 may defer it with a
+  documented "redirect-set cookies apply from the next request" caveat.
+- Smaller session items: expiry needs injected time (sans-io); skip the Public Suffix List
+  (native app chooses its hosts — document the threat-model call); `Secure` enforced in core;
+  `SameSite`/`HttpOnly` meaningless client-side; web (if it ever joins) is participate-only
+  via `credentials: 'include'` — the split returns, quarantined as a CAP demotion.
+- **Verify when the C# leg unparks:** the "both-off" claim above for .NET — `UseCookies`
+  may default *true* (fresh per-handler container); the adapter likely needs an explicit
+  `UseCookies = false` to honor the cookie-less contract.
 
 ## 6. The background family, sharpened
 
