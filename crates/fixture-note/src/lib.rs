@@ -1,7 +1,7 @@
-//! `spike-note` — the *second* implementor of the conformance fixture, and the only reason step 08
+//! `fixture-note` — the *second* implementor of the conformance fixture, and the only reason step 08
 //! is entitled to call the suite "generic".
 //!
-//! It is deliberately the opposite of `spike-profile` in every optional dimension: two plain text
+//! It is deliberately the opposite of `fixture-profile` in every optional dimension: two plain text
 //! fields, **no composite value object, no tier-2 rule, no async check**. Everything a Bolted feature
 //! may have and need not.
 //!

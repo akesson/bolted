@@ -1,4 +1,4 @@
-//! `spike-profile` proves it is a Bolted feature.
+//! `fixture-profile` proves it is a Bolted feature.
 //!
 //! Everything below is *fixture*: the suite itself lives in `bolted-conformance`, generic over these
 //! traits, and `docs/CONFORMANCE.md` states each `CNN` normatively. Until step 08 the 22 invariants
@@ -11,12 +11,12 @@
 
 use bolted_conformance::{AsyncCheckFeature, ConformanceFeature, RuleFeature, ValueFixture};
 use bolted_core::{Draft, Field, Value};
-use proptest::prelude::*;
-use proptest::strategy::{BoxedStrategy, Strategy};
-use spike_profile::{
+use fixture_profile::{
     Date, DateRange, Email, PersonName, Profile, ProfileCheck, ProfileDraft, ProfileField,
     ProfileStash, Username,
 };
+use proptest::prelude::*;
+use proptest::strategy::{BoxedStrategy, Strategy};
 
 // =================================================================================================
 // Value fixtures — one per value type. `any_raw` deliberately includes forms the type SANITIZES:

@@ -74,7 +74,7 @@ fn expand_rules(attr: TokenStream2, input: TokenStream2) -> TokenStream2 {
 // =================================================================================================
 
 /// The gnarly value: two sanitizers' worth of nothing, a length bound, and a custom predicate whose
-/// error key is overridden so `spike-profile`'s shells keep the l10n key they ship.
+/// error key is overridden so `fixture-profile`'s shells keep the l10n key they ship.
 #[test]
 fn value_username() {
     golden(
@@ -421,7 +421,7 @@ fn every_mutation_path_routes_through_the_single_guard() {
 /// The guard clones every checked field's value and compares it afterwards. Routing an unchecked
 /// field's setter through it would clone the `Username` on every keystroke of the *name* box — on the
 /// exact path step 07's kill criterion 4 measures, and the one the "core validates every keystroke"
-/// bet rests on. `spike-profile` guards only `try_set_username`; the first version of this macro
+/// bet rests on. `fixture-profile` guards only `try_set_username`; the first version of this macro
 /// guarded all four, and the report would have claimed the hot path was untouched.
 #[test]
 fn an_unchecked_fields_setter_does_not_pay_for_the_guard() {

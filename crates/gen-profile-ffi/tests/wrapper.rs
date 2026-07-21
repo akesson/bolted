@@ -128,7 +128,7 @@ fn the_observers_of_a_submitted_draft_do_not_throw() {
 }
 
 /// `run_*_check` distinguishes "the capability is a declared absence" from "the draft is gone".
-/// `spike-profile-ffi` returned `false` for both, and step 11 caught the generator doing the same
+/// `fixture-profile-ffi` returned `false` for both, and step 11 caught the generator doing the same
 /// when no checker was present on a corpse: the no-capability short-circuit ran ahead of the
 /// draft-liveness gate, so a released draft answered `Ok(false)` instead of refusing. D23 says a
 /// mutating verb refuses a released draft *unconditionally* — the three cells below pin that.

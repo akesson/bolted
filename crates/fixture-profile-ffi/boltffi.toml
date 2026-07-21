@@ -6,7 +6,7 @@ global_args = []
 [cargo.command_args]
 
 [package]
-name = "spike_profile_ffi"
+name = "fixture_profile_ffi"
 
 [targets.apple]
 enabled = true
@@ -44,7 +44,7 @@ min_sdk = 24
 architectures = ["arm64"]
 
 [targets.android.kotlin]
-package = "com.example.spike_profile_ffi"
+package = "com.example.fixture_profile_ffi"
 desktop_loader = "bundled"
 api_style = "top_level"
 error_style = "throwing"

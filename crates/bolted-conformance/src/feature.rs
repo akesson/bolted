@@ -3,7 +3,7 @@
 //! The fixture trait names **roles**, never fields: a *primary* and a *secondary* text field, and
 //! (for [`AsyncCheckFeature`]) a *checked* one. That is the line kill criterion 4 of step 08 drew —
 //! if an invariant could only be stated by naming `username`, it would not be an invariant of Bolted
-//! but of `spike-profile`.
+//! but of `fixture-profile`.
 
 use bolted_core::{
     CheckState, Checked, CommitError, Draft, DraftId, DraftStatus, ErrorData, Field, SingleFlight,
@@ -18,7 +18,7 @@ pub type FieldIdOf<F> = <<F as ConformanceFeature>::Draft as Draft>::FieldId;
 /// Two editable text fields are required, in distinct roles: the **primary** is the one the suite
 /// edits, and the **secondary** is the one it moves on the server in order to prove C19 (a rebase
 /// must not conflict a field whose own canonical never moved). They may have different value types —
-/// `spike-profile`'s are `PersonName` and `Email` — which is why there are two associated types and
+/// `fixture-profile`'s are `PersonName` and `Email` — which is why there are two associated types and
 /// not one.
 pub trait ConformanceFeature {
     type Entity: Clone + PartialEq + std::fmt::Debug;

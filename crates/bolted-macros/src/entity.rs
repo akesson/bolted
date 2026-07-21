@@ -13,7 +13,7 @@
 //!   invariants (step 08, verified by mutation) and silently overwrites the server.
 //! - `dirty_fields()` / `conflicts()` push in **declaration order**, which is observable.
 //! - Every mutation that can move a checked field's value is wrapped in **one** generated guard, so
-//!   no path can skip C13's verdict reset. `spike-profile` needed this on five call sites; a macro
+//!   no path can skip C13's verdict reset. `fixture-profile` needed this on five call sites; a macro
 //!   that emitted the reset per call site would drop it from the sixth. *"Can move"* is read as the
 //!   compiler reads it: `try_set_name` cannot touch `username`, so it is not guarded, and does not
 //!   clone a `Username` on every keystroke of the name box (see `setters`).

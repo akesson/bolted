@@ -125,7 +125,7 @@ pub trait Stashable: Draft {
 /// Checks are **id-keyed**, exactly as [`Draft`]'s resolvers are field-keyed (D17, D18). A concrete
 /// `CheckId` enum is monomorphic, so it crosses the FFI boundary as `FieldId` already does — §5's
 /// ban on generic methods at the boundary does not bite. Until step 09 this surface lived on no
-/// trait at all: two shells, `spike-profile-ffi` and the conformance fixture each re-derived the
+/// trait at all: two shells, `fixture-profile-ffi` and the conformance fixture each re-derived the
 /// same three methods, which is how you learn that a contract is missing a name.
 ///
 /// The verdict type is deliberately concrete rather than an associated type. A check either passes

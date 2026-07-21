@@ -1,13 +1,13 @@
-//! `gen-note` — `spike-note`, declared instead of written.
+//! `gen-note` — `fixture-note`, declared instead of written.
 //!
 //! **This crate is written before `gen-profile`, on purpose.** A macro given exactly one input grows
-//! that input's shape, silently, exactly as step 08's conformance suite grew `spike-profile`'s. Had
+//! that input's shape, silently, exactly as step 08's conformance suite grew `fixture-profile`'s. Had
 //! `#[bolted::entity]` met the rule-and-check feature first, it could have come to assume a rule and
 //! a check — and nothing about reading it would reveal the assumption. What this feature *cannot*
 //! declare, the macros had no business requiring.
 //!
 //! So: two plain text fields. No composite value object, no tier-2 rule, no async check. The whole
-//! feature is the twelve lines below, against `spike-note`'s 335 — and it passes the same
+//! feature is the twelve lines below, against `fixture-note`'s 335 — and it passes the same
 //! conformance suite, minus the four invariants it does not owe.
 //!
 //! The one visible difference from the hand-written original is that a length-bounded value's

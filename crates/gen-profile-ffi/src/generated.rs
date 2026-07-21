@@ -302,7 +302,7 @@ fn build_draft_snapshot(draft: &ProfileDraft) -> ProfileSnapshot {
 /// A draft checked out of a canonical has exactly the shape a canonical snapshot needs: every
 /// field `Valid` and `InSync`, nothing dirty, no conflicts, no check run. So it is built by
 /// asking the core, rather than by a second hand-written table that could disagree with the
-/// first. `spike-profile-ffi` wrote that table by hand, per field, twice.
+/// first. `fixture-profile-ffi` wrote that table by hand, per field, twice.
 fn canonical_snapshot(entity: &Profile, version: u64) -> ProfileSnapshot {
     build_draft_snapshot(&ProfileDraft::from_canonical(Some(entity), version))
 }

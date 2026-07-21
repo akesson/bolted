@@ -1,8 +1,8 @@
-//! `spike-profile-ffi` — the hand-written, "as-if-generated" BoltFFI wrapper around the
-//! `spike-profile` feature (step 02, the BoltFFI due-diligence probe). The ONLY crate importing
+//! `fixture-profile-ffi` — the hand-written, "as-if-generated" BoltFFI wrapper around the
+//! `fixture-profile` feature (step 02, the BoltFFI due-diligence probe). The ONLY crate importing
 //! `boltffi`; `bolted-core` still never sees it.
 //!
-//! NOTE: unlike `bolted-core`/`spike-profile`, this crate does NOT `#![forbid(unsafe_code)]` —
+//! NOTE: unlike `bolted-core`/`fixture-profile`, this crate does NOT `#![forbid(unsafe_code)]` —
 //! `#[export]` expands to `extern "C"` shims containing `unsafe`, so the forbid would reject
 //! generated code. FINDING: the FFI boundary is exactly where the no-unsafe discipline stops.
 //!
@@ -35,7 +35,7 @@ use bolted_core::{
     CheckState, Constraint, Draft, DraftId, DraftStatus, Field, Stashable, StoreDraft, SubmitError,
     SyncState, ValidationReport, Validity, Value,
 };
-use spike_profile::{
+use fixture_profile::{
     DateRange, Email, PersonName, Profile, ProfileDraft, ProfileField, ProfileStore, Username,
 };
 

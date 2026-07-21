@@ -5,7 +5,7 @@
 //! ids it pins to, and to collect them in declaration order. It never decides what a rule *means*.
 //!
 //! `pins(email)` becomes `ProfileField::Email`, so a typo names a variant that does not exist and the
-//! build fails. `spike-profile` has asserted that property in a comment since step 01, where nothing
+//! build fails. `fixture-profile` has asserted that property in a comment since step 01, where nothing
 //! could test it — pins were written out longhand, so a bad one was simply never written.
 //!
 //! Since step 10 the declaration is parsed by `bolted-decl` (D25); this file is emission only.

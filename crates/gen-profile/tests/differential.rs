@@ -2,12 +2,12 @@
 //!
 //! ROADMAP's Phase 3 says *"the hand-written spike code becomes the golden reference the generated
 //! code is diffed against"*. A textual diff cannot do that job — `gen-profile` is 130 lines and
-//! `spike-profile` is 724, and the differences that matter are not the ones a diff shows. So the two
+//! `fixture-profile` is 724, and the differences that matter are not the ones a diff shows. So the two
 //! features are driven through identical inputs and their **observable answers** are compared:
 //! parsed values, error keys, constraint metadata, dirty sets, conflict sets, validation reports,
 //! and commit outcomes.
 //!
-//! The types are foreign to each other — `gen_profile::ProfileField` and `spike_profile::ProfileField`
+//! The types are foreign to each other — `gen_profile::ProfileField` and `fixture_profile::ProfileField`
 //! are different enums — so everything is projected to data before comparison. That projection is
 //! also the point: two independent implementations of one contract agree on what a shell would see.
 //!
@@ -92,21 +92,21 @@ fn the_generated_value_types_parse_exactly_as_the_hand_written_ones_do() {
     for raw in USERNAMES {
         assert_eq!(
             parse::<gen_profile::Username>(raw),
-            parse::<spike_profile::Username>(raw),
+            parse::<fixture_profile::Username>(raw),
             "Username::try_new({raw:?})"
         );
     }
     for raw in NAMES {
         assert_eq!(
             parse::<gen_profile::PersonName>(raw),
-            parse::<spike_profile::PersonName>(raw),
+            parse::<fixture_profile::PersonName>(raw),
             "PersonName::try_new({raw:?})"
         );
     }
     for raw in EMAILS {
         assert_eq!(
             parse::<gen_profile::Email>(raw),
-            parse::<spike_profile::Email>(raw),
+            parse::<fixture_profile::Email>(raw),
             "Email::try_new({raw:?})"
         );
     }
@@ -120,7 +120,7 @@ fn the_length_bounds_are_inclusive_on_both_ends() {
         let raw = "a".repeat(n);
         assert_eq!(
             parse::<gen_profile::Username>(&raw),
-            parse::<spike_profile::Username>(&raw),
+            parse::<fixture_profile::Username>(&raw),
             "Username of length {n}"
         );
     }
@@ -128,7 +128,7 @@ fn the_length_bounds_are_inclusive_on_both_ends() {
         let raw = "a".repeat(n);
         assert_eq!(
             parse::<gen_profile::PersonName>(&raw),
-            parse::<spike_profile::PersonName>(&raw),
+            parse::<fixture_profile::PersonName>(&raw),
             "PersonName of length {n}"
         );
     }
@@ -139,8 +139,8 @@ fn the_length_bounds_are_inclusive_on_both_ends() {
 /// code precisely because this list is the single source of truth.
 #[test]
 fn the_generated_constraints_match_the_hand_written_ones() {
+    use fixture_profile::ProfileField as S;
     use gen_profile::ProfileField as G;
-    use spike_profile::ProfileField as S;
 
     let pairs: [(Vec<_>, Vec<_>); 4] = [
         (G::Username.constraints(), S::Username.constraints()),
@@ -170,14 +170,14 @@ fn gen_entity() -> gen_profile::Profile {
     }
 }
 
-fn spike_entity() -> spike_profile::Profile {
-    spike_profile::Profile {
+fn spike_entity() -> fixture_profile::Profile {
+    fixture_profile::Profile {
         username: value("alice"),
         name: value("Alice"),
         email: value("alice@corp.example"),
         availability: Value::try_new((
-            spike_profile::Date::new(2026, 1, 1),
-            spike_profile::Date::new(2026, 12, 31),
+            fixture_profile::Date::new(2026, 1, 1),
+            fixture_profile::Date::new(2026, 12, 31),
         ))
         .expect("valid"),
     }
@@ -195,10 +195,10 @@ fn value<V: Value<Raw = String>>(raw: &str) -> V {
 fn the_two_implementations_agree_at_every_step_of_an_edit_session() {
     let (ge, se) = (gen_entity(), spike_entity());
     let mut g = gen_profile::ProfileDraft::from_canonical(Some(&ge), 0);
-    let mut s = spike_profile::ProfileDraft::from_canonical(Some(&se), 0);
+    let mut s = fixture_profile::ProfileDraft::from_canonical(Some(&se), 0);
 
     let mut step = 0;
-    let mut agree = |g: &gen_profile::ProfileDraft, s: &spike_profile::ProfileDraft| {
+    let mut agree = |g: &gen_profile::ProfileDraft, s: &fixture_profile::ProfileDraft| {
         assert_eq!(observe(g), observe(s), "the two diverged at step {step}");
         step += 1;
     };
@@ -239,7 +239,7 @@ fn the_two_implementations_agree_at_every_step_of_an_edit_session() {
         email: value("bob@corp.example"),
         ..ge.clone()
     };
-    let se2 = spike_profile::Profile {
+    let se2 = fixture_profile::Profile {
         email: value("bob@corp.example"),
         ..se.clone()
     };
@@ -252,7 +252,7 @@ fn the_two_implementations_agree_at_every_step_of_an_edit_session() {
         username: value("carol"),
         ..ge2.clone()
     };
-    let se3 = spike_profile::Profile {
+    let se3 = fixture_profile::Profile {
         username: value("carol"),
         ..se2.clone()
     };
@@ -262,7 +262,7 @@ fn the_two_implementations_agree_at_every_step_of_an_edit_session() {
 
     // 8. take theirs: the value moves, so the verdict resets and the check is demanded again (C09/C13)
     g.resolve_take_theirs(gen_profile::ProfileField::Username);
-    s.resolve_take_theirs(spike_profile::ProfileField::Username);
+    s.resolve_take_theirs(fixture_profile::ProfileField::Username);
     agree(&g, &s);
 
     // 9. both refuse to commit, for the same typed reason and with the same report
@@ -283,7 +283,7 @@ fn orphaning_and_create_flow_agree() {
     let (ge, se) = (gen_entity(), spike_entity());
 
     let mut g = gen_profile::ProfileDraft::from_canonical(Some(&ge), 0);
-    let mut s = spike_profile::ProfileDraft::from_canonical(Some(&se), 0);
+    let mut s = fixture_profile::ProfileDraft::from_canonical(Some(&se), 0);
     assert!(g.is_based() && s.is_based());
     g.orphan();
     s.orphan();
@@ -292,7 +292,7 @@ fn orphaning_and_create_flow_agree() {
     assert_eq!(observe(&g), observe(&s));
 
     let g = gen_profile::ProfileDraft::from_canonical(None, 0);
-    let s = spike_profile::ProfileDraft::from_canonical(None, 0);
+    let s = fixture_profile::ProfileDraft::from_canonical(None, 0);
     assert!(!g.is_based() && !s.is_based());
     assert_eq!(observe(&g), observe(&s));
 }
@@ -305,7 +305,7 @@ fn the_stash_round_trips_identically() {
 
     let (ge, se) = (gen_entity(), spike_entity());
     let mut g = gen_profile::ProfileDraft::from_canonical(Some(&ge), 3);
-    let mut s = spike_profile::ProfileDraft::from_canonical(Some(&se), 3);
+    let mut s = fixture_profile::ProfileDraft::from_canonical(Some(&se), 3);
 
     g.try_set_username("alice2".into()).expect("valid");
     s.try_set_username("alice2".into()).expect("valid");
@@ -320,7 +320,7 @@ fn the_stash_round_trips_identically() {
 
     let (g, s) = (
         gen_profile::ProfileDraft::from_stash(&g.stash()),
-        spike_profile::ProfileDraft::from_stash(&s.stash()),
+        fixture_profile::ProfileDraft::from_stash(&s.stash()),
     );
     assert_eq!(observe(&g), observe(&s));
     // and the verdict is gone on both, so C16 demands a fresh check on the dirty username

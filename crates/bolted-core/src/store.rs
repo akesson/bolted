@@ -6,7 +6,7 @@
 //! behind the one `Mutex` step 02 said it must.
 //!
 //! That is what makes the third store loop unnecessary. Phase 1 wrote this logic three times — an
-//! `Rc<RefCell>` version here, an `Arc<Mutex>` version in `spike-profile-ffi`, and step 07's
+//! `Rc<RefCell>` version here, an `Arc<Mutex>` version in `fixture-profile-ffi`, and step 07's
 //! `restore` in both — and the copies had already drifted (see [`Store::draft_count`]).
 //!
 //! Two consequences follow from owning the drafts outright:

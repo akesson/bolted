@@ -1,4 +1,4 @@
-//! The monomorphic FFI projection of the `spike-profile` feature — the hand-written stand-in for
+//! The monomorphic FFI projection of the `fixture-profile` feature — the hand-written stand-in for
 //! what `#[bolted::entity]`/`#[bolted::value]` would emit for the FFI boundary.
 //!
 //! Why any of this exists: `bolted_core::Field<V>` is generic, and BoltFFI `#[data]` forbids
@@ -11,7 +11,7 @@
 use bolted_core::FieldStash;
 use bolted_core::report::ErrorData as CoreErrorData;
 use boltffi::*;
-use spike_profile::ProfileStash;
+use fixture_profile::ProfileStash;
 
 // =================================================================================================
 // Shared primitives
@@ -37,7 +37,7 @@ pub struct PlainDateRange {
     pub end: PlainDate,
 }
 
-/// Mirrors `spike_profile::ProfileField`.
+/// Mirrors `fixture_profile::ProfileField`.
 #[data]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProfileFieldId {
@@ -291,7 +291,7 @@ pub struct DateRangeFieldStashFfi {
     pub base: Option<PlainDateRange>,
 }
 
-/// `spike_profile::ProfileStash`. Carries no `sync` and no async verdict, on purpose — see C20.
+/// `fixture_profile::ProfileStash`. Carries no `sync` and no async verdict, on purpose — see C20.
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileStashFfi {
@@ -362,9 +362,9 @@ impl std::fmt::Display for UsernameErrorFfi {
 impl std::error::Error for UsernameErrorFfi {}
 unexpected_callback_is!(UsernameErrorFfi, UsernameErrorFfi::InvalidChars);
 
-impl From<spike_profile::UsernameError> for UsernameErrorFfi {
-    fn from(e: spike_profile::UsernameError) -> Self {
-        use spike_profile::UsernameError as E;
+impl From<fixture_profile::UsernameError> for UsernameErrorFfi {
+    fn from(e: fixture_profile::UsernameError) -> Self {
+        use fixture_profile::UsernameError as E;
         match e {
             E::TooShort { min, actual } => UsernameErrorFfi::TooShort { min, actual },
             E::TooLong { max, actual } => UsernameErrorFfi::TooLong { max, actual },
@@ -390,9 +390,9 @@ unexpected_callback_is!(
     PersonNameErrorFfi::TooShort { min: 0, actual: 0 }
 );
 
-impl From<spike_profile::PersonNameError> for PersonNameErrorFfi {
-    fn from(e: spike_profile::PersonNameError) -> Self {
-        use spike_profile::PersonNameError as E;
+impl From<fixture_profile::PersonNameError> for PersonNameErrorFfi {
+    fn from(e: fixture_profile::PersonNameError) -> Self {
+        use fixture_profile::PersonNameError as E;
         match e {
             E::TooShort { min, actual } => PersonNameErrorFfi::TooShort { min, actual },
             E::TooLong { max, actual } => PersonNameErrorFfi::TooLong { max, actual },
@@ -413,10 +413,10 @@ impl std::fmt::Display for EmailErrorFfi {
 impl std::error::Error for EmailErrorFfi {}
 unexpected_callback_is!(EmailErrorFfi, EmailErrorFfi::Invalid);
 
-impl From<spike_profile::EmailError> for EmailErrorFfi {
-    fn from(e: spike_profile::EmailError) -> Self {
+impl From<fixture_profile::EmailError> for EmailErrorFfi {
+    fn from(e: fixture_profile::EmailError) -> Self {
         match e {
-            spike_profile::EmailError::Invalid => EmailErrorFfi::Invalid,
+            fixture_profile::EmailError::Invalid => EmailErrorFfi::Invalid,
         }
     }
 }
@@ -448,10 +448,10 @@ unexpected_callback_is!(
     }
 );
 
-impl From<spike_profile::DateRangeError> for DateRangeErrorFfi {
-    fn from(e: spike_profile::DateRangeError) -> Self {
+impl From<fixture_profile::DateRangeError> for DateRangeErrorFfi {
+    fn from(e: fixture_profile::DateRangeError) -> Self {
         match e {
-            spike_profile::DateRangeError::StartAfterEnd { start, end } => {
+            fixture_profile::DateRangeError::StartAfterEnd { start, end } => {
                 DateRangeErrorFfi::StartAfterEnd {
                     start: to_plain_date(start),
                     end: to_plain_date(end),
@@ -492,7 +492,7 @@ unexpected_callback_is!(SubmitErrorFfi, SubmitErrorFfi::AlreadySubmitted);
 // Small value conversions
 // =================================================================================================
 
-pub fn to_plain_date(d: spike_profile::Date) -> PlainDate {
+pub fn to_plain_date(d: fixture_profile::Date) -> PlainDate {
     PlainDate {
         year: d.year,
         month: d.month,
@@ -500,11 +500,11 @@ pub fn to_plain_date(d: spike_profile::Date) -> PlainDate {
     }
 }
 
-pub fn to_core_date(d: PlainDate) -> spike_profile::Date {
-    spike_profile::Date::new(d.year, d.month, d.day)
+pub fn to_core_date(d: PlainDate) -> fixture_profile::Date {
+    fixture_profile::Date::new(d.year, d.month, d.day)
 }
 
-pub fn to_plain_range(r: &spike_profile::DateRange) -> PlainDateRange {
+pub fn to_plain_range(r: &fixture_profile::DateRange) -> PlainDateRange {
     PlainDateRange {
         start: to_plain_date(r.start()),
         end: to_plain_date(r.end()),
@@ -528,9 +528,9 @@ pub fn to_core_text_stash(s: &TextFieldStashFfi) -> FieldStash<String> {
 }
 
 pub fn to_range_stash_ffi(
-    s: &FieldStash<(spike_profile::Date, spike_profile::Date)>,
+    s: &FieldStash<(fixture_profile::Date, fixture_profile::Date)>,
 ) -> DateRangeFieldStashFfi {
-    let project = |(start, end): &(spike_profile::Date, spike_profile::Date)| PlainDateRange {
+    let project = |(start, end): &(fixture_profile::Date, fixture_profile::Date)| PlainDateRange {
         start: to_plain_date(*start),
         end: to_plain_date(*end),
     };
@@ -542,7 +542,7 @@ pub fn to_range_stash_ffi(
 
 pub fn to_core_range_stash(
     s: &DateRangeFieldStashFfi,
-) -> FieldStash<(spike_profile::Date, spike_profile::Date)> {
+) -> FieldStash<(fixture_profile::Date, fixture_profile::Date)> {
     let project = |r: &PlainDateRange| (to_core_date(r.start), to_core_date(r.end));
     FieldStash {
         raw: s.raw.as_ref().map(project),
