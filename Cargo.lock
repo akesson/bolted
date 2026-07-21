@@ -326,9 +326,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e61338c33a204aa5f4cf87e3b8201183e4830843da05d8ff180d8e26525fc9bd"
+checksum = "30617c4d83e26c856cd4f223b1c352a1861496cb0ae724b5998d3df5970a9eef"
 dependencies = [
  "boltffi_core",
  "boltffi_macros",
@@ -336,18 +336,18 @@ dependencies = [
 
 [[package]]
 name = "boltffi_ast"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2484f4fd135a65fec8c0bec3f0a03a53ffe041256606f4327d3d0674ecd38f2e"
+checksum = "339405f7d56fe4eb7a28016d355375d62612be86d55bfbfa63dfe04f6caea252"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "boltffi_binding"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f3c5cccb928af9c7d99c571db8d36356f0f803c3dfa5e1311d65e835e2b360d"
+checksum = "c2d5c55ec31354c8e3f6e7901070112372ac37f1707d692f6d3f0cbfb67bfdc0"
 dependencies = [
  "boltffi_ast",
  "serde",
@@ -356,9 +356,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_core"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3019b792fdafad272abb6c06e4b7962477e361b7d3db12e32e6ad928f17bd42"
+checksum = "7f7fb7282b053622c8d70f76d03d56fb7e4c697d752c18c3acce55e642db0bdf"
 dependencies = [
  "boltffi_macros",
  "url",
@@ -367,9 +367,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_ffi_rules"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f42a27b71d834d484306828b900579b15ba07713bbd3fbdd96a6aa277c9b1717"
+checksum = "32e1022d67a96fa37869b08728faf51544a1e168880b0fbb011cbfed390b2c70"
 dependencies = [
  "serde",
  "serde_json",
@@ -379,14 +379,15 @@ dependencies = [
 
 [[package]]
 name = "boltffi_macros"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "812ea2e32b5358a67099e97d156eb0969c0ec2536330dcf6e39acd79f70062d7"
+checksum = "04c971a4f89c2d08d685b063b5cb0566566683ca7ea67e199d73b2c0691afb22"
 dependencies = [
  "boltffi_ast",
  "boltffi_binding",
  "boltffi_ffi_rules",
  "boltffi_scan",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn",
@@ -394,9 +395,9 @@ dependencies = [
 
 [[package]]
 name = "boltffi_scan"
-version = "0.27.5"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07da53372d2211ed6b7927a6ecd5043914c498b1208bdc7917edc0c8bfbf15c6"
+checksum = "8e4b187e1c15cb8534a90f870f6fb7e5756fa90845af67385851eb847225ca24"
 dependencies = [
  "boltffi_ast",
  "proc-macro2",
@@ -753,7 +754,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1806,6 +1807,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-crate"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
+dependencies = [
+ "toml_edit",
+]
+
+[[package]]
 name = "proc-macro-error-attr2"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2177,7 +2187,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2233,7 +2243,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2666,10 +2676,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2830,6 +2840,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.13+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "toml_parser",
+ "winnow",
 ]
 
 [[package]]
@@ -3204,7 +3226,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

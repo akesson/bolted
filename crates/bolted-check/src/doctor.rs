@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 /// The boltffi CLI version doctor demands — the same literal `setup:boltffi` installs
 /// (`want="…"` in `mise.toml`). Cross-pinned both ways by `tests/doctor_manifest.rs`; a bump
 /// that edits one and not the other fails `mise run check`.
-pub const BOLTFFI_PINNED: &str = "0.27.5";
+pub const BOLTFFI_PINNED: &str = "0.28.0";
 
 /// What a row probes. Kept closed and data-shaped so the table below stays declarative; the
 /// judgement per kind lives once, in [`evaluate`].
@@ -518,7 +518,7 @@ mod tests {
                 .map(|r| r.status)
         };
         assert!(matches!(
-            status(&m(Some("boltffi 0.27.5"))),
+            status(&m(Some("boltffi 0.28.0"))),
             Some(Status::Ok(_))
         ));
         assert!(matches!(

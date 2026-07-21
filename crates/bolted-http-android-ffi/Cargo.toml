@@ -20,4 +20,4 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # The sans-io contract + the conformance harness (suite rows, RowResult, TestServer, Endpoints).
 bolted-http = { path = "../bolted-http", features = ["conformance"] }
 # Registry pin only (step 25: the step-23 git pin is killed). Matches gen-profile-ffi / apple-ffi.
-boltffi = "0.27.5"
+boltffi = "0.28.0"
