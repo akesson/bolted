@@ -137,6 +137,12 @@ impl BodyStream {
     pub fn deliver_chunk(&mut self, chunk: BodyChunk) -> Result<(), HttpError> {
         // (1) seq is checked before capacity: a corrupt sequence is an integrity failure regardless
         // of how full the ring is, and diagnosing it first keeps the two failure modes disjoint.
+        //
+        // REVISIT (step-27 M1 decision): a seq violation maps to the existing `Transport` key
+        // ("truncated mid-body"), not a new one — the step authorised exactly one new variant
+        // (`StreamOverflow`). If M2's row 12 needs to distinguish truncation from a generic
+        // transport reset to make its red case unambiguous, a dedicated key is minted THEN, with
+        // that evidence — not preemptively.
         if chunk.seq != self.next_seq {
             return Err(HttpError::Transport);
         }
@@ -196,6 +202,10 @@ impl BodyStream {
                 if total == self.ingested_bytes {
                     Ok(total)
                 } else {
+                    // REVISIT (step-27 M1 decision): the completeness-gate failure maps to the
+                    // existing `Transport` key ("truncated mid-body"), not a new one. If M2's row 12
+                    // needs truncation observably distinct from a generic transport failure to make
+                    // its red case unambiguous, a dedicated key is minted THEN, with that evidence.
                     Err(HttpError::Transport)
                 }
             }
