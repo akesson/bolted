@@ -12,7 +12,7 @@ plugins {
 }
 
 // The generated Kotlin + the packed .so are consumed IN PLACE from `boltffi pack android`'s output.
-val ffiDist = file("../../crates/bolted-http-android-ffi/dist/android")
+val ffiDist = file("../../crates/bolted-http-ffi/dist/android")
 
 android {
     namespace = "dev.bolted.http"

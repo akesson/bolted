@@ -309,15 +309,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bolted_http_android_ffi"
-version = "0.0.0"
-dependencies = [
- "bolted-http",
- "boltffi",
-]
-
-[[package]]
-name = "bolted_http_apple_ffi"
+name = "bolted_http_ffi"
 version = "0.0.0"
 dependencies = [
  "bolted-http",

@@ -1,5 +1,5 @@
 //! The [`Http`] capability trait and its completion machinery, plus the optional capability
-//! traits ([`Metrics`], [`PriorityHint`]).
+//! trait [`Metrics`].
 //!
 //! **Sans-io, callback/completion shaped.** There is no async runtime in this crate: an adapter
 //! is handed the request effect and delivers the single completion to a [`CompletionSink`]. One
@@ -118,11 +118,6 @@ impl RequestHandle {
 //
 // These are how the C3 divergence matrix is *generated from the capability types*: an adapter's
 // present/absent capabilities are read off which of these it implements, never hand-written.
-
-/// **CAP** (row 12): the adapter honours the request's [`crate::Priority`] hint. Marker only —
-/// its presence is the honest signal; an adapter that legally ignores priority (OkHttp, .NET)
-/// simply does not implement it. No method: the hint data rides the request already.
-pub trait PriorityHint: Http {}
 
 /// **CAP, tiered** (row 18 / §5.13): request metrics. The capability exposes its *tier* rather
 /// than pretending uniformity — reqwest has no phase seam to synthesise DNS/TLS timings from, so

@@ -30,8 +30,7 @@ pub mod response;
 pub mod conformance;
 
 pub use capability::{
-    CancelToken, CompletionSink, Http, Metrics, MetricsTier, PriorityHint, RequestHandle,
-    UploadProgressSink,
+    CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, UploadProgressSink,
 };
 pub use error::{HttpError, HttpErrorKey, TlsErrorKind};
 pub use header::{

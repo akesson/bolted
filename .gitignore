@@ -57,8 +57,9 @@ android/profile-probe/build/
 android/profile-probe/.gradle/
 android/profile-probe/local.properties
 
-# Step 26 — Android HTTP adapter: packed bindings/.so + Gradle build artifacts
-crates/bolted-http-android-ffi/dist/
+# Step 26/27 — Android HTTP adapter: packed bindings/.so + Gradle build artifacts. The bridge crate
+# merged into crates/bolted-http-ffi (step-27 M0); its dist/ (android pack output) is the artifact.
+crates/bolted-http-ffi/dist/
 android/bolted-http/build/
 android/bolted-http/.gradle/
 android/bolted-http/local.properties

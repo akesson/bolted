@@ -13,21 +13,18 @@ use crate::capability::MetricsTier;
 /// [`Capability::ALL`]) is how a new optional-capability trait joins the generated table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
-    /// Row 12 (CAP): honours the priority hint.
-    PriorityHint,
     /// Row 18 (CAP, tiered): reports request metrics.
     Metrics,
 }
 
 impl Capability {
     /// Every capability the matrix covers, in a stable order.
-    pub const ALL: &'static [Capability] = &[Capability::PriorityHint, Capability::Metrics];
+    pub const ALL: &'static [Capability] = &[Capability::Metrics];
 
     /// The stable slug used in the rendered table.
     #[must_use]
     pub const fn slug(self) -> &'static str {
         match self {
-            Capability::PriorityHint => "priority-hint",
             Capability::Metrics => "metrics",
         }
     }
@@ -100,13 +97,6 @@ pub fn divergence(factory: &dyn AdapterFactory) -> DivergenceTable {
         .iter()
         .map(|&capability| {
             let presence = match capability {
-                Capability::PriorityHint => {
-                    if factory.priority_hint().is_some() {
-                        Presence::Present
-                    } else {
-                        Presence::Absent
-                    }
-                }
                 Capability::Metrics => match factory.metrics() {
                     Some(m) => Presence::PresentDetail(tier_slug(m.tier()).to_string()),
                     None => Presence::Absent,
@@ -138,14 +128,12 @@ mod tests {
     const EXPECTED_SOCKET_MOCK: &str = "\
 capability     | presence
 ---------------+-----------------------
-priority-hint  | absent
 metrics        | present (WholeRequest)";
 
     /// A scripted mock reports no optional capabilities — the all-absent baseline.
     const EXPECTED_SCRIPTED_MOCK: &str = "\
 capability     | presence
 ---------------+-----------------------
-priority-hint  | absent
 metrics        | absent";
 
     #[test]
@@ -172,10 +160,7 @@ metrics        | absent";
     /// `Http::send`, not an `AdapterFactory` capability; it must never grow a `Capability` column.
     #[test]
     fn m1_5_additions_are_core_not_capabilities() {
-        assert_eq!(Capability::ALL.len(), 2);
-        assert_eq!(
-            Capability::ALL,
-            &[Capability::PriorityHint, Capability::Metrics]
-        );
+        assert_eq!(Capability::ALL.len(), 1);
+        assert_eq!(Capability::ALL, &[Capability::Metrics]);
     }
 }

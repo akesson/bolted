@@ -131,9 +131,13 @@ pub enum ResponseSink {
     File(FileRef),
 }
 
-/// A priority hint (feature-matrix row 12). **CAP** (decided 2026-07-19): honored only where an
-/// adapter implements [`crate::PriorityHint`] (Apple, Cronet/HttpEngine); legally ignored
-/// elsewhere. The hint *data* rides every request regardless; the trait signals honouring.
+/// A priority hint (feature-matrix row 12). **Uniform and advisory** (ruled 2026-07-21, Q10):
+/// a plain request field every adapter accepts, honoured where the engine can express it
+/// (Apple maps it to `URLSessionTask.priority`, Cronet/HttpEngine to its request priority) and a
+/// legal **no-op** where it cannot — OkHttp exposes no per-`Call` priority knob and ignores it,
+/// which is conformant. The hint data always rides the request; whether it changes wire behaviour
+/// is the engine's business. Acceptance-only conformance (row 12): the contract asserts the field
+/// is carried, never that any particular scheduling results.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Priority {
     Throttled,

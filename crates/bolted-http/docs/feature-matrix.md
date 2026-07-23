@@ -310,10 +310,11 @@ write custom code against, and faking wire priority is not compensation.
 **Re-ruled 2026-07-21 (contract review Q10): uniform CORE hint after all.** The 2026-07-19
 CAP call was made before upstream note 08 established that bindgen evaluates no `#[cfg]`
 (the union of items lands in every target's bindings), which made the apple-only capability
-the sole reason `bolted-http-apple-ffi` / `bolted-http-android-ffi` are two crates. Since
+the sole reason `bolted-http-apple-ffi` / `bolted-http-android-ffi` were two crates. Since
 ignoring the hint is *legal per the row's own contract* (acceptance-only conformance — OkHttp
 already ignores it), uniform-with-no-op costs nothing the CAP shape was protecting, and the
-bridge crates merge into one multi-target crate. Precedent stated with the ruling:
+bridge crates merged into one multi-target crate (`bolted-http-ffi`, step-27 M0). Precedent
+stated with the ruling:
 uniform-with-no-op is preferred **only** when ignoring is legal per the capability's own
 contract; otherwise a divergence is real and gets a real seam.
 

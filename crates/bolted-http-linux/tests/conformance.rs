@@ -53,7 +53,8 @@ impl AdapterFactory for LinuxFactory {
         // reqwest's honest tier is whole-request (§5.13) — present, tier B.
         Some(Box::new(self.http.clone()))
     }
-    // priority_hint() defaults to absent (row 12 CAP — reqwest does not honour priority).
+    // The priority hint (row 12) is a uniform advisory field, not a capability trait (ruled Q10) —
+    // reqwest carries the data and legally ignores it, so there is no C3 column for it.
 }
 
 fn harness() -> (TestServer, Endpoints) {
@@ -99,8 +100,9 @@ fn c2_every_reachable_key_produced() {
     }
 }
 
-/// C3 — the divergence table generated from the adapter's capability self-report: priority-hint
-/// absent, metrics present at the WholeRequest tier (identical to the socket mock's honest shape).
+/// C3 — the divergence table generated from the adapter's capability self-report: metrics present
+/// at the WholeRequest tier (identical to the socket mock's honest shape). The priority hint is no
+/// longer a divergent capability (ruled Q10, uniform advisory field), so it has no row here.
 #[test]
 fn c3_divergence_matrix_is_pinned() {
     let (_server, endpoints) = harness();
@@ -108,7 +110,6 @@ fn c3_divergence_matrix_is_pinned() {
     const EXPECTED: &str = "\
 capability     | presence
 ---------------+-----------------------
-priority-hint  | absent
 metrics        | present (WholeRequest)";
     assert_eq!(c3::divergence(&factory).render(), EXPECTED);
 }

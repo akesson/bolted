@@ -6,14 +6,21 @@ global_args = []
 [cargo.command_args]
 
 [package]
-name = "bolted_http_apple_ffi"
-crate = "bolted_http_apple_ffi"
+name = "bolted_http_ffi"
+crate = "bolted_http_ffi"
+
+# BOTH targets enabled: this one crate packs Apple AND Android (Q10 merge). `boltffi pack apple`
+# and `boltffi pack android` each pack only their named target, so mise's pack:apple:http and
+# pack:android:http stay separate verbs against this shared crate.
 
 # The bundled SPM layout (spike-packaging-report §1): `output` IS the shippable package root, and
 # `wrapper_sources` is the hand-written adapter's source dir *inside* it. `pack apple` writes
 # Package.swift + the xcframework + the generated bindings into `Sources/BoltedHttp/BoltFFI/`, next
 # to the hand-written `BoltedHttp.swift` — same module, no import needed. Pack does NOT copy wrapper
 # sources, so `BoltedHttp.swift` must already live at that path (it does; it is committed).
+# `module_name` stays BoltedHttpApple (apple/bolted-http-conformance references it) — unchanged
+# across the merge; the crate rename only moves the internal native symbol names, which pack
+# regenerates consistently.
 [targets.apple]
 enabled = true
 output = "../../apple/bolted-http"
@@ -40,13 +47,19 @@ enabled = false
 format = "zip"
 bundle = "unstripped"
 
+# One ABI only: the conformance tier runs on an arm64-v8a emulator (aosp_atd android-34), matching
+# gen-profile-ffi's rationale — a release build statically links url -> idna -> icu, so extra ABIs
+# would multiply an already-slow pack for zero extra evidence. The generated Kotlin + jniLibs land
+# in `dist/android/{kotlin,jniLibs}` and are consumed IN PLACE by `android/bolted-http`. The Kotlin
+# package stays `dev.bolted.http.ffi` (all the android/ Kotlin sources import it) — unchanged.
 [targets.android]
-enabled = false
+enabled = true
 output = "dist/android"
 min_sdk = 24
+architectures = ["arm64"]
 
 [targets.android.kotlin]
-package = "com.example.bolted_http_apple_ffi"
+package = "dev.bolted.http.ffi"
 desktop_loader = "bundled"
 api_style = "top_level"
 error_style = "throwing"
