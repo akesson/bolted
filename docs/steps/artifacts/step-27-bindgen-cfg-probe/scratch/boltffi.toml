@@ -1,0 +1,23 @@
+[package]
+name = "cfg_probe"
+crate = "cfg_probe"
+
+# Only the android/Kotlin target is enabled: the probe generates Kotlin bindings for android and
+# checks whether the ios-gated #[data] item leaks into them (the note-08 union question).
+[targets.android]
+enabled = true
+output = "dist/android"
+min_sdk = 24
+architectures = ["arm64"]
+
+[targets.android.kotlin]
+package = "dev.bolted.cfgprobe"
+api_style = "top_level"
+error_style = "throwing"
+factory_style = "constructors"
+
+[targets.android.kotlin.type_mappings]
+
+[targets.android.header]
+
+[targets.android.pack]
