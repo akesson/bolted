@@ -574,9 +574,15 @@ fn row_15_sink_correspondence(ctx: &ConformanceCtx) -> RowResult {
         .build();
     let result = match drive_once(ctx.factory.new_adapter().as_ref(), file_req, BUDGET) {
         Some(Ok(r)) => match r.body() {
-            BodyOutcome::File(got) if got.as_path() == path.as_path() => match std::fs::read(&path)
-            {
-                Ok(bytes) if bytes == b"ok" => RowResult::Pass,
+            // The verified `bytes_written` (Q3) must match the bytes actually on disk — a mock that
+            // reports a wrong counted total fails the row (the field is load-bearing, not vacuous).
+            BodyOutcome::File {
+                path: got,
+                bytes_written,
+            } if got.as_path() == path.as_path() => match std::fs::read(&path) {
+                Ok(bytes) if bytes == b"ok" && *bytes_written == bytes.len() as u64 => {
+                    RowResult::Pass
+                }
                 _ => RowResult::Fail(FailureReason::WrongSink),
             },
             _ => RowResult::Fail(FailureReason::WrongSink),

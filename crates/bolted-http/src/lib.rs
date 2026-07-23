@@ -23,8 +23,10 @@
 pub mod capability;
 pub mod error;
 pub mod header;
+pub mod redirect;
 pub mod request;
 pub mod response;
+pub mod stream;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -37,11 +39,13 @@ pub use header::{
     HeaderName, HeaderValue, Headers, InvalidHeaderName, InvalidHeaderValue, RequestHeaderError,
     RequestHeaderName, RequestHeaders,
 };
+pub use redirect::RedirectCeiling;
 pub use request::{
     FileRef, HttpRequest, Method, PinSet, Priority, RequestBody, RequestBuilder, ResponseSink,
     SpkiPin, Url, UrlError,
 };
 pub use response::{BodyOutcome, HttpResponse, HttpVersion, ResponseBuilder, StatusCode};
+pub use stream::{BodyChunk, BodyEnd, BodyStream};
 
 // --- The Send seam ---------------------------------------------------------------------
 //

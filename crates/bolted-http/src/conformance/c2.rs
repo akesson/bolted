@@ -28,6 +28,7 @@ pub const ALL_KEYS: &[HttpErrorKey] = &[
     HttpErrorKey::InsecureRedirect,
     HttpErrorKey::TooManyRedirects,
     HttpErrorKey::Io,
+    HttpErrorKey::StreamOverflow,
 ];
 
 /// How a taxonomy key is covered.
@@ -61,6 +62,15 @@ pub fn reachability(key: HttpErrorKey) -> Reachability {
             "OS local-network permission (Android 16→17 EPERM / Apple Local Network prompt): a host \
              test server cannot make the OS deny permission. Positive control lands in the Apple / \
              Android adapter suites (steps 25/26).",
+        ),
+        // Step 27 M1: the core seam produces StreamOverflow (unit-proven end-to-end in
+        // `crate::stream` — fill the bounded ring past `BodyStream::RING_CAPACITY`), but no
+        // adapter-driven C2 positive control exists yet: the streaming seam's adapter integration
+        // and its slow-consumer completeness row (feature-matrix §7 rule 12) are M2. Recorded, not
+        // skipped, until that row drives it through an `Http` adapter.
+        HttpErrorKey::StreamOverflow => Reachability::ContractGap(
+            "produced by the core-side streaming ring (crate::stream::BodyStream), unit-proven \
+             there; the adapter-driven positive control is M2's slow-consumer completeness row.",
         ),
     }
 }

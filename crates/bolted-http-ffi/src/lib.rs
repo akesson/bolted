@@ -680,8 +680,17 @@ fn to_http_response(response: &FfiResponse) -> Result<HttpResponse, HttpError> {
             Some(response.body.len() as u64),
         )
     } else {
+        // The verified, adapter-counted byte total (Q3): the native side wrote the file, so the
+        // counted truth is the file's size on disk — distinct from the advisory (`None` here)
+        // header value.
+        let bytes_written = std::fs::metadata(&response.sink_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
         (
-            BodyOutcome::File(FileRef::new(response.sink_path.clone())),
+            BodyOutcome::File {
+                path: FileRef::new(response.sink_path.clone()),
+                bytes_written,
+            },
             None,
         )
     };
