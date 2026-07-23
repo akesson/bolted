@@ -26,13 +26,15 @@ pub mod header;
 pub mod redirect;
 pub mod request;
 pub mod response;
+pub mod signal;
 pub mod stream;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
 
 pub use capability::{
-    CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, UploadProgressSink,
+    CancelToken, ChunkSink, CompletionSink, Http, Metrics, MetricsTier, RequestHandle,
+    StreamingHttp, UploadProgressSink,
 };
 pub use error::{HttpError, HttpErrorKey, TlsErrorKind};
 pub use header::{
@@ -45,6 +47,7 @@ pub use request::{
     SpkiPin, Url, UrlError,
 };
 pub use response::{BodyOutcome, HttpResponse, HttpVersion, ResponseBuilder, StatusCode};
+pub use signal::{FlowObserver, FlowSignal, FlowSignals};
 pub use stream::{BodyChunk, BodyEnd, BodyStream};
 
 // --- The Send seam ---------------------------------------------------------------------

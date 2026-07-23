@@ -9,14 +9,14 @@
 use std::time::Duration;
 
 use bolted_http::HttpErrorKey;
-use bolted_http::capability::{Http, Metrics};
+use bolted_http::capability::{Http, Metrics, StreamingHttp};
 use bolted_http::conformance::server::TestServer;
 use bolted_http::conformance::{
-    AdapterFactory, ConformanceCtx, Endpoints, RowResult, c1, c2, c3, run,
+    AdapterFactory, ConformanceCtx, Endpoints, RowResult, c1, c2, c3, run, stream,
 };
 use bolted_http::request::{HttpRequest, Method, PinSet, Url};
 
-use bolted_http_linux::{LinuxHttp, LinuxHttpConfig};
+use bolted_http_linux::{LinuxHttp, LinuxHttpConfig, StreamFault};
 
 /// A conformance factory over the reqwest adapter, trusting the test server's good cert as its real
 /// chain-verification anchor (the CFG trust-roots seam; production wires system/Mozilla roots here).
@@ -42,6 +42,17 @@ impl LinuxFactory {
             http: LinuxHttp::new(config).expect("adapter builds"),
         }
     }
+
+    /// A factory with a streaming fault injected — the scoped red-twin for the streaming rows.
+    fn with_stream_fault(endpoints: &Endpoints, fault: StreamFault) -> Self {
+        let config = LinuxHttpConfig {
+            stream_fault: fault,
+            ..LinuxHttpConfig::with_trust_anchor(endpoints.good_cert_der().to_vec())
+        };
+        LinuxFactory {
+            http: LinuxHttp::new(config).expect("adapter builds"),
+        }
+    }
 }
 
 impl AdapterFactory for LinuxFactory {
@@ -53,8 +64,13 @@ impl AdapterFactory for LinuxFactory {
         // reqwest's honest tier is whole-request (§5.13) — present, tier B.
         Some(Box::new(self.http.clone()))
     }
-    // The priority hint (row 12) is a uniform advisory field, not a capability trait (ruled Q10) —
-    // reqwest carries the data and legally ignores it, so there is no C3 column for it.
+
+    fn streaming(&self) -> Option<Box<dyn StreamingHttp>> {
+        // The reqwest adapter streams response bodies (rows 12/13, streaming-seam §3b).
+        Some(Box::new(self.http.clone()))
+    }
+    // The priority hint (row 12 field) is a uniform advisory field, not a capability trait (ruled
+    // Q10) — reqwest carries the data and legally ignores it, so there is no C3 column for it.
 }
 
 fn harness() -> (TestServer, Endpoints) {
@@ -112,6 +128,67 @@ capability     | presence
 ---------------+-----------------------
 metrics        | present (WholeRequest)";
     assert_eq!(c3::divergence(&factory).render(), EXPECTED);
+}
+
+/// Rows 12 & 13 (streaming, rules 12–13): the reqwest adapter streams the `/chunked` body into the
+/// driver-owned ingest under a slow consumer. Row 12 = complete body + verified terminal total;
+/// row 13 = exactly one terminal. Both green against the conformant adapter.
+#[test]
+fn streaming_rows_pass_against_reqwest_adapter() {
+    let (_server, endpoints) = harness();
+    let factory = LinuxFactory::new(&endpoints);
+    let ctx = ConformanceCtx {
+        factory: &factory,
+        endpoints: &endpoints,
+    };
+    for (id, result) in run(stream::rows(), &ctx) {
+        assert_eq!(result, RowResult::Pass, "streaming row {id} did not pass");
+    }
+}
+
+/// Row 12 watched **red** on the reqwest adapter: with `DropChunk`, the adapter skips one body
+/// chunk while still counting its bytes toward the declared total, so the completeness gate fires
+/// and the terminal is a typed failure — the truncation row 12 forbids.
+#[test]
+fn streaming_row_12_red_on_dropped_chunk() {
+    let (_server, endpoints) = harness();
+    let factory = LinuxFactory::with_stream_fault(&endpoints, StreamFault::DropChunk);
+    let ctx = ConformanceCtx {
+        factory: &factory,
+        endpoints: &endpoints,
+    };
+    let results = run(stream::rows(), &ctx);
+    let row_12 = results
+        .iter()
+        .find(|(id, _)| id.contains("row-12"))
+        .expect("row-12 present");
+    assert!(
+        matches!(row_12.1, RowResult::Fail(_)),
+        "row 12 must be red with a dropped chunk, got {:?}",
+        row_12.1
+    );
+}
+
+/// Row 13 watched **red** on the reqwest adapter: with `SkipTerminal`, the adapter delivers every
+/// chunk but never sends the terminal, so no `BodyEnd` arrives — the missing-terminal break.
+#[test]
+fn streaming_row_13_red_on_missing_terminal() {
+    let (_server, endpoints) = harness();
+    let factory = LinuxFactory::with_stream_fault(&endpoints, StreamFault::SkipTerminal);
+    let ctx = ConformanceCtx {
+        factory: &factory,
+        endpoints: &endpoints,
+    };
+    let results = run(stream::rows(), &ctx);
+    let row_13 = results
+        .iter()
+        .find(|(id, _)| id.contains("row-13"))
+        .expect("row-13 present");
+    assert!(
+        matches!(row_13.1, RowResult::Fail(_)),
+        "row 13 must be red with a missing terminal, got {:?}",
+        row_13.1
+    );
 }
 
 /// **L2** — the pinning verdict, exercised directly: a matching pin against the real (chain-verified)

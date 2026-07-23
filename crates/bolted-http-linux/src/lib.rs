@@ -7,8 +7,22 @@
 //! `bolted-http` is sans-io and dependency-clean; an **adapter owns its executor**. [`LinuxHttp`]
 //! contains a tokio multi-thread runtime. [`crate::LinuxHttp::send`] returns a [`RequestHandle`]
 //! immediately and spawns the exchange onto that runtime; the single completion is delivered to the
-//! [`CompletionSink`]. The contract's poll-based [`CancelToken`] is bridged to async by a 10 ms poll
-//! task raced against the request via `select!`.
+//! [`CompletionSink`]. Cancellation is **pushed** (Q4 / streaming-seam §3b): `RequestHandle::cancel`
+//! fires a [`FlowSignal::Cancel`] whose [`FlowObserver`] notifies a tokio [`Notify`] the request's
+//! `select!` races — there is **no** 10 ms poll-watcher thread (the one every adapter paid before).
+//!
+//! ## Streaming (row 16 / rules 12–13)
+//!
+//! [`LinuxHttp`] also implements [`StreamingHttp`]: [`crate::LinuxHttp::send_streaming`] streams the
+//! response body chunk-by-chunk (reqwest `bytes_stream` → `deliver_chunk`) into a driver-owned
+//! ingest, honouring pushed pause by socket read-pacing (it stops polling the stream while paused,
+//! so the core ring never overflows) and closing with the real terminal (`Complete { total }` from
+//! counted bytes, or `Failed` on a mid-body error).
+//!
+//! [`FlowSignal::Cancel`]: bolted_http::signal::FlowSignal::Cancel
+//! [`FlowObserver`]: bolted_http::signal::FlowObserver
+//! [`Notify`]: tokio::sync::Notify
+//! [`StreamingHttp`]: bolted_http::capability::StreamingHttp
 //!
 //! ## Contract fidelity (feature-matrix rows)
 //!
@@ -51,22 +65,28 @@ pub mod error;
 pub mod tls;
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
-use std::time::Duration;
 
 use futures_util::StreamExt;
 use rustls::RootCertStore;
 use rustls::pki_types::CertificateDer;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
+use tokio::sync::Notify;
 
+use bolted_http::capability::CancelToken;
 use bolted_http::capability::{
-    CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, UploadProgressSink,
+    ChunkSink, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, StreamingHttp,
+    UploadProgressSink,
 };
 use bolted_http::request::{HttpRequest, Method, PinSet, RequestBody, ResponseSink};
 use bolted_http::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
-use bolted_http::{HeaderName, HeaderValue, Headers, HttpError, TlsErrorKind, Url};
+use bolted_http::signal::{FlowObserver, FlowSignal, FlowSignals};
+use bolted_http::stream::{BodyChunk, BodyEnd};
+use bolted_http::{
+    HeaderName, HeaderValue, Headers, HttpError, RedirectCeiling, TlsErrorKind, Url,
+};
 
 use crate::error::map_reqwest_error;
 use crate::tls::{PinningVerifier, RejectSlot, TlsReject};
@@ -83,6 +103,21 @@ fn install_default_provider() {
     });
 }
 
+/// A deliberately-injected streaming fault — the scoped per-adapter red twin for the streaming rows
+/// (the `enforce_pins = false` precedent, one fault at a time). `None` is the conformant adapter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StreamFault {
+    /// Conformant: deliver every chunk, honour the terminal.
+    #[default]
+    None,
+    /// Skip delivering the first body chunk but still count its bytes toward the declared total —
+    /// the truncation the completeness gate forbids (row 12's Linux red).
+    DropChunk,
+    /// Deliver every chunk but never send the terminal — the missing-terminal break (row 13's Linux
+    /// red).
+    SkipTerminal,
+}
+
 /// Composition-root configuration for the adapter (the contract's CFG rows — trust roots, redirect
 /// ceiling). None of this is ever seen by the sans-io core.
 #[derive(Clone, Debug)]
@@ -91,11 +126,14 @@ pub struct LinuxHttpConfig {
     /// Production wires the system / Mozilla roots here; the conformance suite passes the test
     /// server's self-signed cert. Empty means "trust nothing" — every TLS request then fails.
     pub trust_anchors: Vec<Vec<u8>>,
-    /// The redirect-follow ceiling; beyond it a request is [`HttpError::TooManyRedirects`].
+    /// The redirect-follow ceiling; beyond it a request is [`HttpError::TooManyRedirects`]. Fed into
+    /// the core-owned [`RedirectCeiling`] (Q2): the adapter no longer counts inline, the core does.
     pub redirect_limit: u32,
     /// Whether declarative SPKI pins are enforced (default `true`). `false` is the scoped red-twin
     /// that proves the pin check is load-bearing — a pin no longer bites.
     pub enforce_pins: bool,
+    /// An injected streaming fault for the streaming rows' red twins (default [`StreamFault::None`]).
+    pub stream_fault: StreamFault,
 }
 
 impl Default for LinuxHttpConfig {
@@ -104,6 +142,7 @@ impl Default for LinuxHttpConfig {
             trust_anchors: Vec::new(),
             redirect_limit: 10,
             enforce_pins: true,
+            stream_fault: StreamFault::None,
         }
     }
 }
@@ -133,8 +172,12 @@ struct Inner {
     runtime: Runtime,
     roots: Arc<RootCertStore>,
     provider: Arc<rustls::crypto::CryptoProvider>,
-    redirect_limit: u32,
+    /// The core-owned redirect ceiling (Q2). reqwest's native follow is off (`Policy::none`), so it
+    /// follows *zero* hops itself — the ceiling below it is the sole authority, counting from the
+    /// hop trace the manual loop records.
+    redirect_ceiling: RedirectCeiling,
     enforce_pins: bool,
+    stream_fault: StreamFault,
 }
 
 /// The reqwest reference adapter. Cheap to clone (shares one runtime + trust config).
@@ -164,8 +207,9 @@ impl LinuxHttp {
                 runtime,
                 roots: Arc::new(roots),
                 provider,
-                redirect_limit: config.redirect_limit,
+                redirect_ceiling: RedirectCeiling::new(config.redirect_limit),
                 enforce_pins: config.enforce_pins,
+                stream_fault: config.stream_fault,
             }),
         })
     }
@@ -204,33 +248,48 @@ impl LinuxHttp {
     }
 
     /// Perform the request under the total deadline / cancellation race (row 4, rules 2/3/9).
+    /// Cancellation is **pushed**: the caller's `RequestHandle::cancel` fires the [`Notify`] this
+    /// races — no 10 ms poll-watcher thread (streaming-seam §3b / Q4).
     async fn perform(
         &self,
         request: HttpRequest,
-        token: CancelToken,
+        cancel: Arc<Notify>,
         progress: Option<Box<dyn UploadProgressSink>>,
     ) -> Result<HttpResponse, HttpError> {
         let deadline = request.deadline();
         tokio::select! {
             biased;
-            () = wait_cancelled(&token) => Err(HttpError::Cancelled),
+            () = cancel.notified() => Err(HttpError::Cancelled),
             () = tokio::time::sleep(deadline) => Err(HttpError::Timeout),
             res = self.perform_inner(&request, progress) => res,
         }
     }
 
-    /// Follow the request (and any redirects) to a terminal response. One reqwest exchange per hop.
+    /// Follow the request (and any redirects) to a terminal response, then materialise it into the
+    /// requested sink.
     async fn perform_inner(
         &self,
         request: &HttpRequest,
         progress: Option<Box<dyn UploadProgressSink>>,
     ) -> Result<HttpResponse, HttpError> {
+        let (resp, current, hops) = self.follow_redirects(request, progress).await?;
+        build_response(resp, &current, hops, request.response_sink()).await
+    }
+
+    /// Follow the request and any redirects to the terminal reqwest response, returning it with the
+    /// final URL and the recorded hop trace. One reqwest exchange per hop; redirect exhaustion is
+    /// **core-counted** through [`RedirectCeiling`] (Q2), not an inline adapter count. The body /
+    /// upload-progress observer rides only the initial request.
+    async fn follow_redirects(
+        &self,
+        request: &HttpRequest,
+        progress: Option<Box<dyn UploadProgressSink>>,
+    ) -> Result<(reqwest::Response, reqwest::Url, Vec<Url>), HttpError> {
         let method = map_method(request.method());
         let mut current =
             reqwest::Url::parse(request.url().as_str()).map_err(|_| HttpError::Connect)?;
         let mut hops: Vec<Url> = Vec::new();
 
-        // The body (and its progress observer) rides only the initial request.
         let mut body_bytes: Option<Vec<u8>> = match request.body() {
             RequestBody::Empty => None,
             RequestBody::Bytes(bytes) => Some(bytes.clone()),
@@ -282,18 +341,133 @@ impl LinuxHttp {
                     let to = Url::cleartext_dev(next.as_str()).map_err(|_| HttpError::Transport)?;
                     return Err(HttpError::InsecureRedirect { to });
                 }
-                if hops.len() as u32 >= self.inner.redirect_limit {
-                    return Err(HttpError::TooManyRedirects {
-                        limit: self.inner.redirect_limit,
-                    });
-                }
                 hops.push(contract_url(&current)?);
+                // Redirect exhaustion is the core's `RedirectCeiling` (Q2), not an inline count. The
+                // ceiling counts the hop trace and emits `TooManyRedirects` itself — observably
+                // identical to the old inline check for the conformance row (same key, same limit
+                // param; the strict-`>` boundary differs from the old `>=` by exactly one hop, which
+                // is invisible on `/redirect-loop`).
+                self.inner.redirect_ceiling.enforce(&hops)?;
                 current = next;
                 first = false;
                 continue;
             }
 
-            return build_response(resp, &current, hops, request.response_sink()).await;
+            return Ok((resp, current, hops));
+        }
+    }
+
+    /// Stream the response body chunk-by-chunk into `chunks` (streaming-seam §3a–3c). Follows
+    /// redirects to the terminal response, then feeds `bytes_stream` into the driver-owned ingest —
+    /// honouring pushed pause (socket read-pacing: it stops polling the stream while paused) and
+    /// pushed cancel, under one **total** deadline. Closes with the real terminal: `Complete { total }`
+    /// from the bytes it counted, or `Failed(..)` on a mid-body error / cancel / timeout. The
+    /// completeness gate and `seq` verification live in the core — this feeds them honestly (or, under
+    /// an injected [`StreamFault`], dishonestly, for the row's red twin).
+    async fn stream_perform(
+        &self,
+        request: HttpRequest,
+        chunks: Box<dyn ChunkSink>,
+        observer: Arc<LinuxFlowObserver>,
+    ) {
+        let sleep = tokio::time::sleep(request.deadline());
+        tokio::pin!(sleep);
+
+        // Phase 1 — connect + follow redirects to the terminal response, under cancel + deadline.
+        let resp = {
+            let follow = self.follow_redirects(&request, None);
+            tokio::select! {
+                biased;
+                () = observer.cancel.notified() => {
+                    chunks.finish(BodyEnd::Failed(HttpError::Cancelled));
+                    return;
+                }
+                () = &mut sleep => {
+                    chunks.finish(BodyEnd::Failed(HttpError::Timeout));
+                    return;
+                }
+                result = follow => match result {
+                    Ok((resp, _final_url, _hops)) => resp,
+                    Err(e) => {
+                        chunks.finish(BodyEnd::Failed(e));
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Phase 2 — stream the body. One `BodyChunk` per transport read (reqwest coalesces, so this
+        // is a handful of large chunks on a small body — the ring rarely fills here; the mock is the
+        // back-pressure stress).
+        let mut stream = resp.bytes_stream();
+        let mut seq: u64 = 0;
+        let mut counted: u64 = 0;
+        let mut dropped_one = false;
+        loop {
+            // Read-pacing: while paused, stop polling the stream (the socket back-pressures the
+            // server). Register the resume waiter before re-checking `paused` (no lost wake-up).
+            while observer.paused.load(Ordering::SeqCst) {
+                let resumed = observer.resume.notified();
+                if !observer.paused.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    () = observer.cancel.notified() => {
+                        chunks.finish(BodyEnd::Failed(HttpError::Cancelled));
+                        return;
+                    }
+                    () = &mut sleep => {
+                        chunks.finish(BodyEnd::Failed(HttpError::Timeout));
+                        return;
+                    }
+                    () = resumed => {}
+                }
+            }
+
+            let item = tokio::select! {
+                biased;
+                () = observer.cancel.notified() => {
+                    chunks.finish(BodyEnd::Failed(HttpError::Cancelled));
+                    return;
+                }
+                () = &mut sleep => {
+                    chunks.finish(BodyEnd::Failed(HttpError::Timeout));
+                    return;
+                }
+                item = stream.next() => item,
+            };
+
+            match item {
+                None => {
+                    if self.inner.stream_fault == StreamFault::SkipTerminal {
+                        // The missing-terminal red twin: drop the sink without finishing.
+                        return;
+                    }
+                    chunks.finish(BodyEnd::Complete { total: counted });
+                    return;
+                }
+                Some(Ok(bytes)) => {
+                    // The drop-chunk red twin: skip delivering the first chunk but still count its
+                    // bytes toward the declared total, so the completeness gate fires (Transport).
+                    if self.inner.stream_fault == StreamFault::DropChunk && !dropped_one {
+                        dropped_one = true;
+                        counted = counted.saturating_add(bytes.len() as u64);
+                        continue;
+                    }
+                    counted = counted.saturating_add(bytes.len() as u64);
+                    if let Err(e) = chunks.deliver_chunk(BodyChunk::new(seq, bytes.to_vec())) {
+                        // A seq violation or ring overflow — report it as the terminal.
+                        chunks.finish(BodyEnd::Failed(e));
+                        return;
+                    }
+                    seq += 1;
+                }
+                Some(Err(_)) => {
+                    chunks.finish(BodyEnd::Failed(HttpError::Transport));
+                    return;
+                }
+            }
         }
     }
 }
@@ -305,14 +479,29 @@ impl Http for LinuxHttp {
         completion: Box<dyn CompletionSink>,
         upload_progress: Option<Box<dyn UploadProgressSink>>,
     ) -> RequestHandle {
-        let token = CancelToken::new();
-        let worker_token = token.clone();
+        // Pushed cancellation (Q4): `RequestHandle::cancel` fires this `Notify`; no poll-watcher.
+        let observer = Arc::new(LinuxFlowObserver::new());
+        let cancel = observer.cancel.clone();
         let me = self.clone();
         self.inner.runtime.spawn(async move {
-            let outcome = me.perform(request, worker_token, upload_progress).await;
+            let outcome = me.perform(request, cancel, upload_progress).await;
             completion.complete(outcome);
         });
-        RequestHandle::for_token(token)
+        // The token is carried for API symmetry but the adapter no longer polls it — it reacts to
+        // the pushed `FlowSignal::Cancel` instead (`RequestHandle::cancel` fires both).
+        RequestHandle::with_signals(CancelToken::new(), FlowSignals::new(observer))
+    }
+}
+
+impl StreamingHttp for LinuxHttp {
+    fn send_streaming(&self, request: HttpRequest, chunks: Box<dyn ChunkSink>) -> FlowSignals {
+        let observer = Arc::new(LinuxFlowObserver::new());
+        let signals = FlowSignals::new(observer.clone());
+        let me = self.clone();
+        self.inner.runtime.spawn(async move {
+            me.stream_perform(request, chunks, observer).await;
+        });
+        signals
     }
 }
 
@@ -323,10 +512,45 @@ impl Metrics for LinuxHttp {
     }
 }
 
-/// Poll the contract's cancellation token to completion (the async bridge for the poll-based token).
-async fn wait_cancelled(token: &CancelToken) {
-    while !token.is_cancelled() {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+/// The adapter's reaction to the one core→adapter [`FlowSignals`] surface (Q4 + streaming-seam §3b):
+/// pushed cancel fires `cancel`; pushed pause/resume drive `paused` + `resume` for socket
+/// read-pacing. All tokio primitives — the contract mandates none of them (they live here).
+struct LinuxFlowObserver {
+    /// Fired by [`FlowSignal::Cancel`]; raced by every deadline/cancel `select!`.
+    cancel: Arc<Notify>,
+    /// Set by [`FlowSignal::Pause`] / cleared by [`FlowSignal::Resume`]; the stream loop pauses its
+    /// read while it is set (back-pressure — the ring never overflows).
+    paused: Arc<AtomicBool>,
+    /// Fired by [`FlowSignal::Resume`] to wake a paused stream loop.
+    resume: Arc<Notify>,
+}
+
+impl LinuxFlowObserver {
+    fn new() -> Self {
+        LinuxFlowObserver {
+            cancel: Arc::new(Notify::new()),
+            paused: Arc::new(AtomicBool::new(false)),
+            resume: Arc::new(Notify::new()),
+        }
+    }
+}
+
+impl FlowObserver for LinuxFlowObserver {
+    fn on_signal(&self, signal: FlowSignal) {
+        match signal {
+            FlowSignal::Pause => self.paused.store(true, Ordering::SeqCst),
+            FlowSignal::Resume => {
+                self.paused.store(false, Ordering::SeqCst);
+                self.resume.notify_waiters();
+            }
+            // `notify_one` (not `notify_waiters`) so a cancel that arrives before the racing
+            // `select!` registers its waiter is not lost — the stored permit wakes the next
+            // `notified()`.
+            FlowSignal::Cancel => self.cancel.notify_one(),
+            // `FlowSignal` is `#[non_exhaustive]`; a future signal this adapter does not model is a
+            // no-op rather than a build break.
+            _ => {}
+        }
     }
 }
 
