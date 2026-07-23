@@ -13,6 +13,12 @@ publish = false
 # owns a real (blocking, std-thread) TLS test server + a real-socket mock adapter, so it needs a
 # TLS stack, cert generation, gzip, and HTTP/1.1 parsing — none of which the contract itself has.
 [dependencies]
+# The validation-core hub, for the `HttpError -> ErrorData` bridge (Q6 / D1). OPTIONAL and behind
+# the `bolted-core` feature only: the default lib target keeps ZERO dependencies (the sans-io
+# invariant below), and the composition root — which already depends on both crates — turns the
+# feature on. `bolted-core` is itself dependency-free, so the bridge is light; the orphan rule
+# leaves this crate as the only sound home (bolted-core must never depend on a capability crate).
+bolted-core = { path = "../bolted-core", optional = true }
 # TLS for both the test server and the socket mock's client. `ring` crypto provider (not the
 # default aws-lc-rs) so no C toolchain / cmake is dragged into `mise run check`.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
@@ -34,6 +40,10 @@ httparse = { version = "1", optional = true }
 [dev-dependencies]
 
 [features]
+# The `HttpError -> bolted_core::ErrorData` bridge (Q6). Pulls the optional `bolted-core` dep; the
+# default build stays empty. Orthogonal to `conformance` — the check task compiles + tests it on
+# its own (`--features bolted-core`) so the bridge cannot silently rot.
+bolted-core = ["dep:bolted-core"]
 # The conformance harness (the "adapter under test" seam, the mock adapter, the test server, the
 # C1/C2/C3 clusters). Feature-quarantined so the default surface stays dependency-clean.
 # `mise run check` exercises it explicitly (`cargo test -p bolted-http --features conformance`),

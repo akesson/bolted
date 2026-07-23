@@ -53,8 +53,9 @@ All in `crates/bolted-http` unless noted.
    (see watched-red list). The test harness plays the adapter (delivering chunks / declaring the
    terminal) — the host-side "mock implementor" of the seam.
 
-**Item 5 (`impl From<HttpError> for ErrorData`, Q6) — NOT built; stopped as instructed.** See
-Open questions.
+8. **`impl From<HttpError> for ErrorData` (Q6)** — built after the coordinator's ruling (was
+   initially stopped as structural; see the ruling below). Behind an **optional `bolted-core`
+   cargo feature**; the default build stays dependency-free. See "Follow-up 1" for the shape.
 
 ## Naming choices vs the streaming-seam.md sketches
 
@@ -78,9 +79,12 @@ The doc's §3a–3c names are sketches; final naming was M1's smallest-reversibl
   variants. Rationale: `Transport` is already documented as "reset, **truncated mid-body**" —
   exactly a broken/short chunk stream. The step authorized exactly one new variant
   (`StreamOverflow`); minting more keys is a contract-surface decision. The mock tests
-  distinguish these by scenario, not by key. **Reversible:** a planning session can split off a
-  dedicated completeness/integrity key later; `BodyEnd` is `#[non_exhaustive]` and the mapping is
-  one line. Flagged for planning as a minor open question below.
+  distinguish these by scenario, not by key. **Revisit trigger recorded** (coordinator, follow-up
+  2): the mapping stands for now; IF M2's row 12 needs truncation observably distinct from a
+  generic transport failure to make its red case unambiguous, a dedicated key is minted THEN, with
+  that evidence — not preemptively. Short pointer-comments left at both sites in `stream.rs`
+  (`deliver_chunk` seq check, `finish` completeness gate). `BodyEnd` is `#[non_exhaustive]` and the
+  mapping is one line, so the split stays cheap.
 - **`seq` checked before capacity** in `deliver_chunk` — a corrupt sequence is an integrity
   failure regardless of ring fullness; checking it first keeps the two failure modes disjoint.
 - **Completeness gate counts BYTES**, not chunk count (the step said "ingested **bytes**"; the
@@ -167,23 +171,79 @@ doctests; redirect-ceiling exhaustion by trace count →
 - **c2 exhaustiveness caught the new key immediately** (compile error until classified) — the
   taxonomy's completeness guard working as designed. No friction, just confirming the guard bites.
 
+## Follow-ups (coordinator review of M1, addressed on-branch)
+
+### Follow-up 1 — Q6 bridge, implemented (ruling recorded)
+
+**Ruling (coordinator):** `bolted-http` gains an **optional** `bolted-core` dependency behind an
+explicit cargo feature (`bolted-core = ["dep:bolted-core"]`), and `impl From<HttpError> for
+ErrorData` lives in `bolted-http` gated on that feature. Rationale: the orphan rule leaves three
+homes; `bolted-core` must never depend on a capability crate (it is the hub); a glue crate for one
+impl is overweight; and the sans-io invariant is "dependency-free **on its default build**", which
+already anticipates optional features. The default tree stays empty; the composition root (which by
+definition already depends on both crates) enables the feature.
+
+**Built** (`crates/bolted-http/src/error.rs`, `Cargo.toml`):
+
+```rust
+#[cfg(feature = "bolted-core")]
+impl From<HttpError> for bolted_core::ErrorData {
+    fn from(error: HttpError) -> Self {
+        let key = error.key().as_str();          // the http.* strings ARE the vocabulary
+        let params = match error {
+            HttpError::Tls { kind } => vec![("kind", kind.as_str().to_string())],
+            HttpError::InsecureRedirect { to } => vec![("to", to.as_str().to_string())],
+            HttpError::TooManyRedirects { limit } => vec![("limit", limit.to_string())],
+            HttpError::StreamOverflow { capacity, seq } =>
+                vec![("capacity", capacity.to_string()), ("seq", seq.to_string())],
+            _ => Vec::new(),                       // the param-free variants: key only
+        };
+        bolted_core::ErrorData { key, params }
+    }
+}
+```
+
+- Follows the D1/D20 idiom exactly (variant → snake_case key, fields → params, struct literal), the
+  same shape as `From<TitleError>`/`From<UsernameError> for ErrorData` in the fixtures.
+- The key is `HttpErrorKey::as_str()` — one vocabulary, not a second. **Every** data-carrying field
+  becomes a param, none dropped. Example mapping:
+  `HttpError::StreamOverflow { capacity: 256, seq: 42 }` →
+  `ErrorData { key: "http.stream_overflow", params: [("capacity","256"), ("seq","42")] }`.
+- Added `TlsErrorKind::as_str()` (stable snake_case: `untrusted_root` / `invalid_certificate` /
+  `hostname_mismatch` / `handshake_failure`) so the `Tls.kind` param is a stable localisable string,
+  never a `Debug` render.
+
+**How the gate compiles the bridge:** `mise run test` (`cargo test --workspace`) never turns the
+feature on, so two lines were added to the `check` task, **orthogonal to `conformance`** (proving
+the bridge needs no test harness):
+
+```
+cargo clippy -p bolted-http --features bolted-core --all-targets -- -D warnings
+cargo test  -p bolted-http --features bolted-core
+```
+
+Confirmed in the check log: both bridge tests ran and passed under that `cargo test` line (30 lib
+tests). The default build and `cargo tree -p bolted-http` stay empty; enabling `bolted-core` is the
+only thing that pulls the dep.
+
+**Watched red first** (two mutations, targeted `cargo test -p bolted-http --features bolted-core`,
+reverted):
+- Drop the `StreamOverflow` params (`{ let _ = (capacity, seq); Vec::new() }`) →
+  `bridge_maps_a_param_carrying_variant_key_and_params` RED (`left: []` vs
+  `right: [("capacity","256"),("seq","42")]`); the unit-variant test correctly stayed green.
+- Mis-wire the key (`let key = "http.wrong";`) → **both** bridge tests RED.
+
+### Follow-up 2 — Transport-mapping revisit trigger (recorded)
+
+Kept: `seq`-violation and completeness-gate failures stay on `HttpError::Transport`. The revisit
+trigger is recorded in "Decisions taken" above and as short pointer-comments at both `stream.rs`
+sites (`deliver_chunk` seq check, `finish` completeness gate): a dedicated key is minted only IF
+M2's row 12 needs truncation observably distinct to make its red case unambiguous — with that
+evidence, not preemptively.
+
 ## Open questions (for planning)
 
-1. **`impl From<HttpError> for ErrorData` (Q6) — STOPPED, structural.** `ErrorData` lives in
-   `bolted-core`; `bolted-http` has **zero** default dependencies and does not depend on
-   `bolted-core` (its Cargo.toml documents "the default lib target gains ZERO dependencies —
-   `cargo tree -p bolted-http` is empty without `--features conformance`"). The orphan rule puts
-   the impl either in `bolted-http` (needs a new `bolted-core` dep) or `bolted-core` (needs a
-   `bolted-http` dep — wrong direction; `bolted-core` is foundational and must stay
-   dependency-free per its own Cargo.toml). Either introduces a dependency the crate deliberately
-   lacks — the step doc's exact STOP condition ("dependency direction is structural"). `bolted-core`
-   itself has zero runtime deps, so a `bolted-http → bolted-core` dep is *light*, but whether the
-   sans-io contract crate should take it (breaking its dependency-clean invariant) is a design
-   decision, not a smallest-reversible one. **Needs a planning ruling:** accept
-   `bolted-http → bolted-core` (and update the Cargo.toml invariant note), or house the bridge in
-   a third crate that depends on both.
-2. **Minor: dedicated completeness/seq-integrity error key?** M1 maps both `seq`-violation and the
-   completeness-gate failure to `HttpError::Transport` (honest — "truncated mid-body" — and
-   avoids unauthorized contract surface). If planning wants these observably distinct from a plain
-   transport reset, that is a new `HttpErrorKey` (contract surface). Left as-is; `BodyEnd` is
-   `#[non_exhaustive]` so adding it later is additive.
+*(Q6 resolved — see Follow-up 1. The Transport-mapping question is now a recorded revisit trigger,
+not an open decision — see Follow-up 2.)*
+
+None outstanding.

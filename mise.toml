@@ -116,6 +116,12 @@ run = [
   # the fail-correctly demonstrations) are clippy-clean and tested by `check`.
   "cargo clippy -p bolted-http --features conformance --all-targets -- -D warnings",
   "cargo test -p bolted-http --features conformance",
+  # Step 27 M1 (Q6): the `HttpError -> bolted_core::ErrorData` bridge lives behind the optional
+  # `bolted-core` feature (the default build stays dependency-free). `--workspace` never turns it
+  # on, so compile + test it explicitly here — otherwise the bridge and its tests would silently
+  # rot. Orthogonal to `conformance` on purpose (proves the bridge needs no test harness).
+  "cargo clippy -p bolted-http --features bolted-core --all-targets -- -D warnings",
+  "cargo test -p bolted-http --features bolted-core",
   # Step 24 M3: the reqwest reference adapter (`bolted-http-linux`) + the full conformance suite run
   # against it (C1/C2/C3, L2 pinning, L3 retry-off). Its tests dev-depend on `bolted-http/conformance`,
   # so `--workspace` already builds them, but an explicit `-p` keeps the tier visible (M0/M1 precedent).

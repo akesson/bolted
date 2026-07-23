@@ -142,6 +142,49 @@ pub enum TlsErrorKind {
     HandshakeFailure,
 }
 
+impl TlsErrorKind {
+    /// A stable snake_case identifier — the value carried in the `kind` param of the
+    /// [`HttpError::Tls`] → `ErrorData` bridge (a stable string a shell can localise, never Debug).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TlsErrorKind::UntrustedRoot => "untrusted_root",
+            TlsErrorKind::InvalidCertificate => "invalid_certificate",
+            TlsErrorKind::HostnameMismatch => "hostname_mismatch",
+            TlsErrorKind::HandshakeFailure => "handshake_failure",
+        }
+    }
+}
+
+/// The D1-shaped bridge from the HTTP taxonomy into `bolted-core`'s validation-error data (ruled
+/// 2026-07-21 / Q6): **variant → snake_case key, fields → params**, exactly like every tier-1
+/// `From<XError> for ErrorData` (fixture-note/-profile). The key is [`HttpErrorKey::as_str`] — the
+/// `http.*` strings ARE the vocabulary, not a second one — and *every* data-carrying field becomes
+/// a param, none dropped.
+///
+/// Behind the optional `bolted-core` feature so the default `bolted-http` build stays
+/// dependency-free (the sans-io invariant); the composition root, which already links both crates,
+/// enables it.
+#[cfg(feature = "bolted-core")]
+impl From<HttpError> for bolted_core::ErrorData {
+    fn from(error: HttpError) -> Self {
+        // The key is the taxonomy's own stable string — one vocabulary, shared with the shells.
+        let key = error.key().as_str();
+        let params: Vec<(&'static str, String)> = match error {
+            HttpError::Tls { kind } => vec![("kind", kind.as_str().to_string())],
+            HttpError::InsecureRedirect { to } => vec![("to", to.as_str().to_string())],
+            HttpError::TooManyRedirects { limit } => vec![("limit", limit.to_string())],
+            HttpError::StreamOverflow { capacity, seq } => {
+                vec![("capacity", capacity.to_string()), ("seq", seq.to_string())]
+            }
+            // The param-free variants (Timeout, Cancelled, PermissionDenied, PinMismatch,
+            // NameResolution, Connect, Transport, Io) carry a key only.
+            _ => Vec::new(),
+        };
+        bolted_core::ErrorData { key, params }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +233,57 @@ mod tests {
         assert_eq!(overflow.key().as_str(), "http.stream_overflow");
         // Distinct from the transport failure it is not.
         assert_ne!(overflow.key(), HttpErrorKey::Transport);
+    }
+
+    // --- The HttpError -> ErrorData bridge (Q6), behind the `bolted-core` feature ------------
+
+    #[cfg(feature = "bolted-core")]
+    #[test]
+    fn bridge_maps_a_param_carrying_variant_key_and_params() {
+        // A multi-field variant: key from the taxonomy, every field a param, none dropped.
+        let data: bolted_core::ErrorData = HttpError::StreamOverflow {
+            capacity: 256,
+            seq: 42,
+        }
+        .into();
+        assert_eq!(data.key, "http.stream_overflow");
+        assert_eq!(
+            data.params,
+            vec![("capacity", "256".to_string()), ("seq", "42".to_string()),]
+        );
+
+        // A single-field numeric variant.
+        let data: bolted_core::ErrorData = HttpError::TooManyRedirects { limit: 7 }.into();
+        assert_eq!(data.key, "http.too_many_redirects");
+        assert_eq!(data.params, vec![("limit", "7".to_string())]);
+
+        // A single-field enum variant carries its stable snake_case identifier, never Debug.
+        let data: bolted_core::ErrorData = HttpError::Tls {
+            kind: TlsErrorKind::HostnameMismatch,
+        }
+        .into();
+        assert_eq!(data.key, "http.tls");
+        assert_eq!(data.params, vec![("kind", "hostname_mismatch".to_string())]);
+
+        // A single-field Url variant.
+        let url = Url::cleartext_dev("http://legacy.test/x").expect("valid");
+        let data: bolted_core::ErrorData = HttpError::InsecureRedirect { to: url }.into();
+        assert_eq!(data.key, "http.insecure_redirect");
+        assert_eq!(
+            data.params,
+            vec![("to", "http://legacy.test/x".to_string())]
+        );
+    }
+
+    #[cfg(feature = "bolted-core")]
+    #[test]
+    fn bridge_maps_a_unit_variant_key_with_no_params() {
+        let data: bolted_core::ErrorData = HttpError::Timeout.into();
+        assert_eq!(data.key, "http.timeout");
+        assert!(data.params.is_empty());
+
+        let data: bolted_core::ErrorData = HttpError::Cancelled.into();
+        assert_eq!(data.key, "http.cancelled");
+        assert!(data.params.is_empty());
     }
 }
