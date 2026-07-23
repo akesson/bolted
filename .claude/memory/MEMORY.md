@@ -14,7 +14,7 @@
 - [BoltFFI's bindgen reads source text](boltffi-bindgen-reads-source-text.md) — a proc macro cannot emit an FFI surface, and three ways the toolchain hides a broken one
 - [A forbidding test can forbid nothing](a-forbidding-test-can-forbid-nothing.md) — a needle that can never match is green forever; write the positive control
 - [A drift check makes a mutation pass vacuous](a-drift-check-makes-a-mutation-pass-vacuous.md) — regenerate first, prove the output changed, exclude the drift test
-- [Device and UI tiers are proven on this machine](device-and-ui-tiers-are-proven-on-this-machine.md) — Pixel 8a authorized, Accessibility granted; if adb sees nothing, swap the cable
+- [Device and UI tiers are proven on this machine](device-and-ui-tiers-are-proven-on-this-machine.md) — Pixel 8a authorized, Accessibility granted; USB cable CONFIRMED dead 2026-07-23 — replace it (wireless debugging is the interim path)
 - [test:android exit code masks failures](test-android-exit-code-masks-failures.md) — the tier exits 0 even when tests fail; trust only the JUnit XML, never the exit code or the background-task notification
 - [C# backend saga resolved](csharp-backend-check-driver-broken.md) — both C# codegen bugs verified fixed at released 0.28.0; step-23 resume = namespace rename + tripwire flip; pin machinery obsolete
 - [bolted-check analyses split on runtime facts](bolted-check-analyses-split-on-runtime-facts.md) — step 16: a snapshot needing composites/schema-version can't be a pure bin (generator lives in the -ffi crate as an example); constraint bounds are invisible to the FFI drift layer, so the snapshot reads runtime constraints()

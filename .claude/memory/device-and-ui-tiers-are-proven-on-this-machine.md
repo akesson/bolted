@@ -1,6 +1,6 @@
 ---
 name: device-and-ui-tiers-are-proven-on-this-machine
-description: bench:android:device and test:apple:ui both ran green on this Mac (2026-07-10) — don't re-diagnose the environment, and suspect the cable first
+description: bench:android:device and test:apple:ui both ran green on this Mac (2026-07-10) — don't re-diagnose the environment; the USB cable is CONFIRMED dead (2026-07-23), replace it before any device run
 metadata:
   type: project
 ---
@@ -16,6 +16,11 @@ Both previously-unrun verification tiers were proven working on this machine on 
 
 **Why:** step 11 owes the "after" halves of both runs. Diagnosing the environment from scratch cost
 a whole session once; it is known-good now.
+
+**Update 2026-07-23:** the cable prediction below came true — during bolt-driver's step-01 M1
+the Pixel 8a was entirely absent from `ioreg` (not just adb) and an emulator fallback was used.
+**The cable is confirmed dead; replace it before the next device-tier run.** Wireless debugging
+remains the interim path.
 
 **How to apply:** if `adb devices` shows nothing, the cause is almost certainly **the USB cable**
 — a charge-only/failing cable made the Pixel vanish from `ioreg` entirely (below adb; no software
