@@ -1,5 +1,5 @@
-//! M0 window-semantics tests (W1–W6). Each was watched red first (see the step-28 report's
-//! watched-red ledger) before being restored to green.
+//! M0 window-semantics tests (W1–W6) and M1 row-draft tests (W7–W12). Each was watched red first
+//! (see the step-28 report's watched-red ledger) before being restored to green.
 
 use super::*;
 
@@ -138,4 +138,245 @@ fn w6_coalescing_by_construction() {
     );
     assert_eq!(snap.total_count, 2);
     assert_eq!(ids(&snap), vec![2, 1], "both mutations, coalesced");
+}
+
+// =================================================================================================
+// M1 — row drafts over the collection (W7–W12). Inheritance of the frozen draft/rebase/orphan
+// machinery, proven with positive controls; never a re-invented conflict taxonomy.
+// =================================================================================================
+
+/// W7 — edit under sort movement: a canonical upsert moves the row's *index*, the draft is unmoved
+/// (its edit survives the rebase), submit lands, and the next snapshot shows the **same `RowId`** at
+/// its new position with the edit applied.
+#[test]
+fn w7_edit_under_sort_movement() {
+    let mut store = seeded(); // [3@300, 2@200, 1@100] -> order [3, 2, 1]
+    let w = store.open_window(0..3);
+    let d = store.checkout(NoteId(1)).expect("row 1 exists");
+
+    // Edit the draft's title (dirty).
+    store
+        .draft_mut(d)
+        .expect("live")
+        .try_set_title("z".to_string())
+        .expect("valid");
+
+    // A canonical upsert moves row 1 to the top (updated_at 100 -> 400); its title is unchanged.
+    let affected = store.apply_canonical(CanonicalChange::Upsert(row(1, "a", 400)));
+    assert_eq!(affected, vec![d], "the fan-out named the draft on row 1");
+
+    // The draft is unmoved: the edit survived (theirs 'a' == base 'a' -> keep mine, still dirty).
+    assert_eq!(
+        store.draft(d).expect("live").dirty_fields(),
+        vec![RowField::Title],
+        "the edit survived the rebase"
+    );
+
+    // The row's INDEX moved (now first) though the canonical title is still 'a'.
+    let mid = store.latest(w).expect("live window");
+    assert_eq!(ids(&mid), vec![1, 3, 2], "same RowId, new (top) position");
+
+    // Submit lands the edited title; there is no other draft on row 1, so the fan-out is empty.
+    let out = store.submit(d).expect("submit lands");
+    assert!(out.is_empty(), "no other draft on row 1");
+    assert!(!store.is_live(d), "the submitted draft is released (C17)");
+
+    // Next snapshot: row 1 at the top, title now 'z', same RowId.
+    let after = store.latest(w).expect("live window");
+    assert_eq!(ids(&after), vec![1, 3, 2]);
+    assert_eq!(after.rows[0].id, NoteId(1));
+    assert_eq!(
+        after.rows[0].title.as_str(),
+        "z",
+        "the edit landed at the new position"
+    );
+}
+
+/// W8 — the representative frozen conformance row: **C15** (the base version tracks the rebase, and
+/// an orphan's stamp stops moving). Chosen because it is exactly what a *re-implemented* registry
+/// loop is most likely to get wrong — it exercises the fan-out passing the right version, the
+/// `rebases` gate skipping unaffected drafts, and orphan terminality — all inherited, not invented.
+#[test]
+fn w8_base_version_tracks_rebase_c15() {
+    let mut store = seeded(); // version 3
+    let d = store.checkout(NoteId(1)).expect("row 1");
+    assert_eq!(
+        store.draft(d).expect("live").base_version(),
+        3,
+        "checkout stamps the store version"
+    );
+
+    // A canonical change that rebases the draft advances its stamp to the store version.
+    store.apply_canonical(CanonicalChange::Upsert(row(1, "a2", 150)));
+    assert_eq!(store.version(), 4);
+    assert_eq!(
+        store.draft(d).expect("live").base_version(),
+        4,
+        "base_version tracks the rebase (C15)"
+    );
+
+    // A change to ANOTHER row does not re-stamp this draft (it was not rebased).
+    store.apply_canonical(CanonicalChange::Upsert(row(2, "b2", 250)));
+    assert_eq!(store.version(), 5);
+    assert_eq!(
+        store.draft(d).expect("live").base_version(),
+        4,
+        "an unaffected draft does not re-stamp"
+    );
+
+    // Deletion orphans; an orphan is based on no canonical and its stamp stops moving (C15).
+    store.apply_canonical(CanonicalChange::Delete(NoteId(1)));
+    assert_eq!(
+        store.draft(d).expect("live").status(),
+        DraftStatus::Orphaned
+    );
+    assert_eq!(
+        store.draft(d).expect("live").base_version(),
+        4,
+        "the orphan's stamp froze at its last rebase"
+    );
+
+    // A later canonical event neither resurrects nor re-stamps it.
+    store.apply_canonical(CanonicalChange::Upsert(row(1, "a3", 999)));
+    assert_eq!(
+        store.draft(d).expect("live").base_version(),
+        4,
+        "the orphan stamp stays frozen"
+    );
+    assert_eq!(
+        store.draft(d).expect("live").status(),
+        DraftStatus::Orphaned
+    );
+}
+
+/// W9 — delete-under-draft orphans (C11), and submitting the orphan is a **typed** refusal that
+/// hands the edit session back (F3).
+#[test]
+fn w9_delete_under_draft_orphans() {
+    let mut store = seeded();
+    let d = store.checkout(NoteId(2)).expect("row 2");
+    store
+        .draft_mut(d)
+        .expect("live")
+        .try_set_title("edit".to_string())
+        .expect("valid");
+
+    let affected = store.apply_canonical(CanonicalChange::Delete(NoteId(2)));
+    assert_eq!(affected, vec![d], "the delete fan-out named the draft");
+    assert_eq!(
+        store.draft(d).expect("live").status(),
+        DraftStatus::Orphaned
+    );
+    assert!(store.is_live(d), "orphaned but still a live handle (C11)");
+
+    // Submit is a typed `Orphaned` refusal, never a silent failure or a resurrection.
+    assert_eq!(store.submit(d), Err(SubmitError::Orphaned));
+    assert!(
+        store.is_live(d),
+        "a refused submit keeps the edit session (F3)"
+    );
+}
+
+/// W10 — precedence positive control (C07): a draft that is **both** conflicted and orphaned refuses
+/// `Orphaned` first, because the collection's `submit` delegates to the frozen `commit_gates`.
+#[test]
+fn w10_precedence_orphaned_before_conflicted() {
+    let mut store = seeded();
+    let d = store.checkout(NoteId(1)).expect("row 1");
+
+    // Make the title conflicted: edit it, then a canonical upsert carrying a DIFFERENT title.
+    store
+        .draft_mut(d)
+        .expect("live")
+        .try_set_title("mine".to_string())
+        .expect("valid");
+    store.apply_canonical(CanonicalChange::Upsert(row(1, "theirs", 100)));
+    assert_eq!(
+        store.draft(d).expect("live").conflicts(),
+        vec![RowField::Title],
+        "the field is now conflicted"
+    );
+
+    // Now delete the row: the draft is BOTH conflicted and orphaned.
+    store.apply_canonical(CanonicalChange::Delete(NoteId(1)));
+    let draft = store.draft(d).expect("live");
+    assert_eq!(draft.status(), DraftStatus::Orphaned);
+    assert_eq!(
+        draft.conflicts(),
+        vec![RowField::Title],
+        "still conflicted under the orphan"
+    );
+
+    // C07: the refusal is `Orphaned` first, not `Conflicted`.
+    assert_eq!(
+        store.submit(d),
+        Err(SubmitError::Orphaned),
+        "Orphaned outranks Conflicted (C07)"
+    );
+}
+
+/// W11 — create-flow (C12): a no-base draft is never moved by any canonical change and commits
+/// normally, **inserting** a new row the windows then see. Identity is caller-supplied (a
+/// client-generated key, D35) — the smallest reversible choice; see the report.
+#[test]
+fn w11_create_flow_inserts_c12() {
+    let mut store = seeded(); // rows 1, 2, 3
+    let w = store.open_window(0..10);
+
+    // A create-flow row: the caller supplies the identity and the initial timestamp (both input).
+    let d = store.checkout_new(NoteId(99), 500);
+    assert_eq!(store.draft_count(), 1);
+    assert_eq!(
+        store.rebasing_draft_count(),
+        0,
+        "a create-flow draft never rebases (C12)"
+    );
+
+    // A canonical change to another row leaves it untouched — it is not in the fan-out.
+    let a = store.apply_canonical(CanonicalChange::Upsert(row(2, "b2", 250)));
+    assert!(a.is_empty(), "the create-flow draft is not rebased (C12)");
+    assert_eq!(store.rebasing_draft_count(), 0);
+
+    // Fill and submit: it inserts row 99; the window sees it with the typed title.
+    store
+        .draft_mut(d)
+        .expect("live")
+        .try_set_title("new note".to_string())
+        .expect("valid");
+    let out = store.submit(d).expect("create-flow commits normally (C12)");
+    assert!(out.is_empty(), "no other draft on row 99");
+    assert!(!store.is_live(d));
+
+    let snap = store.latest(w).expect("live window");
+    let created = snap
+        .rows
+        .iter()
+        .find(|r| r.id == NoteId(99))
+        .expect("row 99 is visible in the window");
+    assert_eq!(created.title.as_str(), "new note", "the created row landed");
+}
+
+/// W12 — rebase fan-out names exactly the affected drafts: one upsert, two open drafts on the same
+/// row (both named, in id order), and a third draft on another row (never named).
+#[test]
+fn w12_rebase_fan_out_names_exactly() {
+    let mut store = seeded(); // rows 1, 2, 3
+    let a = store.checkout(NoteId(1)).expect("row 1");
+    let b = store.checkout(NoteId(1)).expect("row 1 again"); // a second edit session on row 1
+    let c = store.checkout(NoteId(3)).expect("row 3"); // the control: must NOT be named
+
+    let affected = store.apply_canonical(CanonicalChange::Upsert(row(1, "a2", 120)));
+    assert_eq!(
+        affected,
+        vec![a, b],
+        "exactly the two drafts on row 1, in id order"
+    );
+    assert!(
+        !affected.contains(&c),
+        "the draft on row 3 is not in the fan-out"
+    );
+
+    // And a change to row 3 names only c.
+    let affected3 = store.apply_canonical(CanonicalChange::Upsert(row(3, "c2", 320)));
+    assert_eq!(affected3, vec![c], "exactly the draft on row 3");
 }
