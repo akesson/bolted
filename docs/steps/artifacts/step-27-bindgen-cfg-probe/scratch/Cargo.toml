@@ -1,0 +1,17 @@
+# Standalone workspace: the empty [workspace] table detaches this scratch crate from the parent
+# bolted workspace, so `cargo`/`mise run check` at the repo root never sees it (it is a committed
+# artifact, not a member). See ../probe.sh for what it proves.
+[workspace]
+
+[package]
+name = "cfg_probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+# Same registry pin as the real bridge crates (no ?rev= git build).
+boltffi = "0.28.0"
