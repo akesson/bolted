@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.15, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, the post-step-24 error-wording/freeze-scheduling pass, and the post-step-25 freeze re-scheduling).** Phase 1 validated this design against
+**Status: FROZEN (v1.16, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, the post-step-24 error-wording/freeze-scheduling pass, the post-step-25 freeze re-scheduling, and the bolted-http contract-review session).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -74,6 +74,20 @@ JNI stream probe contributes evidence. Apple showed the risk shape: the contract
 strictly additive through the whole step. A
 freeze is a commitment to a design, not a promise that the design was already correct — the record of
 what changed, and why, is the point.
+**v1.16** records the bolted-http contract-review session (2026-07-21, held as scheduled
+after step 26) — no core design change; the decisions live in bolted-http's own docs. All
+ten open contract questions were ruled, adopted as recommended with amendments:
+the streaming seam ([streaming-seam.md](design/streaming-seam.md)), redirect ceiling as CFG,
+`content_length` advisory-by-protocol-arithmetic, push-cancellation, `PermissionDenied` as a
+device-tier outcome, the `HttpError → Into<ErrorData>` bridge (the v1.14 residue, scheduled
+into implementation), packaging conventions, the conformance-scope boundary, the mid-flight
+re-entry shape defined once, and surface uniformity (the priority hint's CAP → uniform-hint
+reversal, merging the two FFI bridge crates). Decision record:
+[contract-freeze-agenda.md](design/contract-freeze-agenda.md). The session also reframed the
+"freeze" itself (Henrik): Bolted is unreleased, own-use software — these are working
+decisions valued for coherence and recorded rationale, expected to evolve; two standing
+re-evaluation triggers are upstream BoltFFI RFCs in draft (stream delivery contract,
+companion sources).
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
@@ -605,22 +619,20 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   projection is, where `RowId` comes from (entity key?), whether `open_window` takes sort/filter
   parameters, and the windowing etiquette (overscan, threshold refetch — §6's frame-loop rule,
   D36, already governs the scroll side).
-- **`bolted-http` contract freeze** — *scheduled at v1.13 (2026-07-19): implementation proceeds
-  along `crates/bolted-http/docs/spike-plan.md`. Re-scheduled at v1.14 (Henrik, 2026-07-19):
-  the spike verdicts are in — S-FFI: response streaming is CORE via `ffi_stream` async push
-  (row 16); S-LX2: Linux SPKI pinning feasible, row 19's CORE(adapter) stands (step-24
-  report). Re-scheduled again at v1.15 (Henrik, 2026-07-19, post step 25): the freeze lands
-  after the Android adapter (S-AN, step 26) — the last reachable implementor (C# parked on
-  finding 07), and its opening JNI stream probe feeds the streaming-seam question directly.*
-  The D38 shape is decided; still genuinely open before the freeze: the streaming-body core
-  seam (step-24 report Q2, sharpened by step-25 F-M3-1 — the mechanism is decided, its contract
-  surface is not, and it must now specify a scope-bound subscription lifecycle; `BodyOutcome`
-  carries the named seam), the `HttpError → ErrorData` bridge (v1.14 residue), the cookie
-  capability's shape,
-  whether Android's declarative `<pin-set>` binds OkHttp/Cronet, and `BackgroundTransfer` — a
-  separate optional effect family whose precondition (effects as durable, serializable data with
-  stable identities) is shared with interaction replay (below) and the draft stash; nothing may
-  foreclose it.
+- **`bolted-http` contract review** — *the session ran 2026-07-21 (v1.16), as scheduled after
+  the Android adapter: all ten open contract questions ruled — the streaming seam
+  ([streaming-seam.md](design/streaming-seam.md)), redirect-ceiling CFG, `content_length`
+  wording, push-cancellation, `PermissionDenied` tier, the `HttpError → ErrorData` bridge,
+  packaging conventions, the conformance-scope boundary, the mid-flight re-entry shape, and
+  surface uniformity. Decision record:
+  [contract-freeze-agenda.md](design/contract-freeze-agenda.md); NSC `<pin-set>` was answered
+  by step 26 (proven NOT to bind OkHttp).* Still genuinely open: the **cookie capability**
+  (direction recorded, shape defined via the shared mid-flight re-entry pattern; implement
+  when a feature needs it) and **`BackgroundTransfer`** — a separate optional effect family
+  whose precondition (effects as durable, serializable data with stable identities) is shared
+  with interaction replay (below) and the draft stash; nothing may foreclose it. Two standing
+  re-evaluation triggers ride upstream BoltFFI RFCs in draft: the `ffi_stream`
+  delivery-contract RFC (streaming-seam §7) and the companion-sources RFC (packaging).
 - **Interaction replay (protected possibility, unscheduled).** The contract boundary is a natural
   record seam: every mutation enters the core as a typed, serializable call (draft verbs, commands,
   canonical pushes, check completions), so logging those calls and re-driving the log against a

@@ -2,7 +2,12 @@
 
 **Status:** design study, 2026-07-18 — the second investigation round, and a **proposal**: nothing
 here is frozen (the D38 shape is decided; the contract itself stays §9-open until a feature
-needs HTTP). Builds on [platform-surfaces.md](platform-surfaces.md) and
+needs HTTP). **2026-07-21:** the contract-review session ruled on every open contract
+question after all three reachable adapters shipped (steps 24–26) — rulings are annotated
+inline per row/section ("Ruled 2026-07-21"); the decision record is
+[`docs/design/contract-freeze-agenda.md`](../../../docs/design/contract-freeze-agenda.md).
+These are working decisions (unreleased, own-use software), expected to evolve as we learn.
+Builds on [platform-surfaces.md](platform-surfaces.md) and
 [prior-art.md](prior-art.md) (both 2026-07-09); where this doc conflicts with them, this doc
 wins (§1 lists the corrections). **Revised the same day:** web is **out of the platform set**
 (Henrik: it was never part of the asked surface — win/lin/mac/android/ios). The matrix now
@@ -117,11 +122,11 @@ contract, the rest in types):
 | 9 | Conditional requests (ETag/304 app-owned) | CORE | Portable everywhere; on Apple the adapter must run cache-disabled (§5.6) |
 | 10 | HTTPS-only; cleartext dev-gated | CORE | ATS / API 28 enforce natively; core-checkable before dispatch on Windows/Linux (§5.15) |
 | 11 | Negotiated version observable | CORE | Upgraded: all four surfaces always report it — the `Option` was web's (§5.7) |
-| 12 | Priority hint | CAP — decided | Demoted from CORE (hint) by Henrik, 2026-07-19: honored by Apple + Cronet/HttpEngine only, legally ignored by OkHttp/.NET — a typed capability shows the divergence honestly (§5.8, §8) |
+| 12 | Priority hint | CORE (hint) — re-decided | Re-ruled 2026-07-21 (contract review Q10): **uniform hint, no-op where the engine can't honor it** — the CAP marker trait goes; ignoring was already legal per the row's own contract, and the apple-only capability was the sole surface divergence forcing two FFI bridge crates (§5.8, §8) |
 | 13 | Download progress (total = `Option`) | CORE | Portable, but totals lie under compression — total is always optional (§5.9) |
 | 14 | Upload progress | CORE(adapter) | Upgraded from CAP: OS-fed on Apple; sink/stream wrapping on OkHttp/.NET/reqwest (§5.9) |
 | 15 | Response body sink: `Memory` \| `File` | CORE(adapter) | Native `downloadTask` on Apple; stream-copy synthesis on the other three (§5.10) |
-| 16 | Response streaming (chunked delivery) | CORE — decided | Gate cleared (step 24 S-FFI, 2026-07-19): all three shapes 100/100 at 0.27.5 in the http round-trip; mechanism = `ffi_stream` async push (F1), callback push (F2) recorded as perf alternative — `spikes/http-ffi/docs/sffi-streaming-verdict.md`. Core seam (chunk re-entry, back-pressure, end-of-body) is freeze-session work (§5.11) |
+| 16 | Response streaming (chunked delivery) | CORE — decided | Gate cleared (step 24 S-FFI, 2026-07-19): all three shapes 100/100 at 0.27.5 in the http round-trip; mechanism = `ffi_stream` async push (F1), callback push (F2) recorded as perf alternative — `spikes/http-ffi/docs/sffi-streaming-verdict.md`. Core seam **ruled 2026-07-21**: typed-input chunk re-entry, bounded ring + fail-loud, `BodyEnd` terminal, driver-owned lifecycle — [`docs/design/streaming-seam.md`](../../../docs/design/streaming-seam.md) (§5.11) |
 | 17 | Decoded bodies; `content_length` advisory | CORE | Adapters must normalize (gzip/brotli/zstd transport-owned) (§5.12) |
 | 18 | Metrics (phase timings, TLS detail) | CAP (tiered) | Rich Apple/.NET/OkHttp; coarse Linux — reqwest has no phase seam to synthesize from (§5.13) |
 | 19 | Pinning (declarative SPKI) | CORE(adapter) — decided | Linux gate cleared (step 24 L2, 2026-07-19): rustls custom verifier = real WebPKI chain+hostname AND SHA-256-SPKI pins, mismatch ⇒ typed `PinMismatch`; proven in `bolted-http-linux` against real certs. Native on Android; adapter code on Apple/.NET (§5.14) |
@@ -264,6 +269,13 @@ no stack behavior we rely on. Background transfer never exposes hops on any plat
 trace is a foreground-only promise. WinRT has no redirect-count knob at all ("set internally
 by the system") — one more reason the C# adapter is .NET, not WinRT.
 
+**Ruled 2026-07-21 (contract review Q2): the redirect ceiling is CFG** — a core-owned value
+set at the composition root, with **core-counted exhaustion**: the adapter's native limit is
+set above the ceiling, the core counts hops from the trace (row 7) and emits the typed
+`TooManyRedirects` itself. This removes the classifier's one unavoidable exception-text match
+(OkHttp's `ProtocolException` message) and closes the honest-limit gap — no platform
+documents its native ceiling as contract.
+
 ### 5.6 Cookies, cache, conditional requests (rows 8–9)
 Cookie-less/cache-less default confirmed from both directions (URLSession both-on vs
 OkHttp/.NET both-off). Row 9: **app-owned conditional requests are portable**.
@@ -294,6 +306,16 @@ Two honoring surfaces out of four is thin for CORE even as a hint; the row stays
 only because "hint" means acceptance-only conformance, but the recommendation now leans CAP
 — **Henrik's call either way** (§8). No adapter synthesis is possible: there is no knob to
 write custom code against, and faking wire priority is not compensation.
+
+**Re-ruled 2026-07-21 (contract review Q10): uniform CORE hint after all.** The 2026-07-19
+CAP call was made before upstream note 08 established that bindgen evaluates no `#[cfg]`
+(the union of items lands in every target's bindings), which made the apple-only capability
+the sole reason `bolted-http-apple-ffi` / `bolted-http-android-ffi` are two crates. Since
+ignoring the hint is *legal per the row's own contract* (acceptance-only conformance — OkHttp
+already ignores it), uniform-with-no-op costs nothing the CAP shape was protecting, and the
+bridge crates merge into one multi-target crate. Precedent stated with the ruling:
+uniform-with-no-op is preferred **only** when ignoring is legal per the capability's own
+contract; otherwise a divergence is real and gets a real seam.
 
 ### 5.9 Progress (rows 13–14)
 Download progress is CORE with contract-defined byte semantics: **bytes are as observed by the
@@ -330,6 +352,15 @@ re-running the stream shapes at ≥0.27.5 inside the http round-trip, choosing t
 measurements. If it stalls again, row 16 falls back to `Memory | File` sinks only — which,
 note, already cover most facet needs; that fallback would park SSE with WebSocket.
 
+**Both halves now decided.** The mechanism gate cleared (step 24 S-FFI: F1 `ffi_stream`
+push, re-proven on Apple A1 and ART N2 at 200/200); the core seam was **ruled 2026-07-21**
+(contract review Q1, adopted as proposed): chunk re-entry as a typed input
+(token-keyed, seq-verified), bounded core-side ring + fail-loud `StreamOverflow`,
+back-pressure as a capability extension, `BodyEnd { Complete { total } | Failed }` terminal
+with a completeness gate, driver-owned subscription lifecycle. Full design + the three new
+conformance rows + the upstream-RFC re-evaluation trigger:
+[`docs/design/streaming-seam.md`](../../../docs/design/streaming-seam.md).
+
 ### 5.12 Compression (row 17)
 Adapters normalize: .NET must set `DecompressionMethods.All` (default is **None**); OkHttp
 default transparent gzip is kept but the adapter must surface `content_length = None` honestly
@@ -337,6 +368,13 @@ default transparent gzip is kept but the adapter must surface `content_length = 
 doc-silent, FLAGGED) and cannot disable decoding except by owning `Accept-Encoding`; reqwest
 enables gzip/brotli/zstd via features. Contract: bodies are always decoded; `content_length`
 advisory `Option`; no "raw body" promise exists.
+
+**Ruled 2026-07-21 (contract review Q3), after re-verifying that reliability is impossible in
+principle, not a platform gap**: `Content-Length` frames the *encoded* content (RFC 9110), so
+the decoded length of a compressed or chunked response is unknowable up front on any client
+(live control: wire `Content-Length: 94760`, decoded 611 471 bytes — 6.5×). Wording adopted:
+always advisory `Option`; the **file sink reports verified bytes-written on completion** —
+the one place a trustworthy total exists, because the adapter counted it.
 
 ### 5.13 Metrics (row 18)
 Tiered capability, corrected from the earlier study: **Tier A** (phase timings + TLS detail):
@@ -372,14 +410,22 @@ distinct from network failure; **timeout vs cancel** — one key each, and the o
 is .NET, where **both surface as `TaskCanceledException`** — the adapter classifies by which
 token fired, never by exception type; **`QuotaExceeded`** reserved for the background family
 (Windows' 200-op queue, Android quotas). The RN-2026 lesson from prior-art stands: the
-native-failure → key mapping is conformance-tested per adapter, never judgment. HTTPS-only
+native-failure → key mapping is conformance-tested per adapter, never judgment.
+**`PermissionDenied` ruled 2026-07-21 (contract review Q5)**: the contract states it as an
+inherently **device/app-bundle-tier** outcome (the OS prompt needs a real bundle identity and
+a user), so the shared suite never asserts it; each adapter owes a **unit-proven cause
+mapping with negative controls** instead. HTTPS-only
 (row 10) is enforced natively by ATS and Android API 28+; on Windows/Linux nothing forbids
 cleartext, but the check needs no adapter at all — the sans-io core can refuse a non-https
 URL before the effect is ever emitted, which makes the rule uniform for free.
 
 ### 5.16 Cancellation (row 21)
 CORE: any in-flight effect is cancellable; completion arrives as the `Cancelled` typed input
-(one effect, one completion, always — cancellation is not a silent drop). Pause/resume of
+(one effect, one completion, always — cancellation is not a silent drop). **Ruled 2026-07-21
+(contract review Q4): cancellation is push-delivered** — a core→adapter mid-flight signal on
+the capability trait, replacing the poll-watcher thread all three adapters currently pay;
+designed together with the streaming back-pressure signal (streaming-seam §3b) as **one**
+core→adapter mid-flight surface. Pause/resume of
 foreground calls exists on no platform (OkHttp/Cronet/reqwest: confirmed none) — OUT.
 Range-based resumption is an app-level pattern over rows 1/9 (`Range` + `If-Range` are just
 headers); OS-managed resume (Apple resume data with its five-condition validity list, iOS 17
@@ -439,7 +485,11 @@ session** (implement when a feature needs it; additive as a capability, so not f
   everywhere (Apple `willPerformHTTPRedirection`, OkHttp network interceptor; .NET/Linux
   follow manually anyway). This is the same mid-flight re-entry shape as the streaming seam —
   design the two together so one pattern serves both. A minimal v1 may defer it with a
-  documented "redirect-set cookies apply from the next request" caveat.
+  documented "redirect-set cookies apply from the next request" caveat. **Ruled 2026-07-21
+  (contract review Q9): the mid-flight adapter→core re-entry shape is defined once**
+  (streaming-seam §4 — naming, token discipline, ordering, replay semantics) **and
+  instantiated twice** (chunks now, cookie per-hop when the capability lands); the capability
+  itself stays deferred.
 - Smaller session items: expiry needs injected time (sans-io); skip the Public Suffix List
   (native app chooses its hosts — document the threat-model call); `Secure` enforced in core;
   `SameSite`/`HttpOnly` meaningless client-side; web (if it ever joins) is participate-only
@@ -515,15 +565,31 @@ cost, and the suite is where it is paid:
 11. Upload progress is monotone per attempt and terminally consistent with the completion —
     pinned on the three synthesized surfaces (OkHttp/.NET/reqwest) against Apple's OS-fed
     baseline; the suite never asserts wire-truth (the contract doesn't promise it).
+    **Amended 2026-07-21 (contract review Q8)**: when the upload's `content_length` is known
+    (it always is — bodies are `Bytes | File`), the row also asserts the terminal `total`
+    (F-M4-3 closed: `total` was unasserted on every implementor).
+12. *(Added 2026-07-21, streaming-seam §5.)* Slow-consumer completeness: delivered ==
+    ingested, or the typed overflow error — green by silent drop is impossible.
+13. *(Added 2026-07-21.)* Terminal-exactly-once: chunks then exactly one `BodyEnd`;
+    truncation ⇒ failure (completeness gate `total == ingested`).
+14. *(Added 2026-07-21.)* Subscription hygiene: after N streamed responses, the
+    live-subscription count is back to baseline (platform tiers — the F-M3-1/F-M0-5 leak is
+    the red case).
 
 ## 8. Still open after this round
 
+*(2026-07-21: the contract-review session ruled on every open contract question — the
+decision record is [`docs/design/contract-freeze-agenda.md`](../../../docs/design/contract-freeze-agenda.md);
+strikethroughs below updated accordingly.)*
+
 - ~~**FFI streaming mechanism** (§5.11)~~ — **decided by S-FFI (step 24, 2026-07-19): F1
-  `ffi_stream` async push**; row 16 is CORE. The *core seam* (chunk re-entry, back-pressure,
-  end-of-body) is the freeze session's.
+  `ffi_stream` async push**; row 16 is CORE. ~~The *core seam* (chunk re-entry, back-pressure,
+  end-of-body) is the freeze session's.~~ **Seam ruled 2026-07-21** —
+  [`streaming-seam.md`](../../../docs/design/streaming-seam.md).
 - ~~**Pinning-on-Linux feasibility** (§5.14)~~ — **decided by S-LX2 (step 24, 2026-07-19):
   feasible**; row 19 stands as CORE(adapter).
-- **Cookie capability shape** (§5.20) — design session, when a feature needs it.
+- **Cookie capability shape** (§5.20) — design session, when a feature needs it; the
+  mid-flight re-entry shape it needs is already defined (Q9, streaming-seam §4).
 - **WebSocket family** (§2) — protected possibility, undesigned.
 - ~~**`FileRef`** (§5.10) — its home (bolted-core? bolted-http?)~~ — **decided 2026-07-19
   (design session, step-24 authoring): `FileRef` lives in `bolted-http`**, a newtype over a
@@ -531,8 +597,10 @@ cost, and the suite is where it is paid:
   consumer; if the durable-effects family (background transfer, replay) ever needs it
   core-side, lifting a newtype is a re-export exercise, not a break.
 - **Background family full contract** (§6) — unchanged §9 status, better-informed.
-- ~~Whether the priority hint (§5.8) survives Henrik's review as CORE~~ — **decided 2026-07-19
-  (Henrik): CAP**, with only Apple + Cronet/HttpEngine honoring (row 12 updated).
+- ~~Whether the priority hint (§5.8) survives Henrik's review as CORE~~ — decided 2026-07-19
+  (Henrik): CAP — then **re-ruled 2026-07-21 (Q10): uniform CORE hint with legal no-op**,
+  once upstream note 08 showed the CAP shape was forcing two FFI bridge crates for nothing
+  the row's own contract protects (§5.8 has the full reversal rationale and the precedent).
 - Whether web ever joins the platform set — still open, but the early decision it forced is
   **taken 2026-07-19 (Henrik): the contract traits adopt the conditional `Send`-bound pattern
   from day one** (§9), so a later web adapter is never locked out at the type level.
