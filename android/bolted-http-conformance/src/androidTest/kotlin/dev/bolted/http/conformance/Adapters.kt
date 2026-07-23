@@ -1,5 +1,7 @@
 package dev.bolted.http.conformance
 
+import dev.bolted.http.ffi.FfiBodyEnd
+import dev.bolted.http.ffi.FfiFlowSignal
 import dev.bolted.http.ffi.FfiHttpError
 import dev.bolted.http.ffi.FfiHttpVersion
 import dev.bolted.http.ffi.FfiRequest
@@ -27,7 +29,14 @@ class BrokenHttp : HttpAdapter {
         )
     }
 
-    override fun cancel(token: ULong) {}
+    override fun executeStreaming(request: FfiRequest) {
+        harness?.finishBody(
+            request.token,
+            FfiBodyEnd.Failed(FfiHttpError.Transport("deliberately broken adapter (gate red half)")),
+        )
+    }
+
+    override fun signal(token: ULong, flow: FfiFlowSignal) {}
 }
 
 /**
@@ -54,5 +63,11 @@ class AlwaysOkHttp : HttpAdapter {
         )
     }
 
-    override fun cancel(token: ULong) {}
+    override fun executeStreaming(request: FfiRequest) {
+        // Not exercised by the watched-red baseline (it reds only the buffered Transport-expecting
+        // rows); a trivial empty-complete keeps it a valid streaming adapter.
+        harness?.finishBody(request.token, FfiBodyEnd.Complete(0uL))
+    }
+
+    override fun signal(token: ULong, flow: FfiFlowSignal) {}
 }

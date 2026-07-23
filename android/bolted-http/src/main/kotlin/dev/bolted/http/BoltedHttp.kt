@@ -2,6 +2,9 @@ package dev.bolted.http
 
 import android.system.ErrnoException
 import android.system.OsConstants
+import dev.bolted.http.ffi.FfiBodyChunk
+import dev.bolted.http.ffi.FfiBodyEnd
+import dev.bolted.http.ffi.FfiFlowSignal
 import dev.bolted.http.ffi.FfiHeader
 import dev.bolted.http.ffi.FfiHttpError
 import dev.bolted.http.ffi.FfiHttpVersion
@@ -26,6 +29,7 @@ import java.security.cert.X509Certificate
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
@@ -78,11 +82,22 @@ import okio.sink
  * `ErrnoException` `EPERM`/`EACCES`); a live host control is platform-gated on the ART tier (see the
  * M2 notes), so the mapping is proven at the unit level.
  *
+ * **M4 status: the streaming seam.** On top of the buffered path the adapter now implements
+ * [executeStreaming] (streaming-seam §3a): the OkHttp response body **source** is read in the
+ * adapter's own read loop and each read is pushed across JNI via [HttpHarness.deliverChunk]; the
+ * single terminal goes through [HttpHarness.finishBody] (`Complete { total }` on clean end-of-body,
+ * `Failed { error }` on a mid-body failure, mapped by CAUSE). Cancellation and back-pressure are
+ * **pushed** through [signal] (the one [FfiFlowSignal] shape, three uses — the poll-watcher is gone):
+ * `Cancel` cancels the `Call`; `Pause`/`Resume` pace the read loop so the core ring never overflows.
+ *
  * Completions arrive on an OkHttp dispatcher thread (off the caller) — the async re-entry the Rust
  * bridge expects. No constraint literals: the total deadline comes from [FfiRequest.deadlineMs]; the
  * adapter invents no timeouts, limits, or keys.
  */
-class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : HttpAdapter {
+class BoltedHttp(
+    private val deadlineMode: DeadlineMode = DeadlineMode.Total,
+    private val streamFault: StreamFault = StreamFault.NONE,
+) : HttpAdapter {
     /**
      * How the request's total deadline is enforced. [Total] (the shipped default) uses OkHttp
      * `callTimeout` — a wall-clock budget over the whole call. [PerIdle] uses a bare `readTimeout` and
@@ -91,6 +106,29 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
      * keeps resetting so it never fires). The adapter is not forked — one construction flag.
      */
     enum class DeadlineMode { Total, PerIdle }
+
+    /**
+     * A deliberately-injected streaming fault — the scoped per-adapter red twin for the streaming rows
+     * (the Linux `StreamFault` / Apple `StreamFault` precedent, one fault at a time). [NONE] is the
+     * conformant shipped adapter; the conformance red-twin tests construct the adapter with a fault.
+     */
+    enum class StreamFault {
+        /** Conformant: deliver every read, honour the terminal. */
+        NONE,
+
+        /**
+         * Skip DELIVERING the first read but still count its bytes toward the declared total — the
+         * truncation the core completeness gate forbids (row 12's Android red). The ingest stays
+         * gapless (no seq consumed for the dropped read); only the declared total disagrees.
+         */
+        DROP_CHUNK,
+
+        /**
+         * Deliver every read but never call `finishBody` — the missing-terminal break (row 13's red)
+         * and the leaked-subscription case (row 14's red: the parked sink is never closed).
+         */
+        SKIP_TERMINAL,
+    }
 
     /**
      * The back-reference the completions re-enter through. Set by the composition root AFTER the
@@ -121,7 +159,7 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
             .retryOnConnectionFailure(false)
             .build()
 
-    /** In-flight requests keyed by the FFI token, so [cancel] reaches the right `Call` and cause. */
+    /** In-flight requests keyed by the FFI token, so [signal] reaches the right `Call` and cause. */
     private val inFlight = ConcurrentHashMap<Long, Ctx>()
 
     /** Per-request mutable state guarded by its own atomics; one instance handles all requests. */
@@ -135,7 +173,7 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
         val sentSoFar = AtomicLong(0)
 
         /**
-         * The recorded caller-cancellation CAUSE. Set by [cancel] before `Call.cancel()` so the
+         * The recorded caller-cancellation CAUSE. Set by [signal] before `Call.cancel()` so the
          * completion classifies as [FfiHttpError.Cancelled] independently of the opaque `IOException`
          * a cancelled call throws — never by matching the exception message (rule 9 / N6).
          */
@@ -147,6 +185,43 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
          * [FfiHttpError.PinMismatch] rather than [FfiHttpError.Tls] — the trust-vs-pin split, by CAUSE.
          */
         @Volatile var pinMismatch = false
+
+        /**
+         * Set by the per-hop network interceptor to whether the LAST network response OkHttp saw was a
+         * redirect (3xx). When OkHttp exhausts its own follow-up cap on a redirect loop, the last hop
+         * it saw is a redirect, so [classify] maps the resulting `ProtocolException` to
+         * [FfiHttpError.TooManyRedirects] by this recorded CAUSE — never by matching the exception text
+         * (Q2; the old `TOO_MANY_REDIRECTS_PREFIX` string match is deleted).
+         */
+        @Volatile var lastHopWasRedirect = false
+
+        // -- Streaming (streaming-seam §3a/§3b, M4) --
+
+        /** Whether this is a STREAMING request: the read loop pushes chunks, the terminal is `finishBody`. */
+        @Volatile var streaming = false
+
+        /** The next `seq` a delivered body chunk carries (ascending, gapless from 0). */
+        var nextSeq: ULong = 0uL
+
+        /**
+         * Set when the core raised a typed delivery failure (a `seq` violation / ring overflow): it
+         * already closed the stream with that failure, so the read loop stops and must NOT finish.
+         */
+        @Volatile var streamClosedByCore = false
+
+        /** Whether the first read has been dropped yet (the [StreamFault.DROP_CHUNK] one-shot). */
+        var droppedOne = false
+
+        /**
+         * Back-pressure gate: set by a pushed [FfiFlowSignal.Pause], cleared by [FfiFlowSignal.Resume]
+         * (or [FfiFlowSignal.Cancel]). The streaming read loop waits on [pauseLock] while this is set,
+         * so the socket back-pressures the server and the core ring never overflows (the Linux
+         * read-pacing precedent — OkHttp, like reqwest, has no task-level suspend).
+         */
+        val paused = AtomicBoolean(false)
+
+        /** The monitor the streaming read loop waits on for resume (lost-wake-up-safe with [paused]). */
+        val pauseLock = Object()
     }
 
     override fun execute(request: FfiRequest) {
@@ -172,32 +247,7 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
             builder.addHeader(header.name, header.value)
         }
 
-        // The total deadline the request carries (no magic number — it comes from `deadlineMs`).
-        // `Total` bounds the WHOLE call incl. redirects (a wall-clock budget); `PerIdle` sets only a
-        // read idle-timer (the conformance-only red-watch mechanism — a trickle resets it forever).
-        val ms = request.deadlineMs.toLong()
-        val perCallClient =
-            client
-                .newBuilder()
-                .apply {
-                    when (deadlineMode) {
-                        DeadlineMode.Total -> callTimeout(ms, TimeUnit.MILLISECONDS)
-                        DeadlineMode.PerIdle -> readTimeout(ms, TimeUnit.MILLISECONDS)
-                    }
-                    // Install the test-tier trust anchor + the request's SPKI pins (rule 10). Only
-                    // when an anchor is configured — the shipped adapter leaves OkHttp's default trust.
-                    val anchor = trustAnchorDer
-                    if (anchor != null) {
-                        val pins = request.pins.map { it.hash }
-                        val tm = serverTrustManager(anchor, pins) { ctx.pinMismatch = true }
-                        if (tm != null) {
-                            val ssl = SSLContext.getInstance("TLS")
-                            ssl.init(null, arrayOf<TrustManager>(tm), null)
-                            sslSocketFactory(ssl.socketFactory, tm)
-                        }
-                    }
-                }
-                .build()
+        val perCallClient = buildPerCallClient(request, ctx)
 
         val call = perCallClient.newCall(builder.build())
         ctx.call = call
@@ -285,12 +335,196 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
         )
     }
 
-    override fun cancel(token: ULong) {
-        // Record the caller-cancel CAUSE before cancelling, so the completion is classified as
-        // `Cancelled` by cause, not by the exception the cancelled `Call` happens to throw (rule 9).
+    /**
+     * Dispatch a **streaming** request effect (streaming-seam §3a, M4). Enqueues the call; on the
+     * response, the body **source** is read in this adapter's own read loop and each read is pushed
+     * across JNI via [HttpHarness.deliverChunk], the single terminal via [HttpHarness.finishBody].
+     * A `false` from `deliverChunk` means the core closed the stream (a typed `seq`/overflow failure)
+     * — the loop stops, cancels the call, and does NOT finish. The total deadline is enforced exactly
+     * as in [execute] (OkHttp `callTimeout` spans the whole call incl. the body read); cancel and
+     * pause/resume arrive through [signal], not a poll-watcher.
+     */
+    override fun executeStreaming(request: FfiRequest) {
+        val token = request.token.toLong()
+        val ctx = Ctx(request.token)
+        ctx.streaming = true
+
+        val builder = Request.Builder().url(request.url)
+        builder.method(request.method, null)
+        for (header in request.headers) {
+            builder.addHeader(header.name, header.value)
+        }
+
+        val call = buildPerCallClient(request, ctx).newCall(builder.build())
+        ctx.call = call
+        inFlight[token] = ctx
+        call.enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    inFlight.remove(token)
+                    // The core already closed the stream on a typed delivery failure — nothing to do.
+                    if (ctx.streamClosedByCore) return
+                    harness?.finishBody(request.token, FfiBodyEnd.Failed(classify(ctx, e)))
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    streamResponse(ctx, request.token, call, response)
+                }
+            },
+        )
+    }
+
+    /**
+     * Read the response body **source** into the driver-owned ingest, one JNI push per transport read
+     * (streaming-seam §3a). Honours pushed back-pressure by read-pacing (the loop waits while
+     * [Ctx.paused]); closes with the single terminal via [HttpHarness.finishBody]. Runs on the OkHttp
+     * dispatcher thread (`onResponse`).
+     */
+    private fun streamResponse(ctx: Ctx, token: ULong, call: Call, response: Response) {
+        val longToken = token.toLong()
+        try {
+            // Rule 4: an un-followed cross-scheme https→http redirect is refused as the terminal.
+            val downgrade = insecureDowngradeTarget(response)
+            if (downgrade != null) {
+                inFlight.remove(longToken)
+                harness?.finishBody(token, FfiBodyEnd.Failed(FfiHttpError.InsecureRedirect(downgrade)))
+                return
+            }
+            val source = response.body?.source()
+            if (source == null) {
+                inFlight.remove(longToken)
+                if (streamFault == StreamFault.SKIP_TERMINAL) return
+                harness?.finishBody(token, FfiBodyEnd.Complete(0uL))
+                return
+            }
+            val readBuffer = Buffer()
+            var total = 0uL
+            while (true) {
+                // Back-pressure read-pacing: while the core has pushed Pause, stop reading (the socket
+                // back-pressures the server). Guarded wait — a Resume/Cancel that clears the flag before
+                // we wait is not lost (the flag is re-checked under the monitor). A synchronous Pause
+                // re-entering `signal` during a `deliverChunk` below only sets the flag (no lock held),
+                // so it cannot deadlock — the Linux/Apple discipline, mirrored.
+                synchronized(ctx.pauseLock) {
+                    while (ctx.paused.get()) {
+                        if (call.isCanceled()) return
+                        ctx.pauseLock.wait()
+                    }
+                }
+                val read =
+                    try {
+                        source.read(readBuffer, READ_WINDOW_BYTES)
+                    } catch (e: IOException) {
+                        inFlight.remove(longToken)
+                        if (ctx.streamClosedByCore) return
+                        harness?.finishBody(token, FfiBodyEnd.Failed(classify(ctx, e)))
+                        return
+                    }
+                if (read == -1L) break
+                val bytes = readBuffer.readByteArray()
+                // Every read's bytes count toward the DECLARED total (the completeness gate's
+                // denominator), even a dropped one — that is what makes DROP_CHUNK observable.
+                total += read.toULong()
+                // DROP_CHUNK: skip DELIVERING the first read (its bytes are already counted), so the
+                // declared total exceeds the ingested bytes ⇒ the core gate fires ⇒ row 12 red.
+                if (streamFault == StreamFault.DROP_CHUNK && !ctx.droppedOne) {
+                    ctx.droppedOne = true
+                    continue
+                }
+                val seq = ctx.nextSeq
+                ctx.nextSeq += 1uL
+                val keepReading = harness?.deliverChunk(token, FfiBodyChunk(seq, bytes)) ?: false
+                if (!keepReading) {
+                    // The core raised a typed failure and already closed the stream — stop reading,
+                    // cancel the call, and do NOT finish (the harness owns that terminal).
+                    ctx.streamClosedByCore = true
+                    inFlight.remove(longToken)
+                    call.cancel()
+                    return
+                }
+            }
+            // Clean end of body.
+            inFlight.remove(longToken)
+            // SKIP_TERMINAL: deliver every read but never finish — the missing-terminal red twin
+            // (row 13) and the leaked-subscription case (row 14). The parked sink stays live.
+            if (streamFault == StreamFault.SKIP_TERMINAL) return
+            harness?.finishBody(token, FfiBodyEnd.Complete(total))
+        } catch (e: InterruptedException) {
+            // A blocked pause-wait was interrupted (dispatcher teardown / cancel): treat as a cancel
+            // terminal unless the core already closed the stream or the fault suppresses the terminal.
+            Thread.currentThread().interrupt()
+            inFlight.remove(longToken)
+            if (!ctx.streamClosedByCore && streamFault != StreamFault.SKIP_TERMINAL) {
+                harness?.finishBody(token, FfiBodyEnd.Failed(FfiHttpError.Cancelled))
+            }
+        } finally {
+            response.close()
+        }
+    }
+
+    /**
+     * Push a mid-flight [FfiFlowSignal] to the in-flight call for `token` (streaming-seam §3b / Q4 —
+     * the one signal shape, three uses; this replaces the deleted poll-watcher). `Cancel` records the
+     * caller-cancel cause then cancels the `Call` (rule 9: the completion classifies as `Cancelled` by
+     * cause) and wakes any paused read; `Pause`/`Resume` pace the streaming read loop for back-pressure.
+     * A no-op if the token is unknown / already done.
+     */
+    override fun signal(token: ULong, flow: FfiFlowSignal) {
         val ctx = inFlight[token.toLong()] ?: return
-        ctx.callerCancelled = true
-        ctx.call?.cancel()
+        when (flow) {
+            FfiFlowSignal.CANCEL -> {
+                ctx.callerCancelled = true
+                ctx.call?.cancel()
+                synchronized(ctx.pauseLock) {
+                    ctx.paused.set(false)
+                    ctx.pauseLock.notifyAll()
+                }
+            }
+            // Pause only sets the flag (safe to re-enter synchronously during a `deliverChunk` — no
+            // lock is held there); Resume clears it and wakes the loop under the monitor (no lost wake).
+            FfiFlowSignal.PAUSE -> ctx.paused.set(true)
+            FfiFlowSignal.RESUME ->
+                synchronized(ctx.pauseLock) {
+                    ctx.paused.set(false)
+                    ctx.pauseLock.notifyAll()
+                }
+        }
+    }
+
+    /**
+     * Build the per-request OkHttp client: the total-deadline enforcement (no magic number — from
+     * `deadlineMs`; `Total` bounds the WHOLE call incl. redirects and the streaming body read, `PerIdle`
+     * only a read idle-timer — the conformance-only red-watch), the optional test-tier trust anchor +
+     * SPKI pins (rule 10), and a per-hop network interceptor that records whether the last network
+     * response was a redirect (so [classify] can map OkHttp's redirect-exhaustion `ProtocolException`
+     * to `TooManyRedirects` structurally, never by exception text — Q2).
+     */
+    private fun buildPerCallClient(request: FfiRequest, ctx: Ctx): OkHttpClient {
+        val ms = request.deadlineMs.toLong()
+        return client
+            .newBuilder()
+            .apply {
+                when (deadlineMode) {
+                    DeadlineMode.Total -> callTimeout(ms, TimeUnit.MILLISECONDS)
+                    DeadlineMode.PerIdle -> readTimeout(ms, TimeUnit.MILLISECONDS)
+                }
+                val anchor = trustAnchorDer
+                if (anchor != null) {
+                    val pins = request.pins.map { it.hash }
+                    val tm = serverTrustManager(anchor, pins) { ctx.pinMismatch = true }
+                    if (tm != null) {
+                        val ssl = SSLContext.getInstance("TLS")
+                        ssl.init(null, arrayOf<TrustManager>(tm), null)
+                        sslSocketFactory(ssl.socketFactory, tm)
+                    }
+                }
+                addNetworkInterceptor { chain ->
+                    val response = chain.proceed(chain.request())
+                    ctx.lastHopWasRedirect = response.isRedirect
+                    response
+                }
+            }
+            .build()
     }
 
     /**
@@ -346,8 +580,9 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
     /**
      * Native failure → typed error key, by CAUSE (rule 9 / N6), never by exception text. A recorded
      * caller cancel wins; then a recorded SPKI pin mismatch (rule 10); then a genuine OS permission
-     * denial; otherwise the exception TYPE decides. The sole message inspection is the
-     * too-many-redirects prefix, which OkHttp exposes only as a `ProtocolException` message.
+     * denial; otherwise the exception TYPE decides. Redirect exhaustion is read from the structural
+     * [Ctx.lastHopWasRedirect] the network interceptor records — NOT from the exception message (Q2:
+     * the old `TOO_MANY_REDIRECTS_PREFIX` text match is deleted).
      */
     private fun classify(ctx: Ctx, e: IOException): FfiHttpError {
         if (ctx.callerCancelled) return FfiHttpError.Cancelled
@@ -365,9 +600,11 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
             is SSLException -> FfiHttpError.Tls
             is ConnectException -> FfiHttpError.Connect
             is ProtocolException ->
-                if (e.message?.startsWith(TOO_MANY_REDIRECTS_PREFIX) == true) {
-                    // OkHttp's own follow-up cap fired. The request carries no redirect limit and the
-                    // delegate-driven policy is out of scope, so `0` is the "adapter-internal cap"
+                if (ctx.lastHopWasRedirect) {
+                    // OkHttp's own follow-up cap fired on a redirect chain: the last network response
+                    // the interceptor saw was a 3xx, so this `ProtocolException` is redirect exhaustion
+                    // (Q2 — read by CAUSE, not by the exception text). The request carries no redirect
+                    // limit and the native cap is OkHttp's own, so `0` is the "adapter-internal cap"
                     // sentinel — no conformance row inspects it, only the key (mirrors Apple).
                     FfiHttpError.TooManyRedirects(0u)
                 } else {
@@ -436,8 +673,14 @@ class BoltedHttp(private val deadlineMode: DeadlineMode = DeadlineMode.Total) : 
     }
 
     companion object {
-        /** OkHttp signals a redirect-cap breach ONLY via this `ProtocolException` message prefix. */
-        private const val TOO_MANY_REDIRECTS_PREFIX = "Too many follow-up requests"
+        /**
+         * The transport read window for the streaming read loop — the granularity of one socket-read
+         * hand-off across JNI (okio's natural segment size). This is a **transport I/O** buffer, NOT a
+         * contract constraint: the completeness gate counts total bytes regardless of how the body is
+         * chunked, so this value has no semantic effect (the analog of URLSession's natural `didReceive
+         * data` size and reqwest's `bytes_stream` read — neither of which the adapter picks either).
+         */
+        private const val READ_WINDOW_BYTES = 8192L
 
         /**
          * Build the test-tier server-trust manager: a real chain check against `anchorDer` (the sole
