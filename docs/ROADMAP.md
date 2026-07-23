@@ -46,6 +46,7 @@ work around them.
 | 26 | bolted-http III: the Android adapter (S-AN, instrumented ART tier) | 4 — Harness | **done** — [plan](steps/step-26-android-adapter.md) · [report](steps/step-26-report.md); `BoltedHttp.kt` (OkHttp) fully conformant — 25 driver rows + C3 column, every row watched red first; **total deadline = `callTimeout`, honestly — no synthesis** (opposite of Apple); **N2: the JNI stream is lossless+ordered incl. under saturation** (step-02's ghost dead), but the generated `callbackFlow` drops on overflow (F-M0-4) and the abandoned-subscription leak reproduces shape-changed, native-side, GC-surviving (F-M0-5) — the freeze's streaming-seam evidence, three platforms deep; **NSC `<pin-set>` proven NOT to bind OkHttp** (§9 answered); HttpEngine spike-real/h3-paper; 22-mutation pass → 1 blind spot fixed (hop *order*), double-complete proven compile-impossible. **Next: the contract-freeze design session** (agenda = step-24/25/26 report §Open questions) |
 | — | bolted-http contract review | design session | **done** — held 2026-07-21 as scheduled: **all ten open contract questions ruled** (streaming seam adopted as proposed, redirect-ceiling CFG, `content_length` advisory-by-protocol-arithmetic, push-cancellation, `PermissionDenied` device-tier, `HttpError → ErrorData` bridge, packaging conventions, conformance-scope boundary, mid-flight re-entry shape defined once, priority-hint uniformity + bridge-crate merge). Decision record: [contract-freeze-agenda.md](design/contract-freeze-agenda.md) · [streaming-seam.md](design/streaming-seam.md); ARCHITECTURE **v1.16**. Freeze framing softened (Henrik): working decisions for unreleased own-use software, expected to evolve; two standing re-eval triggers are upstream BoltFFI RFCs in draft (stream delivery contract, companion sources). Same day: **S-WIN unparked** — both C# blockers verified fixed at released 0.28.0 |
 | 27 | bolted-http IV: the ruled contract, implemented | 4 — Harness | **ready** — [plan](steps/step-27-ruled-contract.md); the streaming seam (§3a–d + three new suite rows) across all three adapters, the one mid-flight signal (back-pressure + push-cancel), redirect-ceiling CFG, `content_length` wording + file-sink verified total, the `Into<ErrorData>` bridge, row-11 `total`, and the Q10 bridge-crate merge (gated on note-08's runtime probe, M0) |
+| 28 | Collection-facet spike: the first real collection facet + windowed-observation evidence | 6 — Collection spike | **ready** — [plan](steps/step-28-collection-facet.md); the v1.17 exploration pass's spike: a disposable `spikes/collection/` notes-inbox facet — a many-canonical store, `open_window` per-observer handles, per-window query, drafts/create-flow/orphaning inherited (C07/C11/C12) — producing the evidence for §9's windowed-collections ruling. The ruling itself belongs to the design session that follows; runs independently of step 27 (disjoint crates) |
 | 28+ | **S-WIN: the step-23/14 C# resume** (schedulable — namespace rename + tripwire flip + the emitted M2/M3 suite; sequenced after 27 so the emitted suite targets the ruled contract) · **harness hardening** (tier-provided sink path, row hard-kill, ALPN TestServer) · `bolted new` (gated on the first out-of-tree framework consumer / a publishing story) · the wire emitter (D31, gated on a product feature needing the daemon topology) · `command` in core/macros (D33, with its first framework consumer) | — | sketched — see Phases 4–5 |
 
 ## Phase 1 — Design validation spike
@@ -450,3 +451,24 @@ retro-move is churn without payoff.
   owner wants the ~7 s of `check` time back (the wire emitter step will *re-derive*, not rescue,
   anything it needs). Capability coverage (Phase 4) is unblocked: the spike has shown what OS
   surfaces demand of capabilities.
+
+## Phase 6 — Collection-facet spike (campaign sketch)
+
+**Why now.** §9's windowed-collections item has always said "designed when the first real
+collection facet lands" — the D20/D29 rule refusing shapes justified by zero examples. The
+v1.17 exploration pass (ARCHITECTURE status log) ran five scenarios against the preserved
+candidate and turned the item's vague tail into four named questions: the store's canonical
+shape (one canonical vs many), sort/filter as per-window query state, the `total_count` shape,
+and re-projection etiquette. Step 28 builds the example those questions have been waiting for.
+
+**Shape.** One step, disposable spike (`spikes/collection/`, workspace members like
+`spikes/os-integration/` — disposal is `rm -rf` plus the member lines). The facet is
+deliberately inbox-shaped: sync-driven mutation *and* editable rows *and* a second
+differently-ordered observer, because a read-only top-N would validate almost nothing. Paging
+and FFI crossing are out of scope; the frozen `bolted-core` surface is untouched — everything
+new is spike-local. Drafts, create-flow, and orphaning are *inherited* (C07/C11/C12), watched
+as positive controls, never redesigned.
+
+**Exit.** A report whose §Findings is the agenda for the windowed-collections design session —
+the ruling happens there, never in the spike. Like Phase 5, the campaign's output is law folded
+into ARCHITECTURE; the spike itself is disposal-eligible afterwards.
