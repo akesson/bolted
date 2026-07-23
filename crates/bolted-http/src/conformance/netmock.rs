@@ -78,6 +78,11 @@ pub struct MockBehavior {
     /// chunk break, which `honest_upload_progress`'s monotonicity twin never exercises. Only takes
     /// effect on the honest (monotone) path.
     pub terminal_upload_progress: bool,
+    /// Report the honest known `total` (`Some(body_len)`) on every progress sample (rule 11's
+    /// terminal-`total` assertion, Q8 / step-27 M2). Off ⇒ report a `total` one byte too large — the
+    /// lying-about-total break, invisible to the `sent`-only assertions. Only takes effect on the
+    /// honest (monotone) path.
+    pub honest_progress_total: bool,
     /// Report an honest redirect trace: the terminal `final_url` is the chain's tail and every
     /// intermediate hop is recorded (response observables). Off ⇒ report the original request URL as
     /// `final_url` and drop the hop trace — the trace-drop break, invisible to every rule until the
@@ -113,6 +118,7 @@ impl MockBehavior {
             honest_content_length: true,
             honest_upload_progress: true,
             terminal_upload_progress: true,
+            honest_progress_total: true,
             honest_redirect_trace: true,
             honest_version: true,
             honest_redirect_hop_order: true,
@@ -494,6 +500,12 @@ impl SocketMock {
         let mut sent = 0u64;
         let pieces: Vec<&[u8]> = body.chunks(chunk).collect();
         let last_idx = pieces.len().saturating_sub(1);
+        // The lying-about-total break reports a `total` one byte too large on every sample (Q8).
+        let reported_total = if self.behavior.honest_progress_total {
+            Some(total)
+        } else {
+            Some(total + 1)
+        };
         for (i, piece) in pieces.iter().enumerate() {
             t.write_all(piece)?;
             sent += piece.len() as u64;
@@ -503,7 +515,7 @@ impl SocketMock {
                 // The forgot-the-last-chunk break: stop reporting one chunk short of the body length
                 // — still monotone, but terminally inconsistent (final `sent` < body length).
                 if self.behavior.terminal_upload_progress || i != last_idx {
-                    p.progress(sent, Some(total));
+                    p.progress(sent, reported_total);
                 }
             }
         }

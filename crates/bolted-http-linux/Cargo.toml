@@ -31,6 +31,7 @@ tokio = { version = "1", default-features = false, features = [
     "macros",
     "fs",
     "io-util",
+    "sync",
 ] }
 # The TLS stack the pinning verifier is built on (row 19 / L2). Same pin/features as bolted-http's
 # conformance TLS so the workspace resolves one rustls: ring provider, no aws-lc.

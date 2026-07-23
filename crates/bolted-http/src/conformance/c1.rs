@@ -392,8 +392,11 @@ fn rule_11(ctx: &ConformanceCtx) -> RowResult {
     }
 }
 
-/// Judge a recorded progress sequence against rule 11: monotone non-decreasing `sent`, and a final
-/// `sent` equal to the known body length (terminal consistency). Never compares to wire bytes.
+/// Judge a recorded progress sequence against rule 11: monotone non-decreasing `sent`, a final
+/// `sent` equal to the known body length (terminal consistency), **and** a final `total` reported as
+/// `Some(body_len)` (the terminal-`total` assertion, Q8 / step-27 M2). `content_length` is always
+/// known for our `Bytes | File` bodies, so an implementor that lies about (or omits) the total fails.
+/// Never compares to wire bytes.
 fn judge_progress(samples: &[(u64, Option<u64>)], body_len: u64) -> RowResult {
     let mut prev = 0u64;
     for &(sent, _total) in samples {
@@ -403,11 +406,19 @@ fn judge_progress(samples: &[(u64, Option<u64>)], body_len: u64) -> RowResult {
         prev = sent;
     }
     let final_sent = samples.last().map(|&(s, _)| s).unwrap_or(0);
-    if final_sent == body_len {
+    if final_sent != body_len {
+        return RowResult::Fail(FailureReason::ProgressNotTerminal {
+            got: final_sent,
+            expected: body_len,
+        });
+    }
+    // The terminal `total` must be the known body length — not `None`, not a lie (Q8).
+    let final_total = samples.last().and_then(|&(_, t)| t);
+    if final_total == Some(body_len) {
         RowResult::Pass
     } else {
-        RowResult::Fail(FailureReason::ProgressNotTerminal {
-            got: final_sent,
+        RowResult::Fail(FailureReason::ProgressWrongTotal {
+            got: final_total,
             expected: body_len,
         })
     }
@@ -806,6 +817,19 @@ mod tests {
         assert!(matches!(
             redirect_trace_correspondence(&ctx_of(&f, &ep)),
             RowResult::Fail(FailureReason::WrongHopOrder)
+        ));
+    }
+
+    #[test]
+    fn rule_11_red_when_total_is_dishonest() {
+        // Step-27 M2 (Q8): the terminal-`total` assertion. A monotone, terminally-consistent `sent`
+        // sequence that reports a `total` one byte too large fails — the total is known for our
+        // `Bytes | File` bodies, so a lie must be caught. Watched red per implementor.
+        let (_s, ep) = harness();
+        let f = twin(&ep, |b| b.honest_progress_total = false);
+        assert!(matches!(
+            rule_11(&ctx_of(&f, &ep)),
+            RowResult::Fail(FailureReason::ProgressWrongTotal { .. })
         ));
     }
 

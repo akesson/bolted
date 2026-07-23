@@ -20,6 +20,7 @@ pub mod c3;
 pub mod mock;
 pub mod netmock;
 pub mod server;
+pub mod stream;
 pub mod wire;
 
 use std::net::TcpListener;
@@ -29,7 +30,7 @@ use std::time::Duration;
 
 use std::sync::{Arc, Mutex};
 
-use crate::capability::{CompletionSink, Http, Metrics, UploadProgressSink};
+use crate::capability::{CompletionSink, Http, Metrics, StreamingHttp, UploadProgressSink};
 use crate::error::HttpError;
 use crate::request::HttpRequest;
 use crate::response::{HttpResponse, HttpVersion};
@@ -48,6 +49,16 @@ pub trait AdapterFactory {
     /// The adapter as a [`Metrics`] source, if it reports metrics (row 18, CAP tiered). Default:
     /// absent.
     fn metrics(&self) -> Option<Box<dyn Metrics>> {
+        None
+    }
+
+    /// The adapter as a [`StreamingHttp`] source, if it implements the streaming capability (rows
+    /// 12/13, streaming-seam §3b). Same "generated from the types" discipline as [`metrics`]:
+    /// returning `Some(..)` only type-checks if the concrete adapter really implements the trait.
+    /// Default: absent (a streaming row records a skip rather than passing vacuously).
+    ///
+    /// [`metrics`]: AdapterFactory::metrics
+    fn streaming(&self) -> Option<Box<dyn StreamingHttp>> {
         None
     }
 }
@@ -181,6 +192,45 @@ pub enum FailureReason {
         got: HttpVersion,
         /// The version the server actually spoke.
         expected: HttpVersion,
+    },
+    /// A streamed response body arrived **incomplete** (feature-matrix §7 rule 12): the bytes the
+    /// slow consumer drained did not equal the body the server sent — a chunk was dropped under
+    /// back-pressure (the truncation the completeness gate forbids).
+    IncompleteStream {
+        /// The number of decoded bytes the consumer actually drained.
+        got: usize,
+        /// The number of decoded bytes the body should have carried.
+        expected: usize,
+    },
+    /// A streamed response body's **terminal** was a typed failure where the row required a complete
+    /// body (rule 12): the completeness gate fired (a declared total disagreeing with the ingested
+    /// bytes surfaces as this), or the adapter reported a mid-body error.
+    StreamFailed {
+        /// The terminal error key.
+        got: crate::HttpErrorKey,
+    },
+    /// A streamed response never delivered its **terminal** (feature-matrix §7 rule 13): after the
+    /// chunks, no `BodyEnd` arrived within the budget — the missing-terminal break (a truncation
+    /// that "still streaming" cannot be distinguished from without a terminal).
+    NoTerminal,
+    /// A streamed response's terminal declared the wrong **total** (rule 12 / rule 11's total): the
+    /// `Complete { total }` the completeness gate accepted did not equal the body length the row
+    /// verified independently.
+    WrongTerminalTotal {
+        /// The total the terminal declared (and the gate accepted).
+        got: u64,
+        /// The body length the row verified.
+        expected: u64,
+    },
+    /// Upload progress reported a **total** inconsistent with the known body length (rule 11's total
+    /// assertion, Q8): `content_length` is always known for our `Bytes | File` bodies, so the final
+    /// progress sample's `total` must be `Some(body_len)`. An implementor that lies about (or omits)
+    /// the total fails here.
+    ProgressWrongTotal {
+        /// The `total` the final progress sample carried (`None` rendered as `0` with `known:false`).
+        got: Option<u64>,
+        /// The known body length the total had to equal.
+        expected: u64,
     },
 }
 

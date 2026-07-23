@@ -16,6 +16,8 @@ use crate::MaybeSend;
 use crate::error::HttpError;
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
+use crate::signal::FlowSignals;
+use crate::stream::{BodyChunk, BodyEnd};
 
 /// The sink an adapter delivers a request's single completion to.
 ///
@@ -90,21 +92,53 @@ impl CancelToken {
 
 /// A handle to an in-flight request. Dropping it does not cancel; call [`RequestHandle::cancel`]
 /// (row 21). The completion still arrives — as `Err(HttpError::Cancelled)` when cancelled.
+///
+/// ## Poll vs. push cancellation
+///
+/// Cancellation reaches the adapter one of two ways, and a handle may carry both:
+/// - the poll-based [`CancelToken`] (an atomic the adapter polls), and
+/// - the **pushed** [`FlowSignals`] surface ([`RequestHandle::with_signals`]), which delivers
+///   [`crate::signal::FlowSignal::Cancel`] synchronously so the adapter needs no poll-watcher thread
+///   (streaming-seam §3b / Q4).
+///
+/// [`RequestHandle::cancel`] fires **both**: it sets the token (for any adapter still polling — the
+/// FFI bridges do, until steps M3/M4) *and* pushes the signal (for an adapter that has migrated off
+/// the poll-watcher, e.g. `bolted-http-linux`). An adapter uses whichever it registered; the other
+/// is a cheap no-op.
 #[derive(Clone, Debug)]
 pub struct RequestHandle {
     token: CancelToken,
+    signals: Option<FlowSignals>,
 }
 
 impl RequestHandle {
-    /// Build a handle over the adapter's cancellation token.
+    /// Build a handle over the adapter's cancellation token (poll-based cancel only).
     #[must_use]
     pub fn for_token(token: CancelToken) -> Self {
-        RequestHandle { token }
+        RequestHandle {
+            token,
+            signals: None,
+        }
     }
 
-    /// Request cancellation of the in-flight effect.
+    /// Build a handle carrying both the poll token and the pushed [`FlowSignals`] surface. An
+    /// adapter that has deleted its poll-watcher registers a [`crate::signal::FlowObserver`], wraps
+    /// it in `signals`, and reacts to the pushed [`crate::signal::FlowSignal::Cancel`].
+    #[must_use]
+    pub fn with_signals(token: CancelToken, signals: FlowSignals) -> Self {
+        RequestHandle {
+            token,
+            signals: Some(signals),
+        }
+    }
+
+    /// Request cancellation of the in-flight effect — sets the poll token **and** pushes
+    /// [`crate::signal::FlowSignal::Cancel`] when a [`FlowSignals`] surface is registered.
     pub fn cancel(&self) {
         self.token.cancel();
+        if let Some(signals) = &self.signals {
+            signals.cancel();
+        }
     }
 
     /// The underlying token (the adapter polls it).
@@ -112,6 +146,53 @@ impl RequestHandle {
     pub fn token(&self) -> CancelToken {
         self.token.clone()
     }
+}
+
+/// The adapter→core (driver) body-chunk delivery sink for a **streamed** response
+/// (streaming-seam §3a/§3c). The streaming analogue of [`CompletionSink`]: an adapter delivers each
+/// body chunk, then exactly one terminal.
+///
+/// **Repeatable for chunks, one-shot for the terminal.** [`ChunkSink::deliver_chunk`] is `&self`
+/// (called once per chunk); [`ChunkSink::finish`] takes `self: Box<Self>`, so the terminal fires
+/// **exactly once, enforced by the type** — a second terminal, or a chunk after the terminal, is a
+/// use-after-move that does not compile (the step-24 one-shot discipline, extended to the stream;
+/// the same property [`crate::stream::BodyStream::finish`] gives the core-owned ingest).
+///
+/// The driver owns the core-side [`crate::stream::BodyStream`] behind whatever synchronisation it
+/// needs (a `Mutex` in the harness; a store lock in a real driver) — never in this crate. The sink
+/// is the seam; the ring, the `seq` verifier and the completeness gate live behind it.
+pub trait ChunkSink: MaybeSend {
+    /// Deliver the next body chunk. Returns the typed failure the core ingest raised — a `seq`
+    /// violation ([`HttpError::Transport`]) or ring overflow ([`HttpError::StreamOverflow`]) — so a
+    /// conformant adapter can stop reading and close the stream with it.
+    ///
+    /// # Errors
+    /// The core ingest's typed failure ([`HttpError::Transport`] on a `seq` violation;
+    /// [`HttpError::StreamOverflow`] on ring overflow).
+    fn deliver_chunk(&self, chunk: BodyChunk) -> Result<(), HttpError>;
+
+    /// Close the stream with its terminal (design §3c). Consumes the sink — one terminal by
+    /// construction. The driver's completeness gate ([`crate::stream::BodyStream::finish`]) turns a
+    /// `Complete { total }` whose declared total disagrees with the ingested bytes into a failure.
+    fn finish(self: Box<Self>, end: BodyEnd);
+}
+
+/// The **streaming** HTTP capability (streaming-seam §3b option C): dispatch a request whose response
+/// body is streamed chunk-by-chunk into a driver-owned [`ChunkSink`], with the one core→adapter
+/// [`FlowSignals`] surface (back-pressure + pushed cancel).
+///
+/// A capability trait an adapter **opts into** (like [`Metrics`]), never a widening of the base
+/// [`Http`] contract: the buffered completion path is unchanged for adapters that do not stream. An
+/// adapter that implements it receives pushed signals and must honour [`FlowSignal::Pause`] by
+/// pausing its socket read (so the ring never overflows) and [`FlowSignal::Cancel`] by cancelling.
+///
+/// [`FlowSignal::Pause`]: crate::signal::FlowSignal::Pause
+/// [`FlowSignal::Cancel`]: crate::signal::FlowSignal::Cancel
+pub trait StreamingHttp: Http {
+    /// Dispatch `request`, streaming its response body into `chunks`. Returns immediately with the
+    /// [`FlowSignals`] emitter the driver uses to push back-pressure (pause/resume) and cancel; the
+    /// chunks and the single terminal arrive on `chunks`.
+    fn send_streaming(&self, request: HttpRequest, chunks: Box<dyn ChunkSink>) -> FlowSignals;
 }
 
 // --- Optional capability traits (feature-matrix §4) -------------------------------------

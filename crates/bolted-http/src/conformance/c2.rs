@@ -63,14 +63,18 @@ pub fn reachability(key: HttpErrorKey) -> Reachability {
              test server cannot make the OS deny permission. Positive control lands in the Apple / \
              Android adapter suites (steps 25/26).",
         ),
-        // Step 27 M1: the core seam produces StreamOverflow (unit-proven end-to-end in
-        // `crate::stream` — fill the bounded ring past `BodyStream::RING_CAPACITY`), but no
-        // adapter-driven C2 positive control exists yet: the streaming seam's adapter integration
-        // and its slow-consumer completeness row (feature-matrix §7 rule 12) are M2. Recorded, not
-        // skipped, until that row drives it through an `Http` adapter.
+        // Step 27 M2: the adapter-driven control now exists — the slow-consumer completeness row
+        // (feature-matrix §7 rule 12) drives StreamOverflow through a `StreamingHttp` adapter whose
+        // producer ignores the pushed `Pause` under a slow consumer, overflowing the bounded ring
+        // (crate::conformance::stream, `StreamFault::IgnorePause`). It stays classified here rather
+        // than as a normal positive-control row because **no conformant adapter ever produces it**:
+        // it is the typed failure a *broken* adapter earns, reachable only under fault injection (a
+        // scoped red twin), so a `Reachable` C2 row asserting a correct adapter yields it would be a
+        // lie. Recorded, with the control named, not skipped.
         HttpErrorKey::StreamOverflow => Reachability::ContractGap(
-            "produced by the core-side streaming ring (crate::stream::BodyStream), unit-proven \
-             there; the adapter-driven positive control is M2's slow-consumer completeness row.",
+            "produced by the core-side streaming ring (crate::stream::BodyStream); the adapter-driven \
+             control is step-27 M2's row 12 back-pressure twin (StreamFault::IgnorePause), which \
+             overflows the ring under a slow consumer. No conformant adapter produces it.",
         ),
     }
 }
