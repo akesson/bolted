@@ -53,16 +53,42 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
         lock.lock(); defer { lock.unlock() }; return _lastTaskPriority
     }
 
-    /// The no-argument initializer used everywhere except the A6 sweep: OS-default loading mode.
+    /// A deliberately-injected streaming fault — the scoped per-adapter red twin for the streaming
+    /// rows (the Linux `StreamFault` precedent, one fault at a time). `.none` is the conformant
+    /// shipped adapter; the conformance red-twin tests construct the adapter with a fault.
+    public enum StreamFault {
+        /// Conformant: deliver every chunk, honour the terminal.
+        case none
+        /// Skip delivering the FIRST body chunk but still count its bytes toward the declared total —
+        /// the truncation the core completeness gate forbids (row 12's Apple red).
+        case dropChunk
+        /// Deliver every chunk but never call `finishBody` — the missing-terminal break (row 13's
+        /// Apple red) and the leaked-subscription case (row 14's F-M3-1 red).
+        case skipTerminal
+    }
+    private let streamFault: StreamFault
+
+    /// The no-argument initializer used everywhere except the sweeps: OS-default loading, no fault.
     public override convenience init() {
-        self.init(classicLoading: nil)
+        self.init(classicLoading: nil, streamFault: .none)
     }
 
-    /// A6 (step 25): the classic-loading-mode sweep. `classicLoading == nil` leaves the OS default
-    /// (used by every normal test); the sweep constructs the adapter with `false` to force the new
-    /// (non-classic) loading path and records whether the suite diverges. One flag on the adapter —
-    /// the adapter is NOT forked.
-    public init(classicLoading: Bool?) {
+    /// The streaming red-twin initializer: a scoped `streamFault` for the row 12/13/14 red cases.
+    public convenience init(streamFault: StreamFault) {
+        self.init(classicLoading: nil, streamFault: streamFault)
+    }
+
+    /// A6 (step 25): the classic-loading-mode sweep entry (no fault).
+    public convenience init(classicLoading: Bool?) {
+        self.init(classicLoading: classicLoading, streamFault: .none)
+    }
+
+    /// The designated initializer. `classicLoading == nil` leaves the OS default (used by every
+    /// normal test); the A6 sweep passes `false` to force the non-classic loading path. `streamFault`
+    /// is `.none` for the shipped adapter; the streaming red twins inject one. One flag each — the
+    /// adapter is NOT forked.
+    public init(classicLoading: Bool?, streamFault: StreamFault) {
+        self.streamFault = streamFault
         super.init()
         // Contract defaults: cookie-less, cache-less (architecture.md §2).
         let config = URLSessionConfiguration.ephemeral
@@ -152,18 +178,71 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
         task.resume()
     }
 
-    /// Forward a caller cancellation (rule 9): cancel the task; its completion becomes
-    /// `URLError.cancelled`, classified `Cancelled` because the cause is a caller cancel.
-    public func cancel(token: UInt64) {
+    /// Dispatch a STREAMING request (streaming-seam §3a, step-27 M3): a `dataTask` whose
+    /// `didReceive data` pushes each transport read across the FFI via `harness.deliverChunk`, and
+    /// whose `didCompleteWithError` delivers the single terminal via `harness.finishBody`. The total
+    /// deadline is synthesized exactly as in `execute` (spanning the whole stream); cancel and
+    /// pause/resume arrive through `signal` (the pushed `FlowSignal`), not a poll-watcher.
+    public func executeStreaming(request: FfiRequest) {
+        guard let url = URL(string: request.url) else {
+            harness?.finishBody(
+                token: request.token,
+                end: .failed(error: .transport(message: "invalid url: \(request.url)"))
+            )
+            return
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = request.method
+        for header in request.headers {
+            urlRequest.setValue(header.value, forHTTPHeaderField: header.name)
+        }
+
+        let task = session.dataTask(with: urlRequest)
+        task.taskDescription = String(request.token)
+        task.priority = Self.taskPriority(for: request.priority)
+
+        let ctx = RequestContext(token: request.token, requestURL: request.url)
+        ctx.task = task
+        ctx.streaming = true
+
+        lock.lock()
+        contexts[request.token] = ctx
+        _lastTaskPriority = task.priority
+        lock.unlock()
+
+        // Total-deadline synthesis (rule 3), same as the buffered path: a single timer over the whole
+        // stream. On expiry the task is cancelled and the cause recorded `.deadline`, so the terminal
+        // is `Failed(Timeout)` — distinct from a caller cancel, by CAUSE.
+        if request.deadlineMs > 0 {
+            let seconds = Double(request.deadlineMs) / 1000.0
+            let timer = DispatchSource.makeTimerSource(queue: Self.timerQueue)
+            timer.schedule(deadline: .now() + seconds)
+            timer.setEventHandler { [weak self] in self?.deadlineFired(token: request.token) }
+            ctx.deadlineTimer = timer
+            timer.resume()
+        }
+        task.resume()
+    }
+
+    /// Push a mid-flight `FlowSignal` to the in-flight task (streaming-seam §3b / Q4 — the one signal
+    /// shape, three uses; this replaces the deleted poll-watcher). `Cancel` cancels the task (rule 9:
+    /// its completion becomes `URLError.cancelled`, classified `Cancelled` by cause); `Pause` suspends
+    /// the task (socket read-pacing — back-pressure so the core ring never overflows); `Resume`
+    /// resumes it.
+    public func signal(token: UInt64, flow: FfiFlowSignal) {
         lock.lock()
         guard let ctx = contexts[token], !ctx.finished else {
             lock.unlock()
             return
         }
-        if case .none = ctx.termination { ctx.termination = .callerCancel }
+        if case .cancel = flow, case .none = ctx.termination { ctx.termination = .callerCancel }
         let task = ctx.task
         lock.unlock()
-        task?.cancel()
+        switch flow {
+        case .cancel: task?.cancel()
+        case .pause: task?.suspend()
+        case .resume: task?.resume()
+        }
     }
 
     // MARK: - Deadline
@@ -291,8 +370,44 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
 
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock()
-        context(for: dataTask)?.buffer.append(data)
+        guard let ctx = context(for: dataTask) else {
+            lock.unlock()
+            return
+        }
+        // Buffered path (memory sink): accumulate for the single completion.
+        if !ctx.streaming {
+            ctx.buffer.append(data)
+            lock.unlock()
+            return
+        }
+        // Streaming path (streaming-seam §3a): push each transport read as one `BodyChunk`. Every
+        // read's bytes count toward the DECLARED total (the completeness gate's denominator), even a
+        // dropped one — that is what makes `.dropChunk` observable as a truncation.
+        let token = ctx.token
+        ctx.declaredTotal += UInt64(data.count)
+        // `.dropChunk`: skip DELIVERING the first read (its bytes are already counted above), so the
+        // declared total exceeds the ingested bytes ⇒ the core gate fires ⇒ row 12 red.
+        if streamFault == .dropChunk, !ctx.droppedOne {
+            ctx.droppedOne = true
+            lock.unlock()
+            return
+        }
+        let seq = ctx.nextSeq
+        ctx.nextSeq += 1
         lock.unlock()
+
+        // Deliver across the FFI. A synchronous back-pressure `Pause` may re-enter `signal` here (the
+        // lock is released first, so that nested call is safe). A `false` return means the core raised
+        // a typed failure and already closed the stream — stop reading (cancel), and do NOT finish.
+        let keepReading = harness?.deliverChunk(
+            token: token, chunk: FfiBodyChunk(seq: seq, bytes: data)
+        ) ?? false
+        if !keepReading {
+            lock.lock()
+            context(for: dataTask)?.streamClosedByCore = true
+            lock.unlock()
+            dataTask.cancel()
+        }
     }
 
     // MARK: - URLSessionDownloadDelegate (file sink)
@@ -388,7 +503,37 @@ public final class BoltedHttp: NSObject, HttpAdapter, URLSessionDataDelegate, UR
         let requestURL = ctx.requestURL
         let hops = ctx.hops
         let sinkPath = ctx.sinkPath
+        let streaming = ctx.streaming
+        let streamClosedByCore = ctx.streamClosedByCore
+        let declaredTotal = ctx.declaredTotal
         lock.unlock()
+
+        // Streaming terminal (streaming-seam §3c): the single `BodyEnd` re-entry. The core already
+        // closed the stream on a typed delivery failure (`streamClosedByCore`) — nothing more to do.
+        if streaming {
+            if streamClosedByCore { return }
+            // `.skipTerminal`: deliver every chunk but never finish — the missing-terminal red twin
+            // (rows 13/14). The parked sink stays live ⇒ `live_streams` > 0 (the F-M3-1 leak).
+            if streamFault == .skipTerminal { return }
+            switch termination {
+            case .deadline:
+                harness?.finishBody(token: token, end: .failed(error: .timeout))
+            case .callerCancel:
+                harness?.finishBody(token: token, end: .failed(error: .cancelled))
+            case .pinMismatch, .insecureRedirect, .ioFailure, .none:
+                if let error {
+                    harness?.finishBody(
+                        token: token,
+                        end: .failed(error: Self.mapError(error, termination: termination))
+                    )
+                } else {
+                    // Complete: the declared total is every byte the transport delivered; the core
+                    // gate checks it against the ingested bytes.
+                    harness?.finishBody(token: token, end: .complete(total: declaredTotal))
+                }
+            }
+            return
+        }
 
         // Synthesized terminal causes take precedence over the raw URLError shape (and even over an
         // OS-reported success, for the file-sink write failure): the adapter classifies by CAUSE.
@@ -678,6 +823,20 @@ final class RequestContext {
     var sinkPath: String?
     /// The redirect hop trace — every intermediate URL, in order (row 7).
     var hops: [String] = []
+
+    /// Whether this is a STREAMING request (streaming-seam §3a): `didReceive data` pushes chunks
+    /// rather than buffering, and the terminal is a `finishBody` re-entry rather than a completion.
+    var streaming = false
+    /// The next `seq` a delivered body chunk carries (ascending, gapless from 0).
+    var nextSeq: UInt64 = 0
+    /// Cumulative bytes of EVERY transport read (delivered or dropped) — the completeness gate's
+    /// declared total. Equals the ingested bytes for a conformant stream.
+    var declaredTotal: UInt64 = 0
+    /// Whether the first read has been dropped yet (the `.dropChunk` red twin's one-shot).
+    var droppedOne = false
+    /// Set when the core raised a typed delivery failure and closed the stream itself (so the
+    /// terminal must NOT be re-sent from `didCompleteWithError`).
+    var streamClosedByCore = false
 
     init(token: UInt64, requestURL: String) {
         self.token = token
