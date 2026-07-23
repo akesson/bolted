@@ -24,6 +24,9 @@ members = [
     "spikes/os-integration/crates/sync-settings",
     "spikes/os-integration/crates/sync-wire",
     "spikes/os-integration/crates/syncd",
+    # Step 28 (windowed-collections exploration): the collection-facet spike. Disposable — deleting
+    # the spike is `rm -rf spikes/collection` plus this one line (spikes/collection/README.md).
+    "spikes/collection/crates/collection-core",
 ]
 
 [workspace.package]
