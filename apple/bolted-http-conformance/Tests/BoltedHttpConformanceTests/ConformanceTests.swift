@@ -95,12 +95,13 @@ final class ConformanceTests: XCTestCase {
             XCTAssertFalse(r.skipped, "row \(r.id) must run, not skip")
         }
 
-        // The pinned C3 Apple column, generated from the capability traits (row 12 present, row 18
-        // Phase). A drift here means a capability impl changed without updating this expectation.
+        // The pinned C3 Apple column, generated from the capability traits (row 18 Phase). The
+        // priority hint (row 12) is now a uniform advisory field, not a divergent capability
+        // (ruled Q10), so it has no column. A drift here means a capability impl changed without
+        // updating this expectation.
         let expectedC3 = """
         capability     | presence
         ---------------+-----------------------
-        priority-hint  | present
         metrics        | present (Phase)
         """
         XCTAssertEqual(c3, expectedC3, "C3 Apple column drifted:\n\(c3)")

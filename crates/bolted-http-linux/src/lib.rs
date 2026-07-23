@@ -33,14 +33,16 @@
 //! - **Pinning** (row 19 / L2): declarative SPKI pins from the request drive a real rustls verifier
 //!   installed via `use_preconfigured_tls` — see [`tls`]. **The L2 verdict is: works, no demote.**
 //! - **Capabilities** (C3): [`Metrics`] present at the coarse [`MetricsTier::WholeRequest`] tier
-//!   (reqwest has no phase seam, §5.13); [`bolted_http::PriorityHint`] is **absent** (row 12 CAP).
+//!   (reqwest has no phase seam, §5.13). The priority hint (row 12) is a **uniform advisory
+//!   field** (ruled Q10): reqwest has no priority knob, so this adapter carries the data and
+//!   legally ignores it — no capability trait, no C3 column.
 //!
 //! ## L4 — proxy (recorded, not worked around)
 //!
 //! reqwest 0.13's default proxy resolution is **env-vars-only on Linux** (no gsettings/PAC/portal;
 //! feature-matrix §5.19). This adapter builds **no** proxy configuration — it inherits that default.
-//! The C3 divergence matrix only covers capability *traits* ([`bolted_http::PriorityHint`] /
-//! [`Metrics`]), so proxy behaviour has no column there; it is recorded here and in the step report
+//! The C3 divergence matrix only covers capability *traits* ([`Metrics`]), so proxy behaviour has
+//! no column there; it is recorded here and in the step report
 //! rather than by unilaterally widening C3's shape.
 
 #![forbid(unsafe_code)]

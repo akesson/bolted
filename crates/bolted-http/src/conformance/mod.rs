@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use std::sync::{Arc, Mutex};
 
-use crate::capability::{CompletionSink, Http, Metrics, PriorityHint, UploadProgressSink};
+use crate::capability::{CompletionSink, Http, Metrics, UploadProgressSink};
 use crate::error::HttpError;
 use crate::request::HttpRequest;
 use crate::response::{HttpResponse, HttpVersion};
@@ -44,11 +44,6 @@ use crate::response::{HttpResponse, HttpVersion};
 pub trait AdapterFactory {
     /// Build a fresh adapter for one row.
     fn new_adapter(&self) -> Box<dyn Http>;
-
-    /// The adapter as a [`PriorityHint`], if it honours priority (row 12, CAP). Default: absent.
-    fn priority_hint(&self) -> Option<Box<dyn PriorityHint>> {
-        None
-    }
 
     /// The adapter as a [`Metrics`] source, if it reports metrics (row 18, CAP tiered). Default:
     /// absent.

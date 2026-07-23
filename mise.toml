@@ -214,15 +214,17 @@ swift test --package-path apple/bolted-http-conformance
 """
 
 # --- Step 25 (bolted-http II): the Apple HTTP adapter. `pack:apple:http` packs the harness-bridge
-# crate (crates/bolted-http-apple-ffi) into the BUNDLED SwiftPM package apple/bolted-http (adapter +
-# generated bindings, spike-packaging-report §1); `test:apple:http` drives the conformance gate from
-# the sibling consumer package apple/bolted-http-conformance. Separate from pack:apple/test:apple's
-# gen-profile dist. Deliberately NOT part of `check` (host-only, Xcode-free). ---
+# crate (crates/bolted-http-ffi, the unified apple+android bridge since step-27 M0) into the BUNDLED
+# SwiftPM package apple/bolted-http (adapter + generated bindings, spike-packaging-report §1);
+# `test:apple:http` drives the conformance gate from the sibling consumer package
+# apple/bolted-http-conformance. Separate from pack:apple/test:apple's gen-profile dist.
+# Deliberately NOT part of `check` (host-only, Xcode-free). `boltffi pack apple` packs ONLY the
+# apple target even though boltffi.toml now also enables android. ---
 
 [tasks."pack:apple:http"]
 description = "Step 25: build + package the Apple HTTP adapter bridge into apple/bolted-http (release)."
 depends = ["setup:boltffi"]
-dir = "crates/bolted-http-apple-ffi"
+dir = "crates/bolted-http-ffi"
 run = """
 set -eu
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
@@ -540,16 +542,18 @@ echo "note: this suite exercises undefined behaviour on purpose; a crash is a fi
 gradle dev34DebugAndroidTest -Pbolted.hazard "$@"
 """
 
-# --- Step 26: the Android HTTP adapter (S-AN). The FFI harness bridge (`bolted-http-android-ffi`)
-# packs its own Kotlin/JNI dist; `android/bolted-http` (the OkHttp adapter) consumes it in place and
-# `android/bolted-http-conformance` drives the conformance suite on the same headless GMD as
-# `test:android`. Separate verbs, NOT part of `check` (host stays JDK-free). See step-26-*. ---
+# --- Step 26: the Android HTTP adapter (S-AN). The FFI harness bridge (`bolted-http-ffi`, the
+# unified apple+android bridge since step-27 M0) packs its Kotlin/JNI dist; `android/bolted-http`
+# (the OkHttp adapter) consumes it in place and `android/bolted-http-conformance` drives the
+# conformance suite on the same headless GMD as `test:android`. Separate verbs, NOT part of `check`
+# (host stays JDK-free). See step-26-* / step-27-*. ---
 
 [tasks."pack:android:http"]
-description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release, bolted-http-android-ffi)."
+description = "Build the arm64-v8a .so + generate the Kotlin/JNI bindings (release, bolted-http-ffi)."
 depends = ["setup:boltffi"]
-# Mirror of pack:android, repointed at the http bridge crate (see that task's notes on the 0.27.4/5 fix).
-dir = "crates/bolted-http-android-ffi"
+# Mirror of pack:android, repointed at the http bridge crate (see that task's notes on the 0.27.4/5
+# fix). `boltffi pack android` packs ONLY the android target even though boltffi.toml also enables apple.
+dir = "crates/bolted-http-ffi"
 run = """
 set -eu
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"

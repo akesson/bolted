@@ -88,9 +88,10 @@ class M2Conformance {
                 assertFalse("row ${r.id} must run, not skip", r.skipped)
             }
 
-            // The pinned C3 Android column, generated from the capability traits: priority-hint ABSENT
-            // (OkHttp legally ignores the hint — no per-Call priority knob), metrics present (Phase —
-            // OkHttp EventListener). A drift means a capability impl changed without updating this.
+            // The pinned C3 Android column, generated from the capability traits: metrics present
+            // (Phase — OkHttp EventListener). The priority hint (row 12) is now a uniform advisory
+            // field, not a divergent capability (ruled Q10) — OkHttp legally ignores it and it has
+            // no column. A drift means a capability impl changed without updating this.
             val c3 = harness.runC3()
             record("M2 C3 Android column:\n$c3")
             assertEquals("C3 Android column drifted:\n$c3", EXPECTED_C3, c3)
@@ -329,7 +330,6 @@ class M2Conformance {
             """
             capability     | presence
             ---------------+-----------------------
-            priority-hint  | absent
             metrics        | present (Phase)
             """.trimIndent()
     }

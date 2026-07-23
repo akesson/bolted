@@ -1,16 +1,24 @@
-//! `bolted-http-apple-ffi` — the Apple **harness bridge** for the `bolted-http` capability
-//! contract (step 25, milestone M0).
+//! `bolted-http-ffi` — the **harness bridge** for the `bolted-http` capability contract, one crate
+//! packing both the Apple and Android targets (step 27, milestone M0).
 //!
 //! This crate is the effect-side analog of the generated capability glue: the [`Http`] capability
-//! crosses the FFI as a BoltFFI **callback trait** ([`HttpAdapter`]) that a hand-written Swift
-//! URLSession adapter implements. On the Rust side it exposes three things to `swift test`:
+//! crosses the FFI as a BoltFFI **callback trait** ([`HttpAdapter`]) that a hand-written native
+//! adapter implements — a URLSession adapter on Apple, an OkHttp adapter on Android. The two
+//! platforms share this identical FFI surface (it is the decided topology); before step 27 they
+//! were two mirror crates whose sole divergence was the apple-only `PriorityHint` capability. Once
+//! the priority hint went uniform (Q10 — a plain advisory request field, legally a no-op where the
+//! engine can't honour it), the surfaces became identical and the crates merged into this one, the
+//! way `gen-profile-ffi` packs apple + android + csharp from a single crate.
+//!
+//! On the Rust side it exposes three things to the test tiers (`swift test` on macOS; a
+//! Gradle-managed-device instrumented suite on ART):
 //!
 //! 1. a **conformance driver** ([`HttpHarness::run_c1`]) that runs the real `bolted-http`
-//!    conformance rows against the registered Swift adapter and returns **structured** per-row
+//!    conformance rows against the registered native adapter and returns **structured** per-row
 //!    results ([`RowReport`] — pass/fail plus a legible message, never a bare bool);
 //! 2. **test-server lifecycle** control ([`HttpHarness::start_server`] / [`HttpHarness::stop_server`],
 //!    which expose the three listeners' base URLs);
-//! 3. the **completion re-entry** points the Swift adapter calls back through
+//! 3. the **completion re-entry** points the native adapter calls back through
 //!    ([`HttpHarness::complete_ok`] / [`HttpHarness::complete_err`]).
 //!
 //! It never reimplements the suite: the rows, the `TestServer`, and the `AdapterFactory` seam all
@@ -19,17 +27,14 @@
 //! ## The bridge, end to end
 //!
 //! A conformance row calls `factory.new_adapter()` and drives it with the suite's blocking
-//! `drive_*` helpers. Our [`AdapterFactory`] yields a [`SwiftAdapter`] shim whose
+//! `drive_*` helpers. Our [`AdapterFactory`] yields a [`NativeAdapter`] shim whose
 //! [`Http::send`] (a) mints a single-flight token, (b) parks the row's [`CompletionSink`] in a
 //! token-keyed registry, (c) converts the [`HttpRequest`] into the FFI-shaped [`FfiRequest`], and
-//! (d) calls the Swift adapter's `execute`. `execute` returns immediately (URLSession is async);
-//! the completion arrives later on a URLSession background thread and re-enters through
-//! [`HttpHarness::complete_ok`] / [`HttpHarness::complete_err`], which look the token up, convert
-//! back to the contract types, and deliver to the parked sink — unblocking the row.
-//!
-//! M0 scope: the walking-skeleton Swift adapter honours exactly one C1 row (rule 1 — GET `/ok`).
-//! The other rows are expected to report red; the point of M0 is that the bridge can carry a green
-//! *and* be proven able to carry a red.
+//! (d) calls the native adapter's `execute`. `execute` returns immediately (URLSession `resume()`
+//! and OkHttp `Call.enqueue` are both non-blocking); the completion arrives later on a native
+//! background thread and re-enters through [`HttpHarness::complete_ok`] /
+//! [`HttpHarness::complete_err`], which look the token up, convert back to the contract types, and
+//! deliver to the parked sink — unblocking the row.
 
 #![forbid(unsafe_code)]
 
@@ -43,8 +48,7 @@ use std::time::Duration;
 use boltffi::*;
 
 use bolted_http::capability::{
-    CancelToken, CompletionSink, Http, Metrics, MetricsTier, PriorityHint, RequestHandle,
-    UploadProgressSink,
+    CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, UploadProgressSink,
 };
 use bolted_http::conformance::server::TestServer;
 use bolted_http::conformance::{
@@ -57,8 +61,8 @@ use bolted_http::{HeaderName, HeaderValue, Headers, HttpError, TlsErrorKind, Url
 
 // =====================================================================================
 // The FFI data surface — plain `#[data]` mirrors of the contract types. BoltFFI's bindgen
-// reads these as SOURCE TEXT and emits the Swift structs/enums; the rich `bolted-http` types
-// (which are not `#[data]`) never cross the boundary — this crate is the homogenization seam.
+// reads these as SOURCE TEXT and emits the Swift/Kotlin structs/enums; the rich `bolted-http`
+// types (which are not `#[data]`) never cross the boundary — this crate is the homogenization seam.
 // =====================================================================================
 
 /// One request header crossing the FFI (name + value, both UTF-8 strings for M0).
@@ -68,7 +72,7 @@ pub struct FfiHeader {
     pub value: String,
 }
 
-/// One SHA-256-of-SPKI pin the request carries (32 bytes; feature-matrix §5.14, rule 10). The Swift
+/// One SHA-256-of-SPKI pin the request carries (32 bytes; feature-matrix §5.14, rule 10). The native
 /// adapter computes the presented leaf certificate's SPKI SHA-256 and checks membership — a mismatch
 /// is [`FfiHttpError::PinMismatch`]. Mirrors the request's `PinSet` across the boundary (M2).
 #[data]
@@ -79,7 +83,7 @@ pub struct FfiPin {
 
 /// Where the caller wants the response body delivered (feature-matrix row 15, the request-side
 /// selector). Mirrors [`ResponseSink`] across the boundary (M2): `Memory` buffers, `File` sinks the
-/// decoded body to `path` (`downloadTask` + synchronous move under the delegate threading, atomic
+/// decoded body to `path` (`downloadTask` on Apple / a streamed file write on Android; atomic
 /// finalize; a write failure is [`FfiHttpError::Io`]).
 #[data]
 pub enum FfiResponseSink {
@@ -89,10 +93,13 @@ pub enum FfiResponseSink {
     File { path: String },
 }
 
-/// The request's priority hint (feature-matrix row 12, CAP), mirrored across the boundary. Every
-/// request carries the *data* regardless (defaulting to [`FfiPriority::Normal`] when unset); the
-/// adapter honours it by mapping to `URLSessionTask.priority` (A5, acceptance-only — the RFC 9218
-/// wire behaviour is FLAGGED lore and deliberately NOT conformance-tested). Mirrors [`Priority`].
+/// The request's priority hint (feature-matrix row 12), mirrored across the boundary. **Uniform and
+/// advisory** (ruled Q10): every request carries the *data* regardless (defaulting to
+/// [`FfiPriority::Normal`] when unset), and each adapter honours it where its engine can express it
+/// — Apple maps it to `URLSessionTask.priority` (A5, acceptance-only; the RFC 9218 wire behaviour is
+/// FLAGGED lore, deliberately NOT conformance-tested) — and legally ignores it where it cannot
+/// (OkHttp exposes no per-`Call` priority knob, so the Android adapter is a conformant no-op). It is
+/// no longer a divergent capability, so it has no C3 column. Mirrors [`Priority`].
 #[data]
 #[derive(Clone, Copy)]
 pub enum FfiPriority {
@@ -119,14 +126,15 @@ pub struct FfiRequest {
     pub pins: Vec<FfiPin>,
     /// Where the response body is delivered (row 15, M2). `Memory` (default) or `File { path }`.
     pub sink: FfiResponseSink,
-    /// The request's priority hint (row 12, CAP; A5). The adapter maps this to
-    /// `URLSessionTask.priority`. Defaults to [`FfiPriority::Normal`] when the request set none.
+    /// The request's priority hint (row 12; uniform advisory). Apple maps it to
+    /// `URLSessionTask.priority`; OkHttp ignores it (no priority knob). The data rides every
+    /// request regardless. Defaults to [`FfiPriority::Normal`] when the request set none.
     pub priority: FfiPriority,
 }
 
-/// The negotiated HTTP version, mirrored across the boundary (feature-matrix row 11). M1 drops the
-/// M0 `Http1_1` placeholder: the Swift adapter reads the real protocol from `URLSessionTaskMetrics`
-/// (`networkProtocolName`) and reports it here.
+/// The negotiated HTTP version, mirrored across the boundary (feature-matrix row 11). The adapter
+/// reads the real protocol from the native transport (Apple `URLSessionTaskMetrics.networkProtocolName`;
+/// OkHttp `Response.protocol`) and reports it here.
 #[data]
 #[derive(Clone, Copy)]
 pub enum FfiHttpVersion {
@@ -145,12 +153,11 @@ pub struct FfiResponse {
     pub body: Vec<u8>,
     /// The final URL after any redirects (rule 6). Empty is treated as a bridge error.
     pub final_url: String,
-    /// The negotiated HTTP version, read from `URLSessionTaskMetrics` (row 11). No longer a
-    /// placeholder.
+    /// The negotiated HTTP version, read from the native transport metrics (row 11).
     pub http_version: FfiHttpVersion,
     /// The redirect hop trace (row 7, M2): every intermediate URL the chain traversed, in order,
-    /// excluding the final URL. Empty when no redirect occurred. Captured in
-    /// `willPerformHTTPRedirection`.
+    /// excluding the final URL. Empty when no redirect occurred. Captured in the adapter's redirect
+    /// interceptor.
     pub hops: Vec<String>,
     /// The file-sink destination when the response was sunk to a file (row 15, M2). Empty ⇒ a
     /// `Memory` outcome carrying `body`; non-empty ⇒ a `File` outcome at this path (the body was
@@ -158,16 +165,17 @@ pub struct FfiResponse {
     pub sink_path: String,
 }
 
-/// The typed error keys the Swift adapter maps native failures to. M1 covers the full C2 taxonomy
-/// the URLSession adapter can reach on the host tier; each maps to a [`HttpError`] variant so the
-/// adapter reports keys, never strings. The pin/insecure-redirect/permission/io keys are the M2
-/// syntheses and attach to this enum then (additive).
+/// The typed error keys the native adapter maps native failures to. Covers the full C2 taxonomy the
+/// URLSession / OkHttp adapters can reach on the host tier; each maps to a [`HttpError`] variant so
+/// the adapter reports keys, never strings.
 #[data]
 #[derive(Clone)]
 pub enum FfiHttpError {
-    /// The deadline elapsed (synthesized total-deadline timer, or `URLError.timedOut`).
+    /// The deadline elapsed (synthesized total-deadline timer, or a native timeout —
+    /// `URLError.timedOut` / an OkHttp `SocketTimeoutException`).
     Timeout,
-    /// The caller cancelled the in-flight effect (`URLError.cancelled`, not deadline-caused).
+    /// The caller cancelled the in-flight effect (`URLError.cancelled` / an OkHttp
+    /// `IOException("Canceled")`, not deadline-caused).
     Cancelled,
     /// DNS / name resolution failed.
     NameResolution,
@@ -187,21 +195,23 @@ pub enum FfiHttpError {
     /// positive control, M2).
     Io,
     /// The OS refused permission for the request (Apple Local Network privacy / a sandbox network
-    /// denial surfacing as POSIX `EPERM`). Distinct from a network failure (§5.15). Platform-gated
-    /// on the macOS host tier — see the M2 notes; the adapter maps a genuine `EPERM` here.
+    /// denial surfacing as POSIX `EPERM`; on Android a missing `INTERNET` permission surfacing as a
+    /// `SecurityException`). Distinct from a network failure (§5.15). Platform-gated on the host/ART
+    /// tiers — see the M2 notes; the adapter maps a genuine OS permission denial here, never invents
+    /// the key.
     PermissionDenied,
-    /// The redirect chain exceeded the limit (`URLError.httpTooManyRedirects`). `limit` is the
-    /// ceiling that fired; URLSession enforces its own internal cap in M1 (the request carries no
-    /// redirect limit and the delegate-driven policy is M2), so `0` is the "adapter-internal cap"
-    /// sentinel — no conformance row inspects it, only the key.
+    /// The redirect chain exceeded the limit (`URLError.httpTooManyRedirects` / OkHttp's follow-up
+    /// cap). `limit` is the ceiling that fired; the native engine enforces its own internal cap in
+    /// M1 (the request carries no redirect limit and the delegate-driven policy is M2), so `0` is
+    /// the "adapter-internal cap" sentinel — no conformance row inspects it, only the key.
     TooManyRedirects { limit: u32 },
     /// Any other post-connection transport failure. `message` is informational only.
     Transport { message: String },
 }
 
-/// The three test-server base URLs handed to Swift on [`HttpHarness::start_server`], plus the TLS
-/// material the HTTPS rows need: the good cert's DER (a trust anchor the adapter installs so its
-/// server-trust evaluation accepts the self-signed test endpoint — anchor-only for M1) and the
+/// The three test-server base URLs handed to the native side on [`HttpHarness::start_server`], plus
+/// the TLS material the HTTPS rows need: the good cert's DER (a trust anchor the adapter installs so
+/// its server-trust evaluation accepts the self-signed test endpoint — anchor-only for M1) and the
 /// good / untrusted SPKI hashes (32 bytes each; the pin **enforcement** that consumes them is M2,
 /// but they cross now so M2 adds no data surface).
 #[data]
@@ -218,7 +228,7 @@ pub struct ServerInfo {
 }
 
 /// One conformance row's structured outcome. `message` is the `Debug` render of the typed
-/// [`FailureReason`] (or skip reason) so a Swift test can print *why* a row went red.
+/// [`FailureReason`] (or skip reason) so a native test can print *why* a row went red.
 #[data]
 pub struct RowReport {
     pub id: String,
@@ -229,9 +239,10 @@ pub struct RowReport {
 
 /// One response-body chunk crossing the FFI in the **A1 streaming probe** (step 25, probe-grade —
 /// no contract surface; the streaming core-seam is deliberately unfrozen, freeze-agenda Q2).
-/// Mirrors the step-24 S-FFI `Chunk`. `t_send_ns` is stamped by Swift
-/// (`DispatchTime.now().uptimeNanoseconds`) immediately before the deliver call so the consumer can
-/// compute per-chunk delivery latency on one clock; `last` marks the final chunk.
+/// Mirrors the step-24 S-FFI `Chunk`. `t_send_ns` is stamped by the native side
+/// (`DispatchTime.now().uptimeNanoseconds` / `System.nanoTime()`) immediately before the deliver
+/// call so the consumer can compute per-chunk delivery latency on one clock; `last` marks the final
+/// chunk.
 #[data]
 #[derive(Clone)]
 pub struct Chunk {
@@ -242,37 +253,39 @@ pub struct Chunk {
 }
 
 // =====================================================================================
-// The callback trait Swift implements.
+// The callback trait the native side implements.
 // =====================================================================================
 
-/// The HTTP capability as it crosses the FFI: the Swift URLSession adapter implements `execute`.
-/// It performs the request out-of-process (asynchronously) and delivers the completion back
-/// through [`HttpHarness::complete_ok`] / [`HttpHarness::complete_err`].
+/// The HTTP capability as it crosses the FFI: the native URLSession / OkHttp adapter implements
+/// `execute`. It performs the request out-of-process (asynchronously) and delivers the completion
+/// back through [`HttpHarness::complete_ok`] / [`HttpHarness::complete_err`].
 #[export]
 pub trait HttpAdapter: Send + Sync {
-    /// Dispatch a request effect. Must return promptly (URLSession `resume()` is non-blocking);
-    /// the completion is delivered later, carrying the request's `token`.
+    /// Dispatch a request effect. Must return promptly (URLSession `resume()` / OkHttp
+    /// `Call.enqueue` are non-blocking); the completion is delivered later, carrying the request's
+    /// `token`.
     fn execute(&self, request: FfiRequest);
 
     /// Forward a caller cancellation to the in-flight task identified by `token` (rule 9 — the
-    /// adapter cancels the `URLSessionTask`, which completes with `URLError.cancelled`, which the
-    /// adapter maps to [`FfiHttpError::Cancelled`]). A no-op if the token is unknown / already done.
+    /// adapter cancels the `URLSessionTask` / OkHttp `Call`, which completes with a native
+    /// cancellation the adapter maps to [`FfiHttpError::Cancelled`]). A no-op if the token is
+    /// unknown / already done.
     fn cancel(&self, token: u64);
 }
 
 // =====================================================================================
-// Shared bridge state + the `Http` shim that fronts the Swift adapter for the suite.
+// Shared bridge state + the `Http` shim that fronts the native adapter for the suite.
 // =====================================================================================
 
-/// A parked row completion, keyed by token until the Swift adapter delivers.
+/// A parked row completion, keyed by token until the native adapter delivers.
 struct Pending {
     completion: Box<dyn CompletionSink>,
-    /// The row's upload-progress sink, if any (rule 11). The Swift adapter's `didSendBodyData`
+    /// The row's upload-progress sink, if any (rule 11). The native adapter's body-hand-off
     /// delegate re-enters [`HttpHarness::report_progress`], which forwards to this sink.
     progress: Option<Box<dyn UploadProgressSink>>,
 }
 
-/// State shared between the `Http` shim (which needs the Swift adapter + the token registry) and
+/// State shared between the `Http` shim (which needs the native adapter + the token registry) and
 /// the harness completion entry points (which need the registry).
 struct Shared {
     adapter: Arc<dyn HttpAdapter>,
@@ -281,12 +294,12 @@ struct Shared {
 }
 
 /// The per-row `Http` implementation the suite drives: a thin shim that forwards to the one
-/// registered Swift adapter (URLSession is stateless per request, so every row shares it).
-struct SwiftAdapter {
+/// registered native adapter (the transport is stateless per request, so every row shares it).
+struct NativeAdapter {
     shared: Arc<Shared>,
 }
 
-impl Http for SwiftAdapter {
+impl Http for NativeAdapter {
     fn send(
         &self,
         request: HttpRequest,
@@ -304,14 +317,14 @@ impl Http for SwiftAdapter {
                 },
             );
         }
-        // Rust → Swift: performs the request asynchronously and returns immediately.
+        // Rust → native: performs the request asynchronously and returns immediately.
         self.shared.adapter.execute(ffi);
 
-        // Bridge the contract's poll-based cancellation to the Swift task: a detached watcher polls
+        // Bridge the contract's poll-based cancellation to the native task: a detached watcher polls
         // the returned token (the Linux adapter's 10 ms poll, mirrored) and, on cancellation,
-        // forwards `adapter.cancel(token)` across the FFI so the URLSessionTask is cancelled. The
-        // watcher self-terminates when the request completes (its pending entry is removed) so no
-        // thread outlives its request.
+        // forwards `adapter.cancel(token)` across the FFI so the URLSessionTask / OkHttp Call is
+        // cancelled. The watcher self-terminates when the request completes (its pending entry is
+        // removed) so no thread outlives its request.
         let cancel_token = CancelToken::new();
         let watcher = cancel_token.clone();
         let shared = Arc::clone(&self.shared);
@@ -336,42 +349,32 @@ impl Http for SwiftAdapter {
     }
 }
 
-/// Row 12 (CAP): the URLSession adapter honours the request's priority hint (mapped to
-/// `URLSessionTask.priority`). Marker-only — its presence is the C3 signal; the acceptance assertion
-/// is A5 (M3). Implementing it here is what makes the Apple C3 column report `priority-hint present`.
-impl PriorityHint for SwiftAdapter {}
-
-/// Row 18 (CAP, tiered): URLSession exposes per-phase timings via `URLSessionTaskMetrics`
-/// (DNS/connect/TLS/first-byte), so the honest tier is [`MetricsTier::Phase`] — richer than
-/// reqwest's whole-request tier. The C3 Apple column reads this off the trait impl.
-impl Metrics for SwiftAdapter {
+/// Row 18 (CAP, tiered): both native transports expose per-phase timings — Apple via
+/// `URLSessionTaskMetrics`, OkHttp via an `EventListener` (DNS/connect/TLS/first-byte) — so the
+/// honest tier is [`MetricsTier::Phase`], richer than reqwest's whole-request tier. The C3 column
+/// reads this off the trait impl.
+impl Metrics for NativeAdapter {
     fn tier(&self) -> MetricsTier {
         MetricsTier::Phase
     }
 }
 
 /// The factory the suite reads adapters from. Each `new_adapter()` shares the same `Shared`.
-struct SwiftFactory {
+struct NativeFactory {
     shared: Arc<Shared>,
 }
 
-impl AdapterFactory for SwiftFactory {
+impl AdapterFactory for NativeFactory {
     fn new_adapter(&self) -> Box<dyn Http> {
-        Box::new(SwiftAdapter {
+        Box::new(NativeAdapter {
             shared: Arc::clone(&self.shared),
         })
     }
 
-    /// Present: the URLSession adapter honours priority (row 12, CAP) — the C3 Apple column.
-    fn priority_hint(&self) -> Option<Box<dyn PriorityHint>> {
-        Some(Box::new(SwiftAdapter {
-            shared: Arc::clone(&self.shared),
-        }))
-    }
-
-    /// Present at the [`MetricsTier::Phase`] tier (row 18, CAP tiered) — `URLSessionTaskMetrics`.
+    /// Present at the [`MetricsTier::Phase`] tier (row 18, CAP tiered) — `URLSessionTaskMetrics` /
+    /// OkHttp `EventListener`.
     fn metrics(&self) -> Option<Box<dyn Metrics>> {
-        Some(Box::new(SwiftAdapter {
+        Some(Box::new(NativeAdapter {
             shared: Arc::clone(&self.shared),
         }))
     }
@@ -385,12 +388,12 @@ impl AdapterFactory for SwiftFactory {
 /// never drops even when the consumer lags the burst producer (drop would be a false loss).
 const CHUNK_STREAM_CAPACITY: usize = 1024;
 
-/// The Rust half of the bridge Swift drives. Constructed with the Swift adapter; owns the shared
-/// registry and (once started) the in-process test server.
+/// The Rust half of the bridge the native side drives. Constructed with the native adapter; owns the
+/// shared registry and (once started) the in-process test server.
 pub struct HttpHarness {
     shared: Arc<Shared>,
     server: Mutex<Option<(TestServer, Endpoints)>>,
-    /// A1 streaming probe (step 25): the `ffi_stream` a live Swift consumer drains. Chunks pushed by
+    /// A1 streaming probe (step 25): the `ffi_stream` a live native consumer drains. Chunks pushed by
     /// [`HttpHarness::deliver_chunk`] are re-delivered here off the producer thread (F1 async push).
     /// Capacity generously exceeds any probe's chunk count so the SPSC ring never drops (a drop
     /// would be a *false* loss; the probe measures real completeness, not ring pressure).
@@ -402,8 +405,8 @@ pub struct HttpHarness {
 
 #[export]
 impl HttpHarness {
-    /// Build the harness over the registered Swift adapter (the composition-root dance: adapter
-    /// first, harness second, then the Swift side sets its weak back-reference to this harness).
+    /// Build the harness over the registered native adapter (the composition-root dance: adapter
+    /// first, harness second, then the native side sets its weak back-reference to this harness).
     pub fn new(adapter: Arc<dyn HttpAdapter>) -> Self {
         HttpHarness {
             shared: Arc::new(Shared {
@@ -472,10 +475,10 @@ impl HttpHarness {
         pending.completion.complete(Err(to_http_error(&error)));
     }
 
-    /// Upload-progress re-entry (rule 11): forward the Swift adapter's `didSendBodyData` figures to
+    /// Upload-progress re-entry (rule 11): forward the native adapter's body-hand-off figures to
     /// the parked [`UploadProgressSink`] **without** removing the pending entry (progress is
     /// repeatable; only a completion consumes the entry). `total` is `None` when the body length is
-    /// not known up front (`NSURLSessionTransferSizeUnknown`).
+    /// not known up front (Apple `NSURLSessionTransferSizeUnknown` / an OkHttp -1 content length).
     pub fn report_progress(&self, token: u64, sent: u64, total: Option<u64>) {
         if let Ok(pending) = self.shared.pending.lock()
             && let Some(entry) = pending.get(&token)
@@ -485,7 +488,7 @@ impl HttpHarness {
         }
     }
 
-    /// Run the eleven C1 conformance rows against the registered Swift adapter (structured results).
+    /// Run the eleven C1 conformance rows against the registered native adapter (structured results).
     /// Requires a started server; without one, reports the missing-server state rather than panicking.
     pub fn run_c1(&self) -> Vec<RowReport> {
         self.run_rows(c1::rows())
@@ -503,11 +506,11 @@ impl HttpHarness {
         self.run_rows(c1::extra_rows())
     }
 
-    /// The C3 divergence table for the Apple adapter, rendered from the capability traits (row 12
-    /// `priority-hint present`, row 18 `metrics present (Phase)`). No server needed — it reads the
-    /// factory's type-checked capability self-report.
+    /// The C3 divergence table for this adapter, rendered from the capability traits (row 18
+    /// `metrics present (Phase)`). No server needed — it reads the factory's type-checked capability
+    /// self-report.
     pub fn run_c3(&self) -> String {
-        let factory = SwiftFactory {
+        let factory = NativeFactory {
             shared: Arc::clone(&self.shared),
         };
         c3::divergence(&factory).render()
@@ -515,12 +518,12 @@ impl HttpHarness {
 
     // -- A1 streaming probe (step 25, probe-grade). ---------------------------------------------
     // A streamed response through the step-24 S-FFI-chosen mechanism (F1 `ffi_stream` async push)
-    // inside a real http round-trip on the Apple path: the Swift URLSession streaming consumer
-    // reads the test server's `/chunked` endpoint and pushes each chunk here via `deliver_chunk`;
-    // a live Swift consumer drains `chunk_stream` and proves ordered/lossless/complete delivery.
-    // NO contract surface is added — the streaming core seam is deliberately unfrozen (freeze Q2).
+    // inside a real http round-trip: the native streaming consumer reads the test server's
+    // `/chunked` endpoint and pushes each chunk here via `deliver_chunk`; a live native consumer
+    // drains `chunk_stream` and proves ordered/lossless/complete delivery. NO contract surface is
+    // added — the streaming core seam is deliberately unfrozen (freeze Q2).
 
-    /// A1 deliver: a response-body chunk crossing the FFI from the Swift streaming consumer re-enters
+    /// A1 deliver: a response-body chunk crossing the FFI from the native streaming consumer re-enters
     /// here and is pushed out to the live consumer through the `ffi_stream` (F1). Increments the
     /// ingest counter (the completeness numerator). The push cannot drop: the ring capacity exceeds
     /// any probe's chunk count.
@@ -536,17 +539,18 @@ impl HttpHarness {
         self.chunk_ingested.load(Ordering::Relaxed)
     }
 
-    /// A1: the live response-stream the Swift consumer drains as an `AsyncStream<Chunk>` (F1 —
-    /// `ffi_stream` async push). Its built-in async hop means the consumer resumes OFF the producer
-    /// (adapter) thread — the F1 re-entrancy rationale the step-24 verdict rests on.
+    /// A1: the live response-stream the native consumer drains (an `AsyncStream<Chunk>` on Apple, a
+    /// `Flow<Chunk>` on Android; F1 — `ffi_stream` async push). Its built-in async hop means the
+    /// consumer resumes OFF the producer (adapter) thread — the F1 re-entrancy rationale the step-24
+    /// verdict rests on.
     #[ffi_stream(item = Chunk)]
     pub fn chunk_stream(&self) -> Arc<EventSubscription<Chunk>> {
         Arc::clone(&self.chunk_stream)
     }
 
-    /// A1: close the chunk stream so its live consumer terminates promptly (the `AsyncStream` ends,
-    /// the consumer task finishes). The probe calls this after each run so a completed — or, under
-    /// load, a still-draining — consumer does not linger as a dead subscription in the shared
+    /// A1: close the chunk stream so its live consumer terminates promptly (the `AsyncStream` / `Flow`
+    /// ends, the consumer task finishes). The probe calls this after each run so a completed — or,
+    /// under load, a still-draining — consumer does not linger as a dead subscription in the shared
     /// `ffi_stream` runtime and starve the next run's consumer. Idempotent.
     pub fn close_chunk_stream(&self) {
         self.chunk_stream.unsubscribe();
@@ -563,7 +567,7 @@ impl HttpHarness {
             .and_then(|mut p| p.remove(&token))
     }
 
-    /// Drive `rows` against the registered Swift adapter over the started server, projecting each
+    /// Drive `rows` against the registered native adapter over the started server, projecting each
     /// [`RowResult`] onto a structured [`RowReport`]. Shared by [`HttpHarness::run_c1`] / `run_c2`.
     fn run_rows(&self, rows: &[ConformanceRow]) -> Vec<RowReport> {
         let guard = match self.server.lock() {
@@ -573,7 +577,7 @@ impl HttpHarness {
         let Some((_server, endpoints)) = guard.as_ref() else {
             return vec![no_server_report()];
         };
-        let factory = SwiftFactory {
+        let factory = NativeFactory {
             shared: Arc::clone(&self.shared),
         };
         let ctx = ConformanceCtx {
@@ -628,7 +632,8 @@ fn to_ffi_request(token: u64, request: &HttpRequest) -> FfiRequest {
         },
         _ => FfiResponseSink::Memory,
     };
-    // The priority hint (row 12, CAP; A5). Absent ⇒ `Normal` — the hint data rides every request.
+    // The priority hint (row 12; uniform advisory). Absent ⇒ `Normal` — the hint data rides every
+    // request.
     let priority = match request.priority() {
         Some(Priority::Throttled) => FfiPriority::Throttled,
         Some(Priority::Low) => FfiPriority::Low,
@@ -668,7 +673,7 @@ fn to_http_response(response: &FfiResponse) -> Result<HttpResponse, HttpError> {
     // body was written there, not buffered) — `content_length` is not meaningful for a file sink, so
     // it is `None`. A `Memory` sink reports the decoded in-memory length, honest for a buffered body
     // (`Some(n)` promises `n` decoded bytes) — satisfying rule 7 without the compressed figure
-    // (§5.12). The version is the adapter's real `URLSessionTaskMetrics` observable (row 11).
+    // (§5.12). The version is the adapter's real native transport observable (row 11).
     let (body, content_length) = if response.sink_path.is_empty() {
         (
             BodyOutcome::Memory(response.body.clone()),
