@@ -923,3 +923,190 @@ fn no_server_report() -> RowReport {
         message: "test server not started (call start_server first)".to_owned(),
     }
 }
+
+// =====================================================================================
+// Host-side bridge tests (step-27 M5). The streaming-seam bridge logic — `finish_body`'s
+// remove-then-consume, `deliver_chunk`'s close-on-error, and `NativeFlowObserver`'s
+// signal forwarding — is otherwise watched ONLY by the Apple/Android platform tiers. These
+// drive the bridge on the host with a fake `HttpAdapter` (which echoes the streaming token and
+// records forwarded signals) and a recording `ChunkSink`, so a defect in that logic goes red on
+// the host suite (`mise run test`) instead of surviving until a device tier runs.
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+    use bolted_http::request::{HttpRequest, Method};
+
+    /// A fake native adapter: it never performs a request, but records the streaming token handed to
+    /// `execute_streaming` (so a test can drive the harness re-entry points for that token) and every
+    /// mid-flight signal forwarded through `signal` (so signal-routing is observable).
+    #[derive(Default)]
+    struct FakeAdapter {
+        last_stream_token: AtomicU64,
+        signals: Mutex<Vec<(u64, FfiFlowSignal)>>,
+    }
+
+    impl HttpAdapter for FakeAdapter {
+        fn execute(&self, _request: FfiRequest) {}
+        fn execute_streaming(&self, request: FfiRequest) {
+            self.last_stream_token
+                .store(request.token, Ordering::SeqCst);
+        }
+        fn signal(&self, token: u64, flow: FfiFlowSignal) {
+            self.signals
+                .lock()
+                .expect("signals lock")
+                .push((token, flow));
+        }
+    }
+
+    /// A driver-owned `ChunkSink` that records what the bridge forwards to it: the delivered `seq`s
+    /// and the single terminal. `err_on_seq` lets a test drive `deliver_chunk`'s error path (the core
+    /// ingest would raise a typed failure on a bad `seq`/overflow; here the sentinel stands in for it).
+    struct RecordingSink {
+        delivered: Arc<Mutex<Vec<u64>>>,
+        terminal: Arc<Mutex<Option<BodyEnd>>>,
+        err_on_seq: Option<u64>,
+    }
+
+    impl ChunkSink for RecordingSink {
+        fn deliver_chunk(&self, chunk: BodyChunk) -> Result<(), HttpError> {
+            if self.err_on_seq == Some(chunk.seq) {
+                return Err(HttpError::Transport);
+            }
+            self.delivered
+                .lock()
+                .expect("delivered lock")
+                .push(chunk.seq);
+            Ok(())
+        }
+        fn finish(self: Box<Self>, end: BodyEnd) {
+            *self.terminal.lock().expect("terminal lock") = Some(end);
+        }
+    }
+
+    /// Park a streaming sink through the real bridge (`NativeAdapter::send_streaming`) and return the
+    /// token the fake adapter observed, the recording handles, and the `FlowSignals` emitter.
+    #[allow(clippy::type_complexity)]
+    fn park_stream(
+        harness: &HttpHarness,
+        fake: &FakeAdapter,
+        err_on_seq: Option<u64>,
+    ) -> (
+        u64,
+        Arc<Mutex<Vec<u64>>>,
+        Arc<Mutex<Option<BodyEnd>>>,
+        FlowSignals,
+    ) {
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let terminal = Arc::new(Mutex::new(None));
+        let sink = Box::new(RecordingSink {
+            delivered: Arc::clone(&delivered),
+            terminal: Arc::clone(&terminal),
+            err_on_seq,
+        });
+        let factory = NativeFactory {
+            shared: Arc::clone(&harness.shared),
+        };
+        let streaming = factory.streaming().expect("streaming present");
+        let url = Url::cleartext_dev("http://127.0.0.1/chunked").expect("url");
+        let req = HttpRequest::builder(Method::Get, url, Duration::from_secs(5)).build();
+        let signals = streaming.send_streaming(req, sink);
+        let token = fake.last_stream_token.load(Ordering::SeqCst);
+        (token, delivered, terminal, signals)
+    }
+
+    #[test]
+    fn finish_body_removes_and_consumes_the_parked_sink() {
+        let fake = Arc::new(FakeAdapter::default());
+        let harness = HttpHarness::new(fake.clone());
+        let (token, delivered, terminal, _signals) = park_stream(&harness, &fake, None);
+
+        // Parked: one live subscription.
+        assert_eq!(harness.live_streams(), 1);
+        assert!(harness.deliver_chunk(
+            token,
+            FfiBodyChunk {
+                seq: 0,
+                bytes: b"ab".to_vec(),
+            }
+        ));
+        assert_eq!(delivered.lock().expect("lock").as_slice(), &[0]);
+
+        // The terminal MUST both fire on the sink (consume) and clear the registry (remove).
+        harness.finish_body(token, FfiBodyEnd::Complete { total: 2 });
+        assert!(
+            matches!(&*terminal.lock().expect("lock"), Some(BodyEnd::Complete { total }) if *total == 2),
+            "finish_body must consume the sink with its terminal"
+        );
+        assert_eq!(
+            harness.live_streams(),
+            0,
+            "finish_body must remove the parked sink (subscription hygiene)"
+        );
+    }
+
+    #[test]
+    fn deliver_chunk_closes_the_stream_on_a_typed_failure() {
+        let fake = Arc::new(FakeAdapter::default());
+        let harness = HttpHarness::new(fake.clone());
+        // The sink raises a typed failure on seq 0 (standing in for a seq violation / ring overflow).
+        let (token, _delivered, terminal, _signals) = park_stream(&harness, &fake, Some(0));
+
+        assert_eq!(harness.live_streams(), 1);
+        // A typed failure must make the bridge stop reading (`false`) AND close the stream.
+        let keep_reading = harness.deliver_chunk(
+            token,
+            FfiBodyChunk {
+                seq: 0,
+                bytes: Vec::new(),
+            },
+        );
+        assert!(
+            !keep_reading,
+            "a typed failure must tell the adapter to stop"
+        );
+        assert!(
+            matches!(&*terminal.lock().expect("lock"), Some(BodyEnd::Failed(_))),
+            "deliver_chunk must close the stream with the failure terminal"
+        );
+        assert_eq!(
+            harness.live_streams(),
+            0,
+            "deliver_chunk must remove the parked sink after closing on error"
+        );
+    }
+
+    #[test]
+    fn flow_signals_are_forwarded_to_the_native_task() {
+        let fake = Arc::new(FakeAdapter::default());
+        let harness = HttpHarness::new(fake.clone());
+        let (token, _delivered, _terminal, signals) = park_stream(&harness, &fake, None);
+
+        signals.pause();
+        signals.resume();
+        signals.cancel();
+
+        let seen = fake.signals.lock().expect("lock");
+        let for_token: Vec<&FfiFlowSignal> = seen
+            .iter()
+            .filter(|(t, _)| *t == token)
+            .map(|(_, f)| f)
+            .collect();
+        assert!(
+            for_token.iter().any(|f| matches!(f, FfiFlowSignal::Pause)),
+            "Pause must be forwarded across the FFI"
+        );
+        assert!(
+            for_token.iter().any(|f| matches!(f, FfiFlowSignal::Resume)),
+            "Resume must be forwarded across the FFI"
+        );
+        assert!(
+            for_token.iter().any(|f| matches!(f, FfiFlowSignal::Cancel)),
+            "Cancel must be forwarded across the FFI (the pushed cancel that replaced poll-watching)"
+        );
+    }
+}
