@@ -1,8 +1,10 @@
-# The streaming body's core-side seam — freeze proposal (Q1)
+# The streaming body's core-side seam — design (Q1)
 
-**Status: proposal, 2026-07-21 — input to the contract-freeze design session. Decides
-nothing.** Every *Recommend* below is a recommendation to the session, not a resolution;
-Q1 is an ARCHITECTURE-§9-grade question and is settled only there.
+**Status: adopted as proposed (session ruling, 2026-07-21) — with a standing
+re-evaluation trigger: the upstream `ffi_stream` delivery-contract RFC (§7).** These are
+working decisions, not immutable ones: Bolted is unreleased, single-user software, and
+the API is expected to evolve as we learn — the value of deciding now is coherence and
+recorded rationale, not lock-down. Re-open any of this the moment evidence disagrees.
 
 Step 24 fixed the *mechanism* (row 16: CORE, `ffi_stream` async push — F1) and deliberately
 left the seam itself open (step-24 report, open question 2): how a chunk re-enters the core
@@ -25,10 +27,15 @@ sub-questions, states the evidence, and proposes a shape.
   detail of two backends, not a contract.
 - **The lifecycle defect is unfixed and cross-platform.** F-M3-1 (Apple) / F-M0-5 (ART):
   an abandoned consumer's subscription survives — native-side, proven to survive ART GC
-  of every Kotlin-side referent — and starves the next subscriber's re-delivery
-  (0–90/200). `awaitClose`-style hooks never fire for an abandoned consumer. Still
-  present at 0.28.0 (re-confirmed during the upgrade: run-2 after an abandoned consumer
-  delivers 0/200).
+  of every Kotlin-side referent. `awaitClose`-style hooks never fire for an abandoned
+  consumer. Still present at 0.28.0 (re-confirmed during the upgrade: run-2 after an
+  abandoned consumer delivers 0/200). **Re-diagnosis (upstream RFC analysis, 2026-07-21):
+  the "starvation" of the *next* subscriber is not shared re-delivery state** — the
+  native side is per-subscription isolated (own ring/condvar/continuation slot). The
+  observed 0–90/200 decomposes into the silent-loss defect amplified by CPU contention
+  from the stale subscription's busy drain loop, plus (on Swift) the lost-wake race
+  fixed upstream in #678. The *leak* stands as measured; the cross-subscriber mechanism
+  we inferred was wrong, and §3d's justification rests on the leak alone.
 
 ## 2. The design principle the evidence forces
 
@@ -140,7 +147,7 @@ semantics of mid-flight inputs) and instantiate it twice — even if the cookie 
 itself stays deferred, the seam should be designed so it can attach without re-opening
 the contract.
 
-## 5. What freezing this adds to the suite
+## 5. What this adds to the suite
 
 - Slow-consumer completeness row (3b): delivered == ingested or typed overflow, on every
   adapter, under load.
@@ -154,3 +161,40 @@ the contract.
 Streaming *request* bodies (excluded by design, feature-matrix §5.3); SSE/WebSocket
 (parked with row 16's fallback note); changing the F1 mechanism choice (row 16 is
 decided); anything resolving row 26 beyond the shared-shape requirement in §4.
+
+## 7. Re-evaluation trigger: the upstream `ffi_stream` delivery-contract RFC
+
+An upstream RFC is in draft (2026-07-21; drafted by Henrik, currently local to the
+boltffi checkout as `RFC-stream.md`) that, if it lands, moves several of this design's
+enforcement layers into the binding itself. **When any phase of it ships in a release,
+re-evaluate this seam against it.** The mapping, per sub-decision:
+
+- **§3b (bounded ring, fail-loud).** The RFC makes the subscription ring *the only
+  buffer* (no backend-private stage), with author-declared `capacity` and `overflow`
+  including `overflow = "fail"` — a typed terminal *failed* event on overflow. That is
+  our `StreamOverflow` semantics, provided by the declaration itself. Once available:
+  declare the body stream `fail` and demote the core-side gate to defense-in-depth
+  (the seq check stays — it is what *verifies*). The RFC's producer `push` return value
+  (delivered/dropped counts) also gives `deliver_chunk` synchronous loss visibility.
+- **§3b (adapter back-pressure capability).** The RFC's named open question — the
+  producer wake-on-space hook — cites exactly our HTTP-body producer as the use case
+  that would justify it. Our capability-shaped pause/resume is the interim; if the hook
+  lands, the capability can ride it instead of a bespoke signal.
+- **§3c (BodyEnd terminal).** The RFC adds the wire-level ended-vs-failed terminal
+  distinction (its one ABI change). That covers the *FFI* leg; `BodyEnd` remains ours —
+  it is domain data (total-count completeness gate, `HttpError` taxonomy) on the ingest
+  seam, which the RFC does not and should not know about.
+- **§3d (lifecycle).** The RFC specifies a consumer-lifetime backstop per backend
+  (JVM `Cleaner`, Swift iterator `deinit`, C# finalizer) plus a normative registration
+  guarantee (delivery-start defined — a defect our probes dodged with sleeps without
+  noticing). Driver-owned deterministic close stays our primary path (the RFC itself
+  keeps explicit cancellation as the deterministic path); the backstop turns our
+  "app code never holds the raw stream" rule from load-bearing into belt-and-braces —
+  worth revisiting *then* whether the rule is still worth its API-shape cost.
+- **§1 evidence correction.** The RFC's analysis withdraws the cross-subscriber
+  starvation claim (per-subscription isolation already holds); see the amended
+  evidence bullet above. Our upstream issue's Defect 2 remains real as a *leak*.
+
+Net: nothing in the adopted shape is wasted — the contract-level guarantees stay
+identical; what changes is which layer enforces them. Design the implementation step so
+the enforcement can be delegated downward without touching the contract types.
