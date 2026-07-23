@@ -392,8 +392,12 @@ async fn build_response(
             BodyOutcome::Memory(bytes.to_vec())
         }
         ResponseSink::File(file_ref) => {
-            write_body_to_file(resp, file_ref.as_path()).await?;
-            BodyOutcome::File(file_ref.clone())
+            // The verified, adapter-counted byte total (Q3): the copy loop counts what it wrote.
+            let bytes_written = write_body_to_file(resp, file_ref.as_path()).await?;
+            BodyOutcome::File {
+                path: file_ref.clone(),
+                bytes_written,
+            }
         }
         // A future (e.g. streaming) sink the adapter does not yet synthesise: default to buffering.
         _ => {
@@ -414,7 +418,7 @@ async fn build_response(
 /// Stream the decoded response body to `target` with temp-file discipline: write a sibling temp
 /// file, fsync, then atomically rename it into place. A body-read failure is `Transport`; any local
 /// file failure is `Io` (row 15 / the `Io` positive control).
-async fn write_body_to_file(resp: reqwest::Response, target: &Path) -> Result<(), HttpError> {
+async fn write_body_to_file(resp: reqwest::Response, target: &Path) -> Result<u64, HttpError> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     let name = target.file_name().and_then(|s| s.to_str()).unwrap_or("out");
     let nonce = SINK_NONCE.fetch_add(1, Ordering::SeqCst);
@@ -423,6 +427,8 @@ async fn write_body_to_file(resp: reqwest::Response, target: &Path) -> Result<()
     let mut file = tokio::fs::File::create(&tmp)
         .await
         .map_err(|_| HttpError::Io)?;
+    // The verified byte count (Q3): the decoded bytes this loop actually wrote.
+    let mut bytes_written: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
@@ -436,6 +442,7 @@ async fn write_body_to_file(resp: reqwest::Response, target: &Path) -> Result<()
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(HttpError::Io);
         }
+        bytes_written = bytes_written.saturating_add(chunk.len() as u64);
     }
     if file.flush().await.is_err() || file.sync_all().await.is_err() {
         let _ = tokio::fs::remove_file(&tmp).await;
@@ -445,7 +452,8 @@ async fn write_body_to_file(resp: reqwest::Response, target: &Path) -> Result<()
     tokio::fs::rename(&tmp, target).await.map_err(|_| {
         // Leave no temp file behind on a failed finalise.
         HttpError::Io
-    })
+    })?;
+    Ok(bytes_written)
 }
 
 /// Take (and clear) any TLS rejection the pinning verifier recorded during a failed handshake.

@@ -283,7 +283,12 @@ impl SocketMock {
             let outcome = match request.response_sink() {
                 ResponseSink::File(file_ref) if self.behavior.honor_file_sink => {
                     std::fs::write(file_ref.as_path(), &body).map_err(|_| HttpError::Io)?;
-                    BodyOutcome::File(file_ref.clone())
+                    // The verified, adapter-counted byte total (Q3) — the socket mock counted the
+                    // bytes it wrote, distinct from any advisory header value.
+                    BodyOutcome::File {
+                        path: file_ref.clone(),
+                        bytes_written: body.len() as u64,
+                    }
                 }
                 _ => BodyOutcome::Memory(body),
             };

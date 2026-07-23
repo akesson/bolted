@@ -54,7 +54,18 @@ pub enum BodyOutcome {
     Memory(Vec<u8>),
     /// The body was sunk to a file without buffering (Apple `downloadTask`; synthesised by copy
     /// on the other three surfaces, §5.10).
-    File(FileRef),
+    ///
+    /// `bytes_written` is the **verified** byte count the adapter *counted* as it wrote the file
+    /// (ruled 2026-07-21 / Q3) — adapter-counted truth, distinct from the advisory
+    /// [`HttpResponse::content_length`] header value, which frames the *encoded* content and
+    /// cannot be trusted for the decoded length. The one place a trustworthy total exists is here,
+    /// because the sink counted it on completion.
+    File {
+        /// Where the body landed.
+        path: FileRef,
+        /// The verified number of decoded bytes written to `path`.
+        bytes_written: u64,
+    },
     // Streaming delivery (row 16) attaches here once S-FFI picks the FFI mechanism (§5.11).
 }
 
@@ -128,10 +139,20 @@ impl HttpResponse {
         self.version
     }
 
-    /// The advisory body length (feature-matrix row 13/17, §5.12). **`None`-or-honest**: bodies are
-    /// always decoded, and a transport length that would lie under decoding (gzip/brotli/zstd strip
-    /// or invalidate `Content-Length`) is reported as `None`, never the compressed figure. `Some(n)`
-    /// is a promise the delivered body is `n` decoded bytes. Never a "raw body" length.
+    /// The advisory body length (feature-matrix row 13/17, §5.12; ruled 2026-07-21 / Q3).
+    ///
+    /// **Always advisory, always an `Option` — reliability is impossible in principle, not a
+    /// platform gap.** A `Content-Length` header frames the *encoded* content (RFC 9110 §8.6), so
+    /// the *decoded* length of a compressed or chunked response is unknowable up front on any
+    /// client. A live control makes the size of the lie concrete: a wire `Content-Length: 94760`
+    /// gzip response decoded to `611471` bytes — 6.5× the advertised figure. Chunked responses
+    /// carry no length at all.
+    ///
+    /// So this accessor never returns the transport figure when it would lie under decoding: the
+    /// honest answers are `None`, or a value the adapter can stand behind as the decoded length.
+    /// `Some(n)` is a promise the delivered body is `n` decoded bytes; it is **not** a wire header
+    /// echo. For a file sink, the trustworthy total is the adapter-counted
+    /// [`BodyOutcome::File::bytes_written`], not this header-derived advisory value.
     #[must_use]
     pub fn content_length(&self) -> Option<u64> {
         self.content_length

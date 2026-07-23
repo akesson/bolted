@@ -52,6 +52,17 @@ pub enum HttpError {
     },
     /// A local I/O failure handling the response (e.g. writing a [`crate::BodyOutcome::File`] sink).
     Io,
+    /// A streamed response body overflowed its bounded per-response ring (feature-matrix §5.11 /
+    /// streaming-seam §3b): [`crate::stream::BodyStream::RING_CAPACITY`] undrained chunks were
+    /// already buffered when another arrived. The typed failure that makes silent loss impossible —
+    /// a conformant adapter pauses reading before it is hit (M2's capability signal); a broken one
+    /// gets this instead of a dropped chunk.
+    StreamOverflow {
+        /// The ring capacity that was exceeded (core-owned; [`crate::stream::BodyStream::RING_CAPACITY`]).
+        capacity: usize,
+        /// The `seq` of the chunk that could not be buffered.
+        seq: u64,
+    },
 }
 
 impl HttpError {
@@ -72,6 +83,7 @@ impl HttpError {
             HttpError::InsecureRedirect { .. } => HttpErrorKey::InsecureRedirect,
             HttpError::TooManyRedirects { .. } => HttpErrorKey::TooManyRedirects,
             HttpError::Io => HttpErrorKey::Io,
+            HttpError::StreamOverflow { .. } => HttpErrorKey::StreamOverflow,
         }
     }
 }
@@ -92,6 +104,7 @@ pub enum HttpErrorKey {
     InsecureRedirect,
     TooManyRedirects,
     Io,
+    StreamOverflow,
 }
 
 impl HttpErrorKey {
@@ -110,6 +123,7 @@ impl HttpErrorKey {
             HttpErrorKey::InsecureRedirect => "http.insecure_redirect",
             HttpErrorKey::TooManyRedirects => "http.too_many_redirects",
             HttpErrorKey::Io => "http.io",
+            HttpErrorKey::StreamOverflow => "http.stream_overflow",
         }
     }
 }
@@ -155,10 +169,26 @@ mod tests {
             HttpError::InsecureRedirect { to: url },
             HttpError::TooManyRedirects { limit: 10 },
             HttpError::Io,
+            HttpError::StreamOverflow {
+                capacity: 256,
+                seq: 256,
+            },
         ];
         // Distinct, non-empty string keys — the C2 taxonomy vocabulary.
         for e in &all {
             assert!(e.key().as_str().starts_with("http."));
         }
+    }
+
+    #[test]
+    fn stream_overflow_has_its_own_key() {
+        let overflow = HttpError::StreamOverflow {
+            capacity: 256,
+            seq: 256,
+        };
+        assert_eq!(overflow.key(), HttpErrorKey::StreamOverflow);
+        assert_eq!(overflow.key().as_str(), "http.stream_overflow");
+        // Distinct from the transport failure it is not.
+        assert_ne!(overflow.key(), HttpErrorKey::Transport);
     }
 }
