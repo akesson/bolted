@@ -42,21 +42,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::Duration;
 
 use boltffi::*;
 
 use bolted_http::capability::{
-    CancelToken, CompletionSink, Http, Metrics, MetricsTier, RequestHandle, UploadProgressSink,
+    CancelToken, ChunkSink, CompletionSink, Http, Metrics, MetricsTier, RequestHandle,
+    StreamingHttp, UploadProgressSink,
 };
 use bolted_http::conformance::server::TestServer;
 use bolted_http::conformance::{
     AdapterFactory, ConformanceCtx, ConformanceRow, Endpoints, FailureReason, RowResult, c1, c2,
-    c3, run,
+    c3, run, stream,
 };
 use bolted_http::request::{FileRef, HttpRequest, Method, Priority, RequestBody, ResponseSink};
 use bolted_http::response::{BodyOutcome, HttpResponse, HttpVersion, StatusCode};
+use bolted_http::signal::{FlowObserver, FlowSignal, FlowSignals};
+use bolted_http::stream::{BodyChunk, BodyEnd};
 use bolted_http::{HeaderName, HeaderValue, Headers, HttpError, TlsErrorKind, Url};
 
 // =====================================================================================
@@ -237,19 +238,50 @@ pub struct RowReport {
     pub message: String,
 }
 
-/// One response-body chunk crossing the FFI in the **A1 streaming probe** (step 25, probe-grade —
-/// no contract surface; the streaming core-seam is deliberately unfrozen, freeze-agenda Q2).
-/// Mirrors the step-24 S-FFI `Chunk`. `t_send_ns` is stamped by the native side
-/// (`DispatchTime.now().uptimeNanoseconds` / `System.nanoTime()`) immediately before the deliver
-/// call so the consumer can compute per-chunk delivery latency on one clock; `last` marks the final
-/// chunk.
+/// One response-body chunk crossing the FFI on the **streaming seam** (streaming-seam §3a, ruled Q1;
+/// step-27 M3 — the graduation of the step-25 A1 probe `Chunk` into shipped contract-path code). The
+/// native adapter's response-stream delegate (`didReceive data` on Apple, OkHttp source on Android)
+/// pushes one of these per transport read into [`HttpHarness::deliver_chunk`]; the core-owned
+/// [`bolted_http::stream::BodyStream`] verifies `seq` (ascending, gapless) and rings/gates it.
+/// Mirrors [`BodyChunk`].
+#[data]
+pub struct FfiBodyChunk {
+    /// The chunk's sequence number — `0` for the first chunk of a response, `+1` each subsequent
+    /// chunk. A hole or repeat is the core's typed `seq` failure (never tolerated).
+    pub seq: u64,
+    /// The decoded body bytes carried by this chunk.
+    pub bytes: Vec<u8>,
+}
+
+/// The terminal that ends a streamed response body on the seam (streaming-seam §3c) — a **separate**
+/// re-entry from chunk delivery ([`HttpHarness::finish_body`]), not a `last` flag. Mirrors
+/// [`BodyEnd`]: `Complete { total }` closes the completeness gate (`total` must equal the ingested
+/// bytes, else a truncation is surfaced as a typed failure), `Failed { error }` carries a mid-body
+/// transport failure as data.
 #[data]
 #[derive(Clone)]
-pub struct Chunk {
-    pub seq: u64,
-    pub bytes: Vec<u8>,
-    pub t_send_ns: u64,
-    pub last: bool,
+pub enum FfiBodyEnd {
+    /// The body completed; `total` is the adapter's declared decoded byte count (gated against the
+    /// bytes actually ingested).
+    Complete { total: u64 },
+    /// The body failed mid-stream, with a typed reason.
+    Failed { error: FfiHttpError },
+}
+
+/// One core→adapter mid-flight signal crossing the FFI (streaming-seam §3b / Q4). The single shape,
+/// three uses, mirroring [`FlowSignal`]: back-pressure (`Pause`/`Resume` — the adapter pauses/resumes
+/// its socket read so the core ring never overflows) and the **pushed** cancel (`Cancel`, which
+/// replaces the deleted 10 ms poll-watcher thread). Delivered to the native adapter through
+/// [`HttpAdapter::signal`]; Apple maps them to `URLSessionTask.suspend/resume/cancel`.
+#[data]
+#[derive(Clone, Copy)]
+pub enum FfiFlowSignal {
+    /// Stop delivering body chunks (back-pressure): the core ring is near capacity.
+    Pause,
+    /// Resume delivering body chunks — back-pressure relieved.
+    Resume,
+    /// Cancel the in-flight request (the pushed cancel that replaces poll-watching).
+    Cancel,
 }
 
 // =====================================================================================
@@ -261,16 +293,23 @@ pub struct Chunk {
 /// back through [`HttpHarness::complete_ok`] / [`HttpHarness::complete_err`].
 #[export]
 pub trait HttpAdapter: Send + Sync {
-    /// Dispatch a request effect. Must return promptly (URLSession `resume()` / OkHttp
+    /// Dispatch a **buffered** request effect. Must return promptly (URLSession `resume()` / OkHttp
     /// `Call.enqueue` are non-blocking); the completion is delivered later, carrying the request's
-    /// `token`.
+    /// `token`, through [`HttpHarness::complete_ok`] / [`HttpHarness::complete_err`].
     fn execute(&self, request: FfiRequest);
 
-    /// Forward a caller cancellation to the in-flight task identified by `token` (rule 9 — the
-    /// adapter cancels the `URLSessionTask` / OkHttp `Call`, which completes with a native
-    /// cancellation the adapter maps to [`FfiHttpError::Cancelled`]). A no-op if the token is
-    /// unknown / already done.
-    fn cancel(&self, token: u64);
+    /// Dispatch a **streaming** request effect (streaming-seam §3a, step-27 M3). Must return
+    /// promptly; each response-body chunk is pushed later through [`HttpHarness::deliver_chunk`] and
+    /// the single terminal through [`HttpHarness::finish_body`], both carrying `token`. Apple's
+    /// URLSession `didReceive data` delegate is the per-chunk push; `didCompleteWithError` is the
+    /// terminal.
+    fn execute_streaming(&self, request: FfiRequest);
+
+    /// Push a mid-flight [`FfiFlowSignal`] to the in-flight task identified by `token` (streaming-seam
+    /// §3b / Q4 — the one signal shape, three uses). `Cancel` cancels the task (rule 9, replacing the
+    /// deleted poll-watcher); `Pause`/`Resume` pace the socket read for back-pressure. A no-op if the
+    /// token is unknown / already done.
+    fn signal(&self, token: u64, flow: FfiFlowSignal);
 }
 
 // =====================================================================================
@@ -285,11 +324,17 @@ struct Pending {
     progress: Option<Box<dyn UploadProgressSink>>,
 }
 
-/// State shared between the `Http` shim (which needs the native adapter + the token registry) and
-/// the harness completion entry points (which need the registry).
+/// State shared between the `Http`/`StreamingHttp` shim (which needs the native adapter + the token
+/// registries) and the harness completion / chunk re-entry points (which need them).
 struct Shared {
     adapter: Arc<dyn HttpAdapter>,
     pending: Mutex<HashMap<u64, Pending>>,
+    /// Parked streaming sinks, keyed by token (streaming-seam §3d): one live driver-owned
+    /// [`ChunkSink`] per in-flight streamed response. A chunk re-entry looks it up and delivers; the
+    /// terminal (or a typed delivery failure) **removes and consumes** it — the driver-owned
+    /// deterministic close. A stream whose terminal never arrives leaves its entry parked: that is
+    /// the F-M3-1 leak, and row 14's live-count is exactly `pending_streams.len()`.
+    pending_streams: Mutex<HashMap<u64, Box<dyn ChunkSink>>>,
     next_token: AtomicU64,
 }
 
@@ -320,32 +365,60 @@ impl Http for NativeAdapter {
         // Rust → native: performs the request asynchronously and returns immediately.
         self.shared.adapter.execute(ffi);
 
-        // Bridge the contract's poll-based cancellation to the native task: a detached watcher polls
-        // the returned token (the Linux adapter's 10 ms poll, mirrored) and, on cancellation,
-        // forwards `adapter.cancel(token)` across the FFI so the URLSessionTask / OkHttp Call is
-        // cancelled. The watcher self-terminates when the request completes (its pending entry is
-        // removed) so no thread outlives its request.
-        let cancel_token = CancelToken::new();
-        let watcher = cancel_token.clone();
-        let shared = Arc::clone(&self.shared);
-        thread::spawn(move || {
-            loop {
-                if watcher.is_cancelled() {
-                    shared.adapter.cancel(token);
-                    break;
-                }
-                let still_pending = shared
-                    .pending
-                    .lock()
-                    .map(|p| p.contains_key(&token))
-                    .unwrap_or(false);
-                if !still_pending {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
+        // Cancellation is **pushed** now (step-27 M3 — the 10 ms poll-watcher thread is deleted):
+        // `RequestHandle::cancel` fires `FlowSignal::Cancel`, whose observer forwards
+        // `adapter.signal(token, Cancel)` across the FFI so the URLSessionTask / OkHttp Call is
+        // cancelled. No thread outlives the request; the completion still arrives (as `Cancelled`).
+        let observer = Arc::new(NativeFlowObserver {
+            adapter: Arc::clone(&self.shared.adapter),
+            token,
         });
-        RequestHandle::for_token(cancel_token)
+        RequestHandle::with_signals(CancelToken::new(), FlowSignals::new(observer))
+    }
+}
+
+impl StreamingHttp for NativeAdapter {
+    /// Dispatch a streaming request across the FFI (streaming-seam §3a/§3b). Parks the driver-owned
+    /// [`ChunkSink`] under a fresh token, then asks the native adapter to `execute_streaming`; each
+    /// pushed chunk re-enters through [`HttpHarness::deliver_chunk`], the terminal through
+    /// [`HttpHarness::finish_body`]. Returns the [`FlowSignals`] the driver uses to push back-pressure
+    /// (pause/resume) and cancel — routed to the native task through [`HttpAdapter::signal`].
+    fn send_streaming(&self, request: HttpRequest, chunks: Box<dyn ChunkSink>) -> FlowSignals {
+        let token = self.shared.next_token.fetch_add(1, Ordering::Relaxed);
+        let ffi = to_ffi_request(token, &request);
+        if let Ok(mut streams) = self.shared.pending_streams.lock() {
+            streams.insert(token, chunks);
+        }
+        let observer = Arc::new(NativeFlowObserver {
+            adapter: Arc::clone(&self.shared.adapter),
+            token,
+        });
+        // Start the native stream after parking the sink, so a chunk that races back finds its sink.
+        self.shared.adapter.execute_streaming(ffi);
+        FlowSignals::new(observer)
+    }
+}
+
+/// The adapter-side reaction to the core→adapter [`FlowSignals`] surface (streaming-seam §3b / Q4):
+/// each pushed [`FlowSignal`] is forwarded across the FFI to the native task via
+/// [`HttpAdapter::signal`]. This is what lets the Apple/Android adapters delete their poll-watcher —
+/// cancel is pushed, not polled — and honour back-pressure (pause/resume) mid-stream.
+struct NativeFlowObserver {
+    adapter: Arc<dyn HttpAdapter>,
+    token: u64,
+}
+
+impl FlowObserver for NativeFlowObserver {
+    fn on_signal(&self, signal: FlowSignal) {
+        let flow = match signal {
+            FlowSignal::Pause => FfiFlowSignal::Pause,
+            FlowSignal::Resume => FfiFlowSignal::Resume,
+            FlowSignal::Cancel => FfiFlowSignal::Cancel,
+            // `FlowSignal` is `#[non_exhaustive]`; a future signal this bridge does not model is a
+            // no-op rather than a spurious native call.
+            _ => return,
+        };
+        self.adapter.signal(self.token, flow);
     }
 }
 
@@ -378,29 +451,27 @@ impl AdapterFactory for NativeFactory {
             shared: Arc::clone(&self.shared),
         }))
     }
+
+    /// Streaming is present (streaming-seam §3b, step-27 M3): the native adapter pushes response-body
+    /// chunks through [`HttpHarness::deliver_chunk`] / [`HttpHarness::finish_body`]. Returning `Some`
+    /// only type-checks because [`NativeAdapter`] really implements [`StreamingHttp`] — the streaming
+    /// rows (12/13) run against the real adapter rather than skipping.
+    fn streaming(&self) -> Option<Box<dyn StreamingHttp>> {
+        Some(Box::new(NativeAdapter {
+            shared: Arc::clone(&self.shared),
+        }))
+    }
 }
 
 // =====================================================================================
 // The exported harness: construction, server lifecycle, completion re-entry, the driver.
 // =====================================================================================
 
-/// The A1 chunk-stream ring capacity — chosen well above any probe's chunk count so the SPSC ring
-/// never drops even when the consumer lags the burst producer (drop would be a false loss).
-const CHUNK_STREAM_CAPACITY: usize = 1024;
-
 /// The Rust half of the bridge the native side drives. Constructed with the native adapter; owns the
-/// shared registry and (once started) the in-process test server.
+/// shared registries and (once started) the in-process test server.
 pub struct HttpHarness {
     shared: Arc<Shared>,
     server: Mutex<Option<(TestServer, Endpoints)>>,
-    /// A1 streaming probe (step 25): the `ffi_stream` a live native consumer drains. Chunks pushed by
-    /// [`HttpHarness::deliver_chunk`] are re-delivered here off the producer thread (F1 async push).
-    /// Capacity generously exceeds any probe's chunk count so the SPSC ring never drops (a drop
-    /// would be a *false* loss; the probe measures real completeness, not ring pressure).
-    chunk_stream: Arc<EventSubscription<Chunk>>,
-    /// How many chunks entered the core through [`HttpHarness::deliver_chunk`] (the completeness
-    /// numerator source-of-truth, independent of what the consumer received).
-    chunk_ingested: AtomicU64,
 }
 
 #[export]
@@ -412,11 +483,10 @@ impl HttpHarness {
             shared: Arc::new(Shared {
                 adapter,
                 pending: Mutex::new(HashMap::new()),
+                pending_streams: Mutex::new(HashMap::new()),
                 next_token: AtomicU64::new(1),
             }),
             server: Mutex::new(None),
-            chunk_stream: Arc::new(EventSubscription::new(CHUNK_STREAM_CAPACITY)),
-            chunk_ingested: AtomicU64::new(0),
         }
     }
 
@@ -499,6 +569,15 @@ impl HttpHarness {
         self.run_rows(c2::rows())
     }
 
+    /// Run the streaming rows (12 — slow-consumer completeness; 13 — terminal-exactly-once) against
+    /// the registered native adapter over the started server (streaming-seam §3b/§3c, step-27 M3).
+    /// Drives `/chunked` through the real streaming path (`send_streaming` → native
+    /// `execute_streaming` → pushed chunks → the driver-owned completeness gate). Requires a started
+    /// server.
+    pub fn run_stream_rows(&self) -> Vec<RowReport> {
+        self.run_rows(stream::rows())
+    }
+
     /// Run the C1-adjacent extra rows (row-15 response-sink correspondence, the redirect hop trace)
     /// against the adapter — the M2 syntheses (file sink + hop trace) they exercise (structured
     /// results). Requires a started server.
@@ -516,44 +595,71 @@ impl HttpHarness {
         c3::divergence(&factory).render()
     }
 
-    // -- A1 streaming probe (step 25, probe-grade). ---------------------------------------------
-    // A streamed response through the step-24 S-FFI-chosen mechanism (F1 `ffi_stream` async push)
-    // inside a real http round-trip: the native streaming consumer reads the test server's
-    // `/chunked` endpoint and pushes each chunk here via `deliver_chunk`; a live native consumer
-    // drains `chunk_stream` and proves ordered/lossless/complete delivery. NO contract surface is
-    // added — the streaming core seam is deliberately unfrozen (freeze Q2).
+    // -- Streaming seam re-entry (streaming-seam §3a/§3c, step-27 M3). --------------------------
+    // The step-25 A1 probe (`ffi_stream` async push, probe-grade) graduates here into the shipped
+    // contract path: the native adapter pushes each response-body chunk synchronously through
+    // `deliver_chunk` into the driver-owned `ChunkSink` (the core `BodyStream` behind the harness
+    // driver), and the single terminal through `finish_body`. There is no `ffi_stream` and no live
+    // native consumer to abandon — the driver owns the ingest and closes it deterministically at the
+    // terminal (streaming-seam §3d), so the F-M3-1 subscription leak reduces to "a stream whose
+    // terminal never arrives leaves a parked entry", which row 14 detects via `live_streams`.
 
-    /// A1 deliver: a response-body chunk crossing the FFI from the native streaming consumer re-enters
-    /// here and is pushed out to the live consumer through the `ffi_stream` (F1). Increments the
-    /// ingest counter (the completeness numerator). The push cannot drop: the ring capacity exceeds
-    /// any probe's chunk count.
-    pub fn deliver_chunk(&self, chunk: Chunk) {
-        self.chunk_ingested.fetch_add(1, Ordering::Relaxed);
-        self.chunk_stream.push_event(chunk);
+    /// Streaming deliver (streaming-seam §3a): a response-body chunk crossing the FFI from the native
+    /// adapter re-enters here and is delivered into the parked driver-owned [`ChunkSink`] for `token`.
+    /// Returns `true` to keep reading; `false` when the core raised a typed failure (a `seq` violation
+    /// or ring overflow) — in which case the harness has already **closed** the stream with that
+    /// failure (removing and consuming the sink), and the adapter must stop reading and cancel. A
+    /// `false` is also returned for an unknown / already-closed `token`.
+    pub fn deliver_chunk(&self, token: u64, chunk: FfiBodyChunk) -> bool {
+        let bc = BodyChunk::new(chunk.seq, chunk.bytes);
+        let delivered = match self.shared.pending_streams.lock() {
+            Ok(streams) => streams.get(&token).map(|sink| sink.deliver_chunk(bc)),
+            Err(_) => None,
+        };
+        match delivered {
+            Some(Ok(())) => true,
+            Some(Err(err)) => {
+                // The core ingest raised a typed failure — close the stream with it (driver-owned
+                // deterministic close) and tell the adapter to stop.
+                if let Ok(mut streams) = self.shared.pending_streams.lock()
+                    && let Some(sink) = streams.remove(&token)
+                {
+                    sink.finish(BodyEnd::Failed(err));
+                }
+                false
+            }
+            None => false,
+        }
     }
 
-    /// A1: how many chunks entered the core through [`HttpHarness::deliver_chunk`] — the ingest
-    /// source-of-truth. Equal to the chunk count when the http round-trip + cross-FFI ingest are
-    /// whole; the consumer's received count is the *separate* re-delivery-completeness measure.
-    pub fn chunk_ingested(&self) -> u64 {
-        self.chunk_ingested.load(Ordering::Relaxed)
+    /// Streaming terminal (streaming-seam §3c): close the streamed response for `token` with its
+    /// terminal. **Removes and consumes** the parked [`ChunkSink`] (one terminal by construction; the
+    /// deterministic close that keeps `live_streams` honest). A `Complete { total }` runs the
+    /// completeness gate (`total == ingested`, else a typed truncation failure); a `Failed { error }`
+    /// carries a mid-body failure. A no-op for an unknown / already-closed `token`.
+    pub fn finish_body(&self, token: u64, end: FfiBodyEnd) {
+        let sink = self
+            .shared
+            .pending_streams
+            .lock()
+            .ok()
+            .and_then(|mut streams| streams.remove(&token));
+        if let Some(sink) = sink {
+            sink.finish(to_body_end(&end));
+        }
     }
 
-    /// A1: the live response-stream the native consumer drains (an `AsyncStream<Chunk>` on Apple, a
-    /// `Flow<Chunk>` on Android; F1 — `ffi_stream` async push). Its built-in async hop means the
-    /// consumer resumes OFF the producer (adapter) thread — the F1 re-entrancy rationale the step-24
-    /// verdict rests on.
-    #[ffi_stream(item = Chunk)]
-    pub fn chunk_stream(&self) -> Arc<EventSubscription<Chunk>> {
-        Arc::clone(&self.chunk_stream)
-    }
-
-    /// A1: close the chunk stream so its live consumer terminates promptly (the `AsyncStream` / `Flow`
-    /// ends, the consumer task finishes). The probe calls this after each run so a completed — or,
-    /// under load, a still-draining — consumer does not linger as a dead subscription in the shared
-    /// `ffi_stream` runtime and starve the next run's consumer. Idempotent.
-    pub fn close_chunk_stream(&self) {
-        self.chunk_stream.unsubscribe();
+    /// The number of **live** streamed-response subscriptions (streaming-seam §3d): parked
+    /// [`ChunkSink`]s whose terminal has not yet arrived. The subscription-hygiene observable (row
+    /// 14): after N conformant streamed responses it returns to baseline (0), because each terminal
+    /// removes its entry; a stream whose terminal never arrives (the F-M3-1 leak) leaves its entry
+    /// parked, so this stays above baseline — the row's real red case.
+    pub fn live_streams(&self) -> u64 {
+        self.shared
+            .pending_streams
+            .lock()
+            .map(|s| s.len() as u64)
+            .unwrap_or(0)
     }
 }
 
@@ -742,6 +848,14 @@ fn to_http_error(error: &FfiHttpError) -> HttpError {
         FfiHttpError::PermissionDenied => HttpError::PermissionDenied,
         FfiHttpError::TooManyRedirects { limit } => HttpError::TooManyRedirects { limit: *limit },
         FfiHttpError::Transport { .. } => HttpError::Transport,
+    }
+}
+
+/// Map the FFI streaming terminal to the contract [`BodyEnd`] (streaming-seam §3c).
+fn to_body_end(end: &FfiBodyEnd) -> BodyEnd {
+    match end {
+        FfiBodyEnd::Complete { total } => BodyEnd::Complete { total: *total },
+        FfiBodyEnd::Failed { error } => BodyEnd::Failed(to_http_error(error)),
     }
 }
 
