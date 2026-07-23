@@ -29,6 +29,19 @@
 //! [`submit`](CollectionStore::submit) commits a validated draft back through the same
 //! canonical-source path M0 built, so windows see the result for free.
 //!
+//! ## M2 shape (the per-window query handle)
+//!
+//! Each window carries a [`Query`] — a [`Sort`] (`UpdatedDesc` or `TitleAsc`, both with an `id`
+//! ascending tiebreak) plus an optional case-sensitive substring `filter` on the title.
+//! [`open_window`](CollectionStore::open_window) takes the query up front; [`set_query`](CollectionStore::set_query)
+//! replaces it as an ordinary, replay-visible input (the read-side twin of `set_range`).
+//! [`latest`](CollectionStore::latest) projects each window through its own query —
+//! **filter first, then sort, then clamp + slice** — so two
+//! observers with two orders (and two filters) read one collection at one version. `total_count`
+//! under a filter is the **filtered** projection length (the internally-consistent choice: `range`
+//! clamps against exactly the list it pages through); the whole-collection alternative is recorded
+//! in the step-28 report. The naive projection re-scans and re-sorts on every read; W17 prices it.
+//!
 //! ## The structural answer (the headline evidence)
 //!
 //! A row-draft is **not** a per-row [`bolted_core::Store`]. `Store<D>` structurally owns exactly one
@@ -161,9 +174,48 @@ impl WindowId {
     }
 }
 
-/// One open window's mutable state. In M0 that is only its requested range; the order is fixed
-/// (M2 adds a per-window `Query` here).
+/// How a window orders the collection. `UpdatedDesc` is the M0 natural order (`updated_at`
+/// descending, `id` ascending as the tiebreak); `TitleAsc` orders by title (`id` tiebreak). The
+/// tiebreak is `id` ascending in both, so every query is a total order over the rows — the naive
+/// re-projection is deterministic regardless of `BTreeMap` iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    /// `updated_at` descending, `id` ascending tiebreak — the M0/M1 natural order.
+    UpdatedDesc,
+    /// Title ascending (byte order on the trimmed string), `id` ascending tiebreak.
+    TitleAsc,
+}
+
+/// A per-window query: how the window sorts and, optionally, a case-sensitive substring the row
+/// title must contain. Carried in [`WindowState`]; set at [`open_window`](CollectionStore::open_window)
+/// and replaceable through [`set_query`](CollectionStore::set_query) as an ordinary input.
+///
+/// `filter` is a plain case-sensitive substring on the title (the smallest reversible choice — the
+/// step-28 non-goals bar text-search beyond substring; case-folding is a design-session question).
+/// The projection applies **filter first, then sort, then clamp + slice** ([`latest`](CollectionStore::latest)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Query {
+    pub sort: Sort,
+    pub filter: Option<String>,
+}
+
+impl Query {
+    /// The natural-order query: `UpdatedDesc`, no filter — the M0/M1 default, kept as a named
+    /// constructor so the pre-M2 call sites (and their tests) stay readable.
+    pub fn natural() -> Self {
+        Query {
+            sort: Sort::UpdatedDesc,
+            filter: None,
+        }
+    }
+}
+
+/// One open window's mutable state: its [`Query`] (sort + optional filter) and its requested range.
+/// Both are ordinary inputs — [`set_query`](CollectionStore::set_query) and
+/// [`set_range`](CollectionStore::set_range) replace them, and every [`latest`](CollectionStore::latest)
+/// re-projects from scratch through whatever is current.
 struct WindowState {
+    query: Query,
     range: Range<u32>,
 }
 
@@ -179,10 +231,11 @@ pub struct RowView {
 
 /// What one window's observer reads: snapshot-authoritative, newest-wins, coalescing-legal (D37).
 ///
-/// `version` is the collection version at read time (the change tick). `total_count` is the whole
-/// collection's row count (M0 has no filter; its semantics under a filter is an M2 finding).
-/// `range` is the caller's requested range **after tail-clamping**. `rows` are the projections in
-/// that clamped range, in natural order.
+/// `version` is the collection version at read time (the change tick). `total_count` is the length
+/// of *this window's projection* — under a filter that is the **filtered** count, not the whole
+/// collection's (the M2 choice; the fork is recorded in the step-28 report). `range` is the caller's
+/// requested range **after tail-clamping** against `total_count`. `rows` are the projections in that
+/// clamped range, in the window's query order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowSnapshot {
     pub version: u64,
@@ -300,13 +353,14 @@ impl CollectionStore {
 
     // ---- windows -----------------------------------------------------------------------------
 
-    /// Open a window over `range` of the natural order. Returns its handle. The range is stored as
-    /// requested and clamped only at read time (so the same window stays honest as the collection
-    /// grows and shrinks under it).
-    pub fn open_window(&mut self, range: Range<u32>) -> WindowId {
+    /// Open a window over `range` of the order named by `query` (M2: sort + optional filter; pass
+    /// [`Query::natural`] for the M0 order). Returns its handle. The range is stored as requested and
+    /// clamped only at read time (so the same window stays honest as the collection — or the filtered
+    /// projection — grows and shrinks under it).
+    pub fn open_window(&mut self, query: Query, range: Range<u32>) -> WindowId {
         let id = WindowId(self.next_window_id);
         self.next_window_id += 1;
-        self.windows.insert(id, WindowState { range });
+        self.windows.insert(id, WindowState { query, range });
         id
     }
 
@@ -314,6 +368,17 @@ impl CollectionStore {
     pub fn set_range(&mut self, w: WindowId, range: Range<u32>) {
         if let Some(state) = self.windows.get_mut(&w) {
             state.range = range;
+        }
+    }
+
+    /// Replace a window's [`Query`] (an ordinary, replay-visible input — the M2 analog of
+    /// [`set_range`](Self::set_range)). No-op for an unknown/closed window. Because construction is
+    /// **synchronous** — no snapshot exists except the one [`latest`](Self::latest) builds on demand —
+    /// there is no in-flight stale-query snapshot to cancel: the very next `latest` already projects
+    /// through the new query. See the step-28 report's W14 single-flight finding.
+    pub fn set_query(&mut self, w: WindowId, query: Query) {
+        if let Some(state) = self.windows.get_mut(&w) {
+            state.query = query;
         }
     }
 
@@ -327,7 +392,7 @@ impl CollectionStore {
     /// window (unknown or closed), which is how an observer learns its handle is dead.
     pub fn latest(&self, w: WindowId) -> Option<WindowSnapshot> {
         let state = self.windows.get(&w)?;
-        let ordered = self.natural_order();
+        let ordered = self.project(&state.query);
         let total = ordered.len() as u32;
         let range = clamp_range(&state.range, total);
         let rows = ordered[range.start as usize..range.end as usize]
@@ -447,11 +512,32 @@ impl CollectionStore {
         }
     }
 
-    /// The fixed natural order: `updated_at` descending, `id` ascending as the tiebreak. Naive
-    /// full sort on every read — the etiquette M2 prices.
-    fn natural_order(&self) -> Vec<&NoteRow> {
-        let mut rows: Vec<&NoteRow> = self.rows.values().collect();
-        rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
+    /// Project the collection through a window's [`Query`]: **filter first, then sort**. The naive
+    /// implementation — a full scan + full sort on every read, allocating a fresh `Vec` each time —
+    /// whose per-window price W17 measures. The tiebreak is always `id` ascending, so each sort is a
+    /// total order.
+    ///
+    /// `total_count` in the resulting snapshot is the length of *this* list — the **filtered** count
+    /// (see [`latest`](Self::latest)), not the whole-collection count. That keeps the snapshot
+    /// internally consistent: `range` clamps against, and pages through, exactly the rows this window
+    /// projects. The alternative (whole-collection `total_count`) is recorded in the step-28 report.
+    fn project(&self, query: &Query) -> Vec<&NoteRow> {
+        let mut rows: Vec<&NoteRow> = match &query.filter {
+            Some(needle) => self
+                .rows
+                .values()
+                .filter(|row| row.title.as_str().contains(needle.as_str()))
+                .collect(),
+            None => self.rows.values().collect(),
+        };
+        match query.sort {
+            Sort::UpdatedDesc => {
+                rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
+            }
+            Sort::TitleAsc => {
+                rows.sort_by(|a, b| a.title.as_str().cmp(b.title.as_str()).then(a.id.cmp(&b.id)));
+            }
+        }
         rows
     }
 }

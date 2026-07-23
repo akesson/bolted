@@ -31,7 +31,7 @@ fn ids(snap: &WindowSnapshot) -> Vec<u64> {
 #[test]
 fn w1_insert_above_window_shifts_content() {
     let mut store = seeded();
-    let w = store.open_window(0..2);
+    let w = store.open_window(Query::natural(), 0..2);
 
     let before = store.latest(w).expect("live window");
     assert_eq!(before.version, 3);
@@ -53,7 +53,7 @@ fn w1_insert_above_window_shifts_content() {
 #[test]
 fn w2_delete_in_window() {
     let mut store = seeded();
-    let w = store.open_window(0..3);
+    let w = store.open_window(Query::natural(), 0..3);
 
     let before = store.latest(w).expect("live window");
     assert_eq!(ids(&before), vec![3, 2, 1]);
@@ -71,7 +71,7 @@ fn w2_delete_in_window() {
 #[test]
 fn w3_range_clamped_at_tail() {
     let mut store = seeded();
-    let w = store.open_window(1..10);
+    let w = store.open_window(Query::natural(), 1..10);
 
     let snap = store.latest(w).expect("live window");
     assert_eq!(snap.total_count, 3);
@@ -83,8 +83,8 @@ fn w3_range_clamped_at_tail() {
 #[test]
 fn w4_two_windows_one_collection() {
     let mut store = seeded();
-    let a = store.open_window(0..1);
-    let b = store.open_window(1..3);
+    let a = store.open_window(Query::natural(), 0..1);
+    let b = store.open_window(Query::natural(), 1..3);
 
     assert_eq!(ids(&store.latest(a).expect("a")), vec![3]);
     assert_eq!(ids(&store.latest(b).expect("b")), vec![2, 1]);
@@ -106,7 +106,7 @@ fn w4_two_windows_one_collection() {
 #[test]
 fn w5_close_window_releases() {
     let mut store = seeded();
-    let w = store.open_window(0..2);
+    let w = store.open_window(Query::natural(), 0..2);
     assert_eq!(store.live_window_count(), 1);
 
     store.close_window(w);
@@ -115,7 +115,7 @@ fn w5_close_window_releases() {
 
     // Idempotent: closing again is a no-op; a fresh handle can still be opened and closed.
     store.close_window(w);
-    let w2 = store.open_window(0..1);
+    let w2 = store.open_window(Query::natural(), 0..1);
     store.close_window(w2);
     assert_eq!(store.live_window_count(), 0);
 }
@@ -125,7 +125,7 @@ fn w5_close_window_releases() {
 #[test]
 fn w6_coalescing_by_construction() {
     let mut store = CollectionStore::new();
-    let w = store.open_window(0..10);
+    let w = store.open_window(Query::natural(), 0..10);
 
     store.apply_canonical(CanonicalChange::Upsert(row(1, "a", 100)));
     store.apply_canonical(CanonicalChange::Upsert(row(2, "b", 200)));
@@ -151,7 +151,7 @@ fn w6_coalescing_by_construction() {
 #[test]
 fn w7_edit_under_sort_movement() {
     let mut store = seeded(); // [3@300, 2@200, 1@100] -> order [3, 2, 1]
-    let w = store.open_window(0..3);
+    let w = store.open_window(Query::natural(), 0..3);
     let d = store.checkout(NoteId(1)).expect("row 1 exists");
 
     // Edit the draft's title (dirty).
@@ -321,7 +321,7 @@ fn w10_precedence_orphaned_before_conflicted() {
 #[test]
 fn w11_create_flow_inserts_c12() {
     let mut store = seeded(); // rows 1, 2, 3
-    let w = store.open_window(0..10);
+    let w = store.open_window(Query::natural(), 0..10);
 
     // A create-flow row: the caller supplies the identity and the initial timestamp (both input).
     let d = store.checkout_new(NoteId(99), 500);
@@ -379,4 +379,320 @@ fn w12_rebase_fan_out_names_exactly() {
     // And a change to row 3 names only c.
     let affected3 = store.apply_canonical(CanonicalChange::Upsert(row(3, "c2", 320)));
     assert_eq!(affected3, vec![c], "exactly the draft on row 3");
+}
+
+// =================================================================================================
+// M2 — the per-window query handle (W13–W16) and the naive-re-projection perf probe (W17).
+// `Query { sort, filter }` is per-window state; `set_query` is an ordinary input; `latest`
+// projects filter-first, then sort, then clamp+slice, each window through its own query.
+// =================================================================================================
+
+/// A store whose rows' *recency* order and *title* order deliberately disagree, so the two windows
+/// in W13 cannot be accidentally correct. Recency (`updated_at` desc): `[3, 2, 1]`
+/// (cherry, apple, banana). Title asc: `[2, 1, 3]` (apple, banana, cherry).
+fn seeded_named() -> CollectionStore {
+    let mut store = CollectionStore::new();
+    store.apply_canonical(CanonicalChange::Upsert(row(1, "banana", 100)));
+    store.apply_canonical(CanonicalChange::Upsert(row(2, "apple", 200)));
+    store.apply_canonical(CanonicalChange::Upsert(row(3, "cherry", 300)));
+    store
+}
+
+/// W13 — the exploration pair: a "tray" window (recency, `0..5`) and a "main" window (by title,
+/// `0..50`) over **one** collection. One mutation updates **both** correctly, each through its own
+/// query, off the same collection version.
+#[test]
+fn w13_exploration_pair_two_orders_one_collection() {
+    let mut store = seeded_named();
+    let tray = store.open_window(
+        Query {
+            sort: Sort::UpdatedDesc,
+            filter: None,
+        },
+        0..5,
+    );
+    let main = store.open_window(
+        Query {
+            sort: Sort::TitleAsc,
+            filter: None,
+        },
+        0..50,
+    );
+
+    assert_eq!(
+        ids(&store.latest(tray).expect("tray")),
+        vec![3, 2, 1],
+        "recency order"
+    );
+    assert_eq!(
+        ids(&store.latest(main).expect("main")),
+        vec![2, 1, 3],
+        "title order"
+    );
+
+    // One mutation: a brand-new row that lands at the top of recency but the *second* slot by title.
+    store.apply_canonical(CanonicalChange::Upsert(row(4, "avocado", 400)));
+
+    let t = store.latest(tray).expect("tray");
+    let m = store.latest(main).expect("main");
+    assert_eq!(ids(&t), vec![4, 3, 2, 1], "recency: newest on top");
+    assert_eq!(
+        ids(&m),
+        vec![2, 4, 1, 3],
+        "title: apple, avocado, banana, cherry"
+    );
+    assert_eq!(t.version, m.version, "one collection, one version");
+    assert_eq!(t.total_count, 4);
+    assert_eq!(m.total_count, 4);
+}
+
+/// W14 — query change: after `set_query` returns, the very next snapshot is for the **new** query,
+/// with the range re-clamped against the new projection. A stale-query snapshot is never observable
+/// (construction is synchronous — see the report's single-flight finding).
+#[test]
+fn w14_query_change_next_snapshot_is_new_query() {
+    let mut store = seeded_named(); // recency [3,2,1], titles apple(2)/banana(1)/cherry(3)
+    let w = store.open_window(
+        Query {
+            sort: Sort::UpdatedDesc,
+            filter: None,
+        },
+        0..3,
+    );
+
+    let before = store.latest(w).expect("live");
+    assert_eq!(ids(&before), vec![3, 2, 1], "old query: recency, all three");
+    assert_eq!(before.range, 0..3);
+    assert_eq!(before.total_count, 3);
+
+    // Switch to title order AND a filter that narrows to the two rows containing 'a'.
+    // (banana, apple contain 'a'; cherry does not.)
+    store.set_query(
+        w,
+        Query {
+            sort: Sort::TitleAsc,
+            filter: Some("a".to_string()),
+        },
+    );
+
+    // The very next pull is entirely the new query: title order, filtered, range re-clamped.
+    let after = store.latest(w).expect("live");
+    assert_eq!(
+        ids(&after),
+        vec![2, 1],
+        "new query: title order, only 'a' rows (apple, banana)"
+    );
+    assert_eq!(after.total_count, 2, "filtered projection length");
+    assert_eq!(
+        after.range,
+        0..2,
+        "0..3 re-clamped against the narrower projection"
+    );
+    assert_ne!(ids(&before), ids(&after), "no stale-query snapshot lingers");
+}
+
+/// W15 — filter narrows: `total_count` under a filter is the **filtered** count (the implemented
+/// choice), not the whole-collection count. The recorded fork (whole-collection count) is in the
+/// report; this test pins the choice the code makes.
+#[test]
+fn w15_filter_narrows_total_count_is_filtered() {
+    let mut store = CollectionStore::new();
+    store.apply_canonical(CanonicalChange::Upsert(row(1, "apple", 100)));
+    store.apply_canonical(CanonicalChange::Upsert(row(2, "apricot", 200)));
+    store.apply_canonical(CanonicalChange::Upsert(row(3, "banana", 300)));
+    store.apply_canonical(CanonicalChange::Upsert(row(4, "cherry", 400)));
+
+    // Whole collection is 4 rows; two titles contain "ap".
+    assert_eq!(
+        store.total_count(),
+        4,
+        "the collection itself holds four rows"
+    );
+
+    let w = store.open_window(
+        Query {
+            sort: Sort::UpdatedDesc,
+            filter: Some("ap".to_string()),
+        },
+        0..50,
+    );
+    let snap = store.latest(w).expect("live");
+
+    assert_eq!(
+        ids(&snap),
+        vec![2, 1],
+        "apricot@200, apple@100 — the two 'ap' rows, recency order"
+    );
+    assert_eq!(
+        snap.total_count, 2,
+        "total_count is the FILTERED count (implemented choice), not the collection's 4"
+    );
+    assert_eq!(snap.range, 0..2, "range clamps against the filtered length");
+}
+
+/// W16 — a filtered-out, checked-out row: a draft on a row the window's filter hides keeps working,
+/// its submit lands, and the row **stays out** of the filtered window (the filter is a window
+/// concern; checkout/submit are collection concerns and never consult a window's filter). A second,
+/// unfiltered window proves the edit really landed.
+#[test]
+fn w16_filtered_out_checked_out_row() {
+    let mut store = CollectionStore::new();
+    store.apply_canonical(CanonicalChange::Upsert(row(1, "apple", 100)));
+    store.apply_canonical(CanonicalChange::Upsert(row(2, "banana", 200)));
+    store.apply_canonical(CanonicalChange::Upsert(row(3, "cherry", 300)));
+
+    // A window filtered to titles containing "apple" — it shows only row 1; rows 2 and 3 are hidden.
+    let filtered = store.open_window(
+        Query {
+            sort: Sort::UpdatedDesc,
+            filter: Some("apple".to_string()),
+        },
+        0..50,
+    );
+    let unfiltered = store.open_window(
+        Query {
+            sort: Sort::UpdatedDesc,
+            filter: None,
+        },
+        0..50,
+    );
+    assert_eq!(
+        ids(&store.latest(filtered).expect("live")),
+        vec![1],
+        "only 'apple' is visible"
+    );
+
+    // Check out row 2 (banana) — hidden by the filter, but checkout is a collection concern.
+    let d = store
+        .checkout(NoteId(2))
+        .expect("row 2 exists in the collection, filter notwithstanding");
+    store
+        .draft_mut(d)
+        .expect("live")
+        .try_set_title("blueberry".to_string())
+        .expect("valid, and still contains no 'apple'");
+
+    // Submit lands the edit through the canonical path.
+    let out = store.submit(d).expect("submit lands");
+    assert!(out.is_empty(), "no other draft on row 2");
+    assert!(!store.is_live(d), "the draft is released (C17)");
+
+    // The filtered window STILL shows only row 1 — the edited-but-still-hidden row stays out.
+    assert_eq!(
+        ids(&store.latest(filtered).expect("live")),
+        vec![1],
+        "the edited row is still filtered out"
+    );
+    // The unfiltered window proves the edit truly landed on the canonical row.
+    let full = store.latest(unfiltered).expect("live");
+    let edited = full
+        .rows
+        .iter()
+        .find(|r| r.id == NoteId(2))
+        .expect("row 2 present unfiltered");
+    assert_eq!(
+        edited.title.as_str(),
+        "blueberry",
+        "the submit landed on the canonical row"
+    );
+}
+
+/// W17 — the naive-re-projection perf probe. **Not an assertion** (`#[ignore]`d): 10k rows, 4 open
+/// windows with mixed queries, 1k mutations, measuring the per-mutation cost of naive full
+/// re-projection (one `apply_canonical` + a `latest` pull on all four windows). Reports p50/p99.
+///
+/// Run on demand (release, so the numbers reflect real cost), capturing stdout:
+///
+/// ```text
+/// cargo test -p collection-core --release -- --ignored --nocapture w17_perf
+/// ```
+///
+/// It is `#[ignore]`d so `mise run test` / `mise run check` compile and clippy-lint it (keeping it
+/// honest) without paying its cost on every suite run. `Instant` is a measurement harness, not core
+/// code (D35 binds the core, not the probe).
+#[test]
+#[ignore = "W17 perf probe — run on demand: cargo test -p collection-core --release -- --ignored --nocapture w17_perf"]
+// The workspace bans `Instant::now` (ambient time breaks replay). This is the one place it is
+// legitimate: a measurement harness, not core code — D35 binds the core, not the probe.
+#[allow(clippy::disallowed_methods)]
+fn w17_perf_probe_naive_reprojection() {
+    use std::time::Instant;
+
+    const ROWS: u64 = 10_000;
+    const MUTATIONS: u64 = 1_000;
+
+    let mut store = CollectionStore::new();
+    for i in 0..ROWS {
+        let title = format!("note {:05}", i);
+        let updated_at = ((i.wrapping_mul(2_654_435_761)) % 1_000_000) as i64;
+        store.apply_canonical(CanonicalChange::Upsert(NoteRow {
+            id: NoteId(i),
+            title: Title::try_new(title).expect("literal-shaped title is valid"),
+            updated_at,
+        }));
+    }
+
+    // Four windows, mixed queries: two full sorts (no filter) and two filtered projections.
+    let windows = [
+        store.open_window(
+            Query {
+                sort: Sort::UpdatedDesc,
+                filter: None,
+            },
+            0..50,
+        ),
+        store.open_window(
+            Query {
+                sort: Sort::TitleAsc,
+                filter: None,
+            },
+            0..50,
+        ),
+        store.open_window(
+            Query {
+                sort: Sort::UpdatedDesc,
+                filter: Some("23".to_string()),
+            },
+            0..50,
+        ),
+        store.open_window(
+            Query {
+                sort: Sort::TitleAsc,
+                filter: Some("note 09".to_string()),
+            },
+            0..50,
+        ),
+    ];
+
+    let mut timings: Vec<std::time::Duration> = Vec::with_capacity(MUTATIONS as usize);
+    for m in 0..MUTATIONS {
+        let id = m % ROWS;
+        let mutated = NoteRow {
+            id: NoteId(id),
+            title: Title::try_new(format!("note {:05}", id)).expect("valid"),
+            updated_at: 1_000_000 + m as i64,
+        };
+        let start = Instant::now();
+        store.apply_canonical(CanonicalChange::Upsert(mutated));
+        for &w in &windows {
+            let snap = store.latest(w).expect("live window");
+            std::hint::black_box(&snap);
+        }
+        timings.push(start.elapsed());
+    }
+
+    timings.sort();
+    let p50 = timings[timings.len() / 2];
+    let p99 = timings[(timings.len() * 99 / 100).min(timings.len() - 1)];
+    let total: std::time::Duration = timings.iter().sum();
+    println!(
+        "W17 naive re-projection: {ROWS} rows, {} windows, {} mutations (apply + {}x latest each)",
+        windows.len(),
+        timings.len(),
+        windows.len(),
+    );
+    println!(
+        "  p50 = {p50:?}/mutation   p99 = {p99:?}/mutation   mean = {:?}",
+        total / timings.len() as u32
+    );
 }
