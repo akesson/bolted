@@ -1,6 +1,6 @@
 # Bolted — Architecture
 
-**Status: FROZEN (v1.16, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, the post-step-24 error-wording/freeze-scheduling pass, the post-step-25 freeze re-scheduling, and the bolted-http contract-review session).** Phase 1 validated this design against
+**Status: FROZEN (v1.17, step 06; amended steps 07, 08, 09, 10 and the step-12/13/15/16 design passes, the topology design pass, the step-21 planning pass, the core-evolution design session, the facet vocabulary pass, the bolted-http go pass, the post-step-24 error-wording/freeze-scheduling pass, the post-step-25 freeze re-scheduling, the bolted-http contract-review session, and the windowed-collections exploration pass).** Phase 1 validated this design against
 four independent shells — pure Rust, Apple/ARC, Rust/wasm, Android/ART — and step 06 reconciled their
 friction logs. Every question that Phase 1 could answer is answered, in §8, with the alternative it
 beat. What remains **OPEN** in §9 is genuinely undecided and each item names the step that owns it.
@@ -88,6 +88,27 @@ reversal, merging the two FFI bridge crates). Decision record:
 decisions valued for coherence and recorded rationale, expected to evolve; two standing
 re-evaluation triggers are upstream BoltFFI RFCs in draft (stream delivery contract,
 companion sources).
+**v1.17** records the windowed-collections exploration pass (Henrik, 2026-07-23) — an
+exploration/scheduling pass, no design change. Five scenarios were run against §9's preserved
+candidate (inbox under sync mutation, filter-as-you-type, tray top-N, editable rows under sort
+movement, paged remote). Scenario-invariant and kept: snapshot-authoritative windows, `RowId` =
+entity key, shell-side scroll anchoring, per-observer handles released by `close`. Newly
+recorded as the item's open questions: the **store's canonical shape** — §1's store owns a
+*single* canonical entity, and a collection facet is the first store owning many, the one
+genuinely structural question; **sort/filter as per-window query state** — two observers over
+one collection want different orders (a tray's top-5-by-recency beside a window's by-name), so
+the projection cannot be facet-global, and `set_query` becomes an ordinary replay-visible input
+whose stale results are shaped like the async-check single-flight; the **`total_count` shape**
+— known vs lower bound; paging/hydration is out of the first design's scope but must not be
+foreclosed; and **re-projection etiquette** — the first per-observer compute obligation the
+design acquires, with D37 coalescing as its safety valve. One candidate question was checked
+and **dissolved**: row deletion under a checked-out row is *not* open — C07/C11 already rule it
+(`Orphaned`, typed, outranking conflicts), and the collection design inherits it rather than
+inventing a structural-conflict taxonomy. The pass schedules **step 28**: the first real
+collection facet, built as a disposable spike, deliberately inbox-shaped — sync-driven mutation
+*and* editable rows *and* a second differently-ordered observer — because a read-only top-N
+would validate almost nothing. The D20/D29 rule holds: the spike produces evidence; the ruling
+stays with the design session that follows it.
 
 Frozen means: §1–§7 are the contract Phases 3–4 extract and generate against. Changing them is a
 breaking change to Bolted, not an edit. The falsifiable claims live in
@@ -607,18 +628,26 @@ Each names the step that owns it. Nothing below blocks Phase 3.
   second macro shape, currently justified by exactly one example. Do not design it from that one.
   *(Its shadow is now recorded twice: step 09 at the core, step 10 at the FFI, where the setter takes
   one `AvailabilityRaw` rather than two dates.)*
-- **Collection observation (windowed) — designed when the first real collection facet lands.** No
-  spike has a collection facet, so designing this now would repeat the error D20/D29 twice
-  refused: a shape justified by zero examples. The candidate answer is preserved from the
-  `design/core-evolution` snapshot: a windowed accessor (`open_window(range)` →
+- **Collection observation (windowed) — evidence: step 28 (the collection-facet spike);
+  ruling: the design session after it.** No spike had a collection facet, so designing this
+  earlier would have repeated the error D20/D29 twice refused: a shape justified by zero
+  examples. The candidate answer is preserved from the `design/core-evolution` snapshot: a
+  windowed accessor (`open_window(range)` →
   `WindowSnapshot { version, total_count, range, rows }`) with stable `RowId`s,
   snapshot-authoritative and watch-shaped per window (D37, its precondition, is now decided), and
   deltas never crossing the FFI — the rejected alternative being a `VecDiff`-style delta protocol,
   which is unrepresentable now that coalescing is legal by contract (a delta stream cannot survive
-  a dropped intermediate; snapshots don't care). Open with the first facet: what a `Row`
-  projection is, where `RowId` comes from (entity key?), whether `open_window` takes sort/filter
-  parameters, and the windowing etiquette (overscan, threshold refetch — §6's frame-loop rule,
-  D36, already governs the scroll side).
+  a dropped intermediate; snapshots don't care). The v1.17 exploration pass sharpened what the
+  spike must answer: the **store's canonical shape** (§1's store owns a single canonical
+  entity; a collection facet is the first store owning many — the structural question);
+  **sort/filter as per-window query state** (two observers over one collection want different
+  orders, so the projection cannot be facet-global; `set_query` is an ordinary replay-visible
+  input, its stale results shaped like the async-check single-flight); the **`total_count`
+  shape** (known vs lower bound — paging/hydration is out of the first design's scope but must
+  not be foreclosed); **re-projection etiquette** (per-window compute, overscan, threshold
+  refetch — §6's frame-loop rule, D36, already governs the scroll side); and what a `Row`
+  projection is (`RowId` = entity key is the candidate). Not open: row deletion under a
+  checked-out row — C07/C11 already rule it; the collection inherits `Orphaned`.
 - **`bolted-http` contract review** — *the session ran 2026-07-21 (v1.16), as scheduled after
   the Android adapter: all ten open contract questions ruled — the streaming seam
   ([streaming-seam.md](design/streaming-seam.md)), redirect-ceiling CFG, `content_length`
