@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using NUnit.Framework;
-using GenProfileFfi;
+using Gen_profile_ffi;
 
 namespace ProfileProbe;
 

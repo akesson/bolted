@@ -1,4 +1,5 @@
-using GenProfileFfi;
+using System.Collections.Generic;
+using Gen_profile_ffi;
 
 namespace ProfileProbe;
 
@@ -35,4 +36,37 @@ internal sealed class PassingChecker : UsernameChecker
 {
     public int Calls;
     public CheckVerdictFfi Check(string value) { Calls++; return CheckVerdictFfi.Pass; }
+}
+
+/// <summary>
+/// A scripted checker that answers a fixed verdict and records the values it was asked about — the C#
+/// analogue of <c>Scripted</c> in <c>gen-profile-ffi/tests/wrapper.rs</c>. The recorded values prove
+/// the checker saw the <i>parsed</i> value (sanitizer ran first), and <see cref="Seen"/> is the
+/// positive control that the callback actually fired.
+/// </summary>
+internal sealed class ScriptedChecker : UsernameChecker
+{
+    private readonly CheckVerdictFfi _verdict;
+    public readonly List<string> Seen = new();
+    public ScriptedChecker(CheckVerdictFfi verdict) { _verdict = verdict; }
+    public CheckVerdictFfi Check(string value) { Seen.Add(value); return _verdict; }
+}
+
+/// <summary>
+/// A checker that reaches reentrantly back into the very store whose lock the driver takes — the C#
+/// analogue of <c>Nosy</c> in <c>wrapper.rs</c>. If the driver invoked this callback while holding the
+/// store lock, both calls below would deadlock; that they return is the whole point.
+/// </summary>
+internal sealed class ReentrantChecker : UsernameChecker
+{
+    private readonly ProfileStoreFfi _store;
+    public int Calls;
+    public ReentrantChecker(ProfileStoreFfi store) { _store = store; }
+    public CheckVerdictFfi Check(string value)
+    {
+        Calls++;
+        _ = _store.LiveDraftCount();
+        _ = _store.Canonical();
+        return CheckVerdictFfi.Pass;
+    }
 }
