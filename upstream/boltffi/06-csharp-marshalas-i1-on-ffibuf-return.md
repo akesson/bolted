@@ -71,3 +71,27 @@ in generated `dist/` we do not edit).
 
 On the C# backend, calling a `Result<bool, E>`-returning `#[export]` method returns its value (or
 throws the typed error) — it does not throw `MarshalDirectiveException` at the P/Invoke boundary.
+
+## Addendum — FIXED IN RELEASE 0.28.0, verified by execution (2026-07-24, step 29 M0)
+
+**Disposition: FIXED IN RELEASE.** The fix shipped with the #654 IR-backend rewrite and is
+present in **released registry 0.28.0** (PR #662 itself was closed without merge). Verified by
+execution, not by PR label:
+
+- The step-14 tripwire `CallbackDriverProbe.TheCheckDriverIsBrokenOnThisBackend` — which
+  asserts the *broken* behaviour — went **red for exactly the right reason** at 0.28.0:
+  `Expected: <MarshalDirectiveException> But was: null`. The driver no longer throws at the
+  P/Invoke boundary because the IR backend now returns `run_username_check`'s bool via an
+  `out` param, so `[MarshalAs(I1)]` survives only on genuinely-bool members (matching the
+  `ReturnPlan` analysis banked at step 23).
+- Per its own doc-comment, going red is the tripwire's designed end state; it was **deleted**
+  in step 29 M0.
+- The probes parked while the driver threw came **alive and green**: D23's `DraftClosed`
+  refusal on `run_username_check` after close, D10's `[Pending, Passed]` verdict stream, the
+  reentrant-checker no-deadlock shape, and the `fillValid` create-flow check.
+- Contract clarified in the process: `run_username_check`'s returned bool means **"a check
+  ran"**, not the verdict — both Pass and Fail return `true`; the verdict is read from
+  `Snapshot().UsernameCheck`. (`Ok(false)` is the declared-absent capability.) The Kotlin and
+  Swift suites already encoded this correctly; no wrong contract propagated.
+
+`test:csharp` 20/20 (TRX); `mise run check` green. Evidence: step-29 M0 commit `cfbc200`.

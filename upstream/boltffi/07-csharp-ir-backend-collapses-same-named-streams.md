@@ -68,3 +68,19 @@ key stream emission by receiver + method, or fail generation loudly on the colli
   `nm -gU` export list; generated `dist/csharp` `NativeMethods` inventory.
 - Contrast surfaces: `crates/gen-profile-ffi` declares both `snapshots` methods and
   `snapshots_small`; only the draft's `snapshots` is lost.
+
+## Addendum — FIXED IN RELEASE 0.28.0, re-verified by execution; filing now moot (2026-07-24, step 29 M0)
+
+**Disposition: FIXED IN RELEASE.** Upstream fixed this independently via **#697** (three
+distinct stream-runtime classes with distinct native `EntryPoint` symbols), and the fix is in
+**released 0.28.0**. Re-verified **by execution** in step-29 M0 (not by inspection):
+
+- The two draft-stream `StreamProbe` rows that **timed out** at git rev `23cf2ec` (the
+  step-23 KC3 kill) are **green** at 0.28.0.
+- `draft.Snapshots()` demonstrably routes to the *draft's own* subscription: the generated
+  surface now carries two distinct `Snapshots()` overloads over distinct stream runtimes /
+  native EntryPoints, so a draft handle no longer subscribes to the store's canonical stream.
+
+This finding was **never filed** (the owner-files hard rule, and the fix arrived upstream
+before we reached a filing). **Filing is now moot** — recorded explicitly so nobody re-opens
+it. Evidence: step-29 M0 commit `cfbc200`.
