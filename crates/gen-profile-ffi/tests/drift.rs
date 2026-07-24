@@ -70,3 +70,23 @@ fn the_committed_swift_contract_suite_matches_the_declaration() {
         panic!("{e}");
     }
 }
+
+/// D28: the committed C# contract suite is exactly what the declaration generates (step 29). Byte
+/// equality, same as the Kotlin/Swift suites — the suite is emitted; the values-only
+/// `ProfileConformanceFixture.cs` beside it is hand-written and not drift-checked (its correctness is
+/// the C# compiler's + `dotnet test`'s). `Gen_profile_ffi` is the binding namespace the 0.28.0 IR
+/// backend names after the raw crate; `ProfileProbe.Generated` is the emitted suite's namespace.
+#[test]
+fn the_committed_csharp_contract_suite_matches_the_declaration() {
+    let source = include_str!("../../gen-profile/src/lib.rs");
+    let committed =
+        include_str!("../../../csharp/profile-probe/Generated/ProfileConformanceSuite.cs");
+    if let Err(e) = bolted_ffi_gen::check_csharp_contract_suite_drift(
+        source,
+        "Gen_profile_ffi",
+        "ProfileProbe.Generated",
+        committed,
+    ) {
+        panic!("{e}");
+    }
+}

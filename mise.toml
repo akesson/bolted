@@ -60,6 +60,14 @@ cargo run -q -p bolted-ffi-gen --bin gen-swift-suite -- \
   "crates/gen-profile/src/lib.rs" \
   "GenProfileFfi" \
   "apple/profile-probe/Tests/ProfileProbeTests/Generated/ProfileConformanceSuite.swift"
+# The C# contract suite (D28, step 29) — same map, backend #3. Run headless via `dotnet test` by
+# `test:csharp`. `Gen_profile_ffi` is the binding namespace (the 0.28.0 IR backend names it after the
+# raw crate); `ProfileProbe.Generated` is where the emitted suite + its hand-written fixture live.
+cargo run -q -p bolted-ffi-gen --bin gen-csharp-suite -- \
+  "crates/gen-profile/src/lib.rs" \
+  "Gen_profile_ffi" \
+  "ProfileProbe.Generated" \
+  "csharp/profile-probe/Generated/ProfileConformanceSuite.cs"
 echo
 echo 'Now read the diff. `mise run check` refuses a committed file no declaration produces.'
 """
