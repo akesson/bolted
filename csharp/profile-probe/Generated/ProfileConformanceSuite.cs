@@ -7,8 +7,7 @@
 // The per-language contract tests (step 13/29), backend #3 (C#): every C-ID the public generated
 // surface can express (docs/CONFORMANCE.md), generic over the hand-written, values-only fixture
 // beside this file. It verifies the BOUNDARY — that the C# binding and wrapper preserve the core's
-// semantics — not the algebra, which the Rust suite proves against four features. The bool from
-// RunUsernameCheck() means "a check ran", not the verdict; the verdict is read from the snapshot.
+// semantics — not the algebra, which the Rust suite proves against four features.
 
 using System;
 using System.Linq;

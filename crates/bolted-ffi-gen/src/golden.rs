@@ -397,13 +397,14 @@ fn a_generated_type_named_like_a_platform_builtin_is_refused() {
 }
 
 // ======================================================================================
-// The foreign emitter's genericity (step 13, deliverable 6).
+// The foreign emitter's genericity (step 13, deliverable 6; C# joined step 29, deliverable 3).
 //
 // A generator with one input is shaped like that input — the lesson `gen-note` exists to hold (step 08,
-// then 09), now carried to the *foreign* emitter. The emitted Kotlin/Swift suites for `gen-note` are
+// then 09), now carried to the *foreign* emitter. The emitted Kotlin/Swift/C# suites for `gen-note` are
 // the falsifier: `gen-note` names no profile concept, so any profile identifier in their text is the
 // emitter hardcoding what it must project from the declaration. This test caught a `ProfileStashFfi`
-// a Swift C20 comment had frozen in — the Kotlin side had it generic, the Swift side did not.
+// a Swift C20 comment had frozen in — the Kotlin side had it generic, the Swift side did not; when C#
+// joined it caught the C# banner freezing `RunUsernameCheck()` into every suite's header (step 29).
 //
 // Text level is the honest scope: packing and running a second feature on both platforms is tier cost
 // that teaches nothing more about the *emitter* (step 13 non-goal). The genericity that matters here is
@@ -441,6 +442,14 @@ fn profile_swift() -> String {
     crate::swift_contract_suite(PROFILE, "GenProfileFfi")
         .expect("the Swift contract suite generates for gen-profile")
 }
+fn note_csharp() -> String {
+    crate::csharp_contract_suite(NOTE, "Gen_note_ffi", "NoteProbe.Generated")
+        .expect("the C# contract suite generates for gen-note")
+}
+fn profile_csharp() -> String {
+    crate::csharp_contract_suite(PROFILE, "Gen_profile_ffi", "ProfileProbe.Generated")
+        .expect("the C# contract suite generates for gen-profile")
+}
 
 /// Concepts from `gen-profile` alone — the entity, a field, or a field's value type. None is a word the
 /// emitter has any business writing for another feature. Every one is proved to actually appear in the
@@ -459,16 +468,36 @@ const PROFILE_CONCEPTS: &[&str] = &[
     "Availability",
 ];
 
+/// The same falsifier for C#, minus the two lowercase field names Kotlin/Swift preserve but C# does
+/// not. C# PascalCases every member (`draft.Email`, `ProfileFieldId.Availability`), so the lowercase
+/// `email`/`availability` never appear in the C# profile suite — listing them here would be a dead
+/// needle the positive control below rightly rejects. Lowercase `username` *does* survive: it is the
+/// check's rule literal (`username_unique` / the required key), not a member name, so it is language
+/// -neutral text and a real needle. Each concept here is proven to appear in the C# profile suite by
+/// [`every_profile_concept_actually_appears_in_the_profile_suite`].
+const PROFILE_CONCEPTS_CSHARP: &[&str] = &[
+    "Profile",
+    "username",
+    "Username",
+    "Email",
+    "PersonName",
+    "Availability",
+];
+
 /// The emitter, run on `gen-note`, produces plausible output that names no `gen-profile` concept.
 #[test]
 fn a_suite_emitted_for_another_feature_names_no_profile_concept() {
-    for (lang, src) in [("Kotlin", note_kotlin()), ("Swift", note_swift())] {
+    for (lang, src, concepts) in [
+        ("Kotlin", note_kotlin(), PROFILE_CONCEPTS),
+        ("Swift", note_swift(), PROFILE_CONCEPTS),
+        ("C#", note_csharp(), PROFILE_CONCEPTS_CSHARP),
+    ] {
         // Plausible: it is a suite for *this* feature, not an empty degenerate stub.
         assert!(
             src.contains("NoteConformanceSuite") && src.contains("NoteStoreFfi"),
             "the {lang} suite emitted for `gen-note` does not name the Note feature — it degenerated"
         );
-        for concept in PROFILE_CONCEPTS {
+        for concept in concepts {
             assert!(
                 !src.contains(concept),
                 "the {lang} suite emitted for `gen-note` names `{concept}`, a `gen-profile` concept: \
@@ -484,8 +513,12 @@ fn a_suite_emitted_for_another_feature_names_no_profile_concept() {
 /// from the note suite above proves nothing and the needle is dead.
 #[test]
 fn every_profile_concept_actually_appears_in_the_profile_suite() {
-    for (lang, src) in [("Kotlin", profile_kotlin()), ("Swift", profile_swift())] {
-        for concept in PROFILE_CONCEPTS {
+    for (lang, src, concepts) in [
+        ("Kotlin", profile_kotlin(), PROFILE_CONCEPTS),
+        ("Swift", profile_swift(), PROFILE_CONCEPTS),
+        ("C#", profile_csharp(), PROFILE_CONCEPTS_CSHARP),
+    ] {
+        for concept in concepts {
             assert!(
                 src.contains(concept),
                 "`{concept}` never appears in the {lang} profile suite, so \
