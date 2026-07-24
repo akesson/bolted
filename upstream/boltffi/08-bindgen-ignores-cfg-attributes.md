@@ -57,3 +57,16 @@ packs apple+android+csharp), and cfg cannot express the divergence. Exits:
 2. **Upstream-side** — wire `ActiveCfg` into the bindgen scan. Plausibly small given the
    evaluator is done; likely already tracked in the cfg-eval family (#630/#618) under
    RFC #665's re-scan umbrella. Check those before filing a duplicate.
+
+## Addendum — runtime-probe TODO DONE; still ALIVE / unfiled (2026-07-24, step 29 M3)
+
+The **runtime-probe TODO** that gated any filing or action is **closed**: the step-27 M0
+probe (2026-07-23, commit `3e06534`) ran and **confirmed the cfg-union claim at runtime** — a
+`#[cfg(target_os = "ios")]`-gated `#[data]` struct packed for android emitted a real Kotlin
+`data class` (decoder and all), `generate` exiting 0, exactly the inferred silent-surface
+failure mode. The probe and its confirmation are woven into the body above and recorded in the
+step-29 kit README row.
+
+Disposition is otherwise unchanged: finding 08 remains **ALIVE / unfiled**, still likely the
+#630/#618 cfg-eval family under RFC #665 — check that family before filing a duplicate.
+Nothing is posted upstream by anyone but Henrik.
