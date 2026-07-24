@@ -21,3 +21,4 @@
 - [Artifact SVGs must not use theme tokens](artifact-svg-must-not-use-theme-tokens.md) — the viewer's dark transform inverts HTML colors but not SVG fills; use currentColor + alpha fills, and screenshot each figure to verify
 - [PR-based workflow](pr-based-workflow.md) — branch + PR since 2026-07-16; never commit/push main directly
 - [Sub-agents stall awaiting their own background runs](subagents-stall-awaiting-own-background-runs.md) — require synchronous foreground runs in the prompt; a warning alone does not work; resume the same agent, never replace it
+- [IDE diagnostics lie after sub-agent work](ide-diagnostics-lie-after-subagent-work.md) — 4-of-6 milestones showed stale hard errors against green gates; only gates re-run on the branch count
