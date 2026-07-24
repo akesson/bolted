@@ -289,7 +289,7 @@ pub fn check_kotlin_codec_drift(
 ) -> Result<(), String> {
     let generated =
         kotlin_stash_codec(source, binding_pkg, codec_pkg).map_err(|e| e.to_string())?;
-    kotlin_drift("Kotlin stash codec", committed, &generated)
+    foreign_drift("Kotlin stash codec", committed, &generated)
 }
 
 /// Emit the Kotlin per-language contract suite (D28) for the feature declared in `source`.
@@ -319,7 +319,7 @@ pub fn check_kotlin_contract_suite_drift(
 ) -> Result<(), String> {
     let generated =
         kotlin_contract_suite(source, binding_pkg, suite_pkg).map_err(|e| e.to_string())?;
-    kotlin_drift("Kotlin contract suite", committed, &generated)
+    foreign_drift("Kotlin contract suite", committed, &generated)
 }
 
 /// Emit the Swift per-language contract suite (D28) — the same C-IDs, one language out (deliverable 5).
@@ -338,14 +338,46 @@ pub fn check_swift_contract_suite_drift(
     committed: &str,
 ) -> Result<(), String> {
     let generated = swift_contract_suite(source, binding_module).map_err(|e| e.to_string())?;
-    kotlin_drift("Swift contract suite", committed, &generated)
+    foreign_drift("Swift contract suite", committed, &generated)
+}
+
+/// Emit the C# per-language contract suite (D28) — the same C-IDs, backend #3 (step 29, deliverable 2).
+///
+/// `binding_ns` is the C# namespace BoltFFI generates the bindings into (`Gen_profile_ffi`); `suite_ns`
+/// is where the emitted suite + its hand-written values-only fixture live (`ProfileProbe.Generated`).
+/// Both are shell deployment facts the declaration does not carry, so they are passed in.
+pub fn csharp_contract_suite(
+    source: &str,
+    binding_ns: &str,
+    suite_ns: &str,
+) -> syn::Result<String> {
+    let file = syn::parse_file(source)?;
+    let feature = Feature::from_file(&file)?;
+    Ok(foreign::emit_csharp_contract_suite(
+        &feature, binding_ns, suite_ns,
+    ))
+}
+
+/// The drift check for the committed C# contract suite (D28), run inside `mise run check`.
+pub fn check_csharp_contract_suite_drift(
+    source: &str,
+    binding_ns: &str,
+    suite_ns: &str,
+    committed: &str,
+) -> Result<(), String> {
+    let generated =
+        csharp_contract_suite(source, binding_ns, suite_ns).map_err(|e| e.to_string())?;
+    foreign_drift("C# contract suite", committed, &generated)
 }
 
 /// **Byte** equality, not code equality: nothing formats a foreign generated file (rustfmt is why
 /// `check_drift` had to compare code, not bytes — there is no such formatter here), so the committed
-/// bytes must be exactly what the emitter writes. If an `.editorconfig`/ktlint hook ever rewrites the
-/// file, this check says so loudly — that is it working. Reports the first differing line.
-fn kotlin_drift(what: &str, committed: &str, generated: &str) -> Result<(), String> {
+/// bytes must be exactly what the emitter writes. If an `.editorconfig`/ktlint/dotnet-format hook ever
+/// rewrites the file, this check says so loudly — that is it working. Reports the first differing line.
+///
+/// Named `foreign_drift` (step 13's recorded cleanup, landed step 29): it is the shared byte-compare
+/// for every foreign generated artifact — the Kotlin codec + suite, the Swift suite, and the C# suite.
+fn foreign_drift(what: &str, committed: &str, generated: &str) -> Result<(), String> {
     if !committed.starts_with("// @generated") {
         return Err(format!(
             "the committed {what} has lost its `// @generated` banner. Run `mise run gen:ffi`."
