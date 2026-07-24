@@ -12,8 +12,8 @@ public class SkeletonProbe
     [Test]
     public void PingCrossesTheBoundary()
     {
-        // Fully qualified: the binding namespace and the top-level class are both `GenProfileFfi`.
-        string echoed = GenProfileFfi.GenProfileFfi.Ping("bolted");
+        // Fully qualified: the binding namespace and the top-level class are both `Gen_profile_ffi`.
+        string echoed = Gen_profile_ffi.Gen_profile_ffi.Ping("bolted");
         Assert.That(echoed, Does.Contain("bolted"));
     }
 }

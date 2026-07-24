@@ -1,6 +1,6 @@
 using System.Linq;
 using NUnit.Framework;
-using GenProfileFfi;
+using Gen_profile_ffi;
 
 namespace ProfileProbe;
 
